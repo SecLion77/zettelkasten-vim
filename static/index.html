@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Zettelkasten VIM</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<style>
+  @import url('https://cdn.jsdelivr.net/npm/hack-font@3/build/web/hack.css');
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body, #root {
+    height: 100%; width: 100%;
+    font-family: 'Hack', 'Courier New', monospace;
+    background: #242424; color: #e3e0d7;
+    overflow: hidden;
+  }
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #3a4046; border-radius: 3px; }
+
+  /* PDF text layer */
+  .textLayer {
+    position: absolute !important; inset: 0 !important;
+    overflow: hidden !important; opacity: 1 !important;
+    line-height: 1 !important; user-select: text !important;
+    -webkit-user-select: text !important; cursor: text !important;
+    pointer-events: auto !important;
+  }
+  .textLayer span, .textLayer br {
+    color: transparent !important; position: absolute !important;
+    white-space: pre !important; cursor: text !important;
+    transform-origin: 0% 0% !important;
+    user-select: text !important; -webkit-user-select: text !important;
+    pointer-events: auto !important;
+  }
+  .textLayer ::selection { background: rgba(138,198,242,0.55) !important; color: transparent !important; }
+
+  /* Focus / Goyo mode */
+  .goyo-mode .sidebar, .goyo-mode .meta-panel, .goyo-mode .top-bar-tabs { display: none !important; }
+  .goyo-mode .editor-wrap { max-width: 680px; margin: 0 auto; padding: 40px 60px; }
+  .goyo-mode .vim-editor textarea { background: #1a1a1a !important; }
+
+  /* Limelight: dim other paragraphs */
+  .limelight-mode .mdv p:not(.limelight-focus),
+  .limelight-mode .mdv li:not(.limelight-focus) { opacity: 0.25; transition: opacity 0.2s; }
+
+  /* Markdown */
+  .mdv h1 { font-size: 20px; color: #ffffd7; margin: 0 0 14px; border-bottom: 1px solid #3a4046; padding-bottom: 6px; }
+  .mdv h2 { font-size: 16px; color: #cae682; margin: 18px 0 8px; }
+  .mdv h3 { font-size: 13px; color: #e3e0d7; margin: 14px 0 6px; }
+  .mdv p  { color: #e3e0d7; line-height: 1.85; margin: 0 0 10px; font-size: 13px; }
+  .mdv ul, .mdv ol { padding-left: 22px; margin: 6px 0 10px; }
+  .mdv li { color: #e3e0d7; line-height: 1.8; font-size: 13px; margin-bottom: 3px; }
+  .mdv strong { color: #ffffd7; }
+  .mdv em { color: #a0a8b0; font-style: italic; }
+  .mdv code { background: rgba(255,255,255,0.07); padding: 1px 5px; border-radius: 3px; font-size: 12px; color: #cae682; }
+  .mdv pre { background: rgba(0,0,0,0.35); padding: 12px 14px; border-radius: 4px; margin: 10px 0; overflow-x: auto; border-left: 3px solid #3a4046; }
+  .mdv pre code { background: none; padding: 0; font-size: 12px; color: #cae682; }
+  .mdv blockquote { border-left: 3px solid #e5786d; padding: 4px 12px; margin: 10px 0; background: rgba(229,120,109,0.07); color: #a0a8b0; font-style: italic; }
+  .mdv table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: 12px; }
+  .mdv th { background: rgba(255,255,255,0.06); color: #8ac6f2; padding: 6px 10px; border: 1px solid #3a4046; text-align: left; }
+  .mdv td { padding: 5px 10px; border: 1px solid #3a4046; }
+  .mdv tr:nth-child(even) td { background: rgba(255,255,255,0.02); }
+  .mdv hr { border: none; border-top: 1px solid #3a4046; margin: 18px 0; }
+  .zlink { color: #8ac6f2; cursor: pointer; text-decoration: underline; text-decoration-color: rgba(138,198,242,0.4); font-size: 13px; }
+  .zlink:hover { color: #ffffd7; }
+  .taghl { color: #9fca56; font-size: 13px; }
+  .spell-error { border-bottom: 2px solid #e5786d; cursor: help; }
+
+  /* Snippet hints */
+  .snippet-hint { position: absolute; background: #2d2d2d; border: 1px solid #3a4046; border-radius: 4px; padding: 4px 8px; font-size: 11px; color: #8ac6f2; pointer-events: none; z-index: 100; }
+
+  textarea::placeholder, input::placeholder { color: #857b6f; }
+  input, textarea, button, select { font-family: inherit; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

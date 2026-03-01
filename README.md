@@ -1,246 +1,238 @@
-# 🗃️ Zettelkasten VIM
+# 🗃️ Zettelkasten VIM — Python App
 
-> Een Zettelkasten notitie-app met Wombat kleurschema, volledige VIM keybindings, PDF annotaties en een interactieve kennisgraaf.
-
-![React](https://img.shields.io/badge/React-18-61DAFB?style=flat-square&logo=react)
-![Font](https://img.shields.io/badge/Font-Hack-green?style=flat-square)
-![Theme](https://img.shields.io/badge/Theme-Wombat-orange?style=flat-square)
-![PDF.js](https://img.shields.io/badge/PDF.js-3.11-red?style=flat-square)
+> Zelfstandige Python desktop app: notities als Markdown op schijf, PDF bibliotheek, Obsidian-stijl kennisgraaf, VIM editor met Goyo/Limelight/Pencil/Snippets.
 
 ---
 
-## 🚀 De app draaien
+## 🚀 Installatie & Starten
 
-### Optie 1 — Claude.ai (geen installatie nodig)
+### Vereisten
+- **Python 3.8+** (geen pip packages nodig — alleen stdlib)
+- Moderne browser (Chrome, Firefox, Edge)
 
-De makkelijkste manier: open de app direct in Claude.ai als artifact.
+### Starten
 
-1. Ga naar [claude.ai](https://claude.ai)
-2. Upload het bestand `zettelkasten-vim.jsx`
-3. Vraag Claude: _"Draai dit React component"_
-4. De app opent direct in het preview venster
+```bash
+# Clone of download de bestanden
+cd zettelkasten-app/
 
-> **Voordeel:** Geen installatie, werkt meteen, data wordt opgeslagen via `window.storage`.
+# Start met standaard vault (~./Zettelkasten)
+python3 server.py
+
+# Of kies zelf een vault map
+python3 server.py --vault ~/Documenten/MijnNotities
+
+# Andere poort
+python3 server.py --vault ~/Notes --port 8080
+
+# Zonder automatisch browser openen
+python3 server.py --no-browser
+```
+
+De browser opent automatisch op **http://localhost:7842**
 
 ---
 
-### Optie 2 — Lokaal draaien met Vite (aanbevolen voor eigen gebruik)
+## 📁 Vault Structuur
 
-**Vereisten:** Node.js 18+ en npm
+Een vault is een gewone map op je schijf:
 
-```bash
-# 1. Maak een nieuw React project aan
-npm create vite@latest mijn-zettelkasten -- --template react
-cd mijn-zettelkasten
-
-# 2. Installeer dependencies
-npm install
-
-# 3. Kopieer de app
-cp /pad/naar/zettelkasten-vim.jsx src/App.jsx
+```
+~/Zettelkasten/
+├── notes/
+│   ├── 20240315143022.md      ← elke notitie = één .md bestand
+│   ├── 20240316091500.md
+│   └── ...
+├── pdfs/
+│   ├── artikel.pdf            ← PDF bestanden
+│   └── boek.pdf
+├── annotations/
+│   ├── artikel_pdf.json       ← annotaties per PDF
+│   └── boek_pdf.json
+└── config.json                ← vault configuratie
 ```
 
-Vervang daarna `src/main.jsx` met de volgende inhoud:
+### Vault wisselen
+- **Via CLI:** `python3 server.py --vault /pad/naar/andere/vault`
+- **In de app:** klik `:set` rechtsboven → voer nieuw pad in
 
-```jsx
-import React from 'react'
-import ReactDOM from 'react-dom/client'
-import App from './App.jsx'
-
-// Polyfill voor window.storage (lokaal gebruik)
-window.storage = {
-  _data: JSON.parse(localStorage.getItem('zk-storage') || '{}'),
-  _save() { localStorage.setItem('zk-storage', JSON.stringify(this._data)); },
-  async get(key) {
-    return this._data[key] ? { key, value: this._data[key] } : null;
-  },
-  async set(key, value) {
-    this._data[key] = value; this._save();
-    return { key, value };
-  },
-  async delete(key) {
-    delete this._data[key]; this._save();
-    return { key, deleted: true };
-  },
-};
-
-ReactDOM.createRoot(document.getElementById('root')).render(<App />)
-```
-
-```bash
-# 4. Start de development server
-npm run dev
-# App draait op http://localhost:5173
-```
-
----
-
-### Optie 3 — Bouwen voor productie
-
-```bash
-npm run build
-# De dist/ map bevat de statische bestanden
-# Upload naar Netlify, Vercel, GitHub Pages, of eigen server
-
-# Lokaal bekijken:
-npm run preview
-```
-
-**GitHub Pages:**
-```bash
-npm run build
-cp -r dist/* docs/
-git add docs && git commit -m "deploy" && git push
-# Zet GitHub Pages in op de docs/ map in je repo settings
-```
-
----
-
-### Optie 4 — Docker
-
-Maak een `Dockerfile`:
-
-```dockerfile
-FROM node:20-alpine AS builder
-WORKDIR /app
-RUN npm create vite@latest . -- --template react --yes
-COPY zettelkasten-vim.jsx src/App.jsx
-COPY main.jsx src/main.jsx
-RUN npm install && npm run build
-
-FROM nginx:alpine
-COPY --from=builder /app/dist /usr/share/nginx/html
-EXPOSE 80
-```
-
-```bash
-docker build -t zettelkasten .
-docker run -p 8080:80 zettelkasten
-# Open http://localhost:8080
-```
-
----
-
-## 💾 Opslag & Vaults
-
-### Hoe data wordt opgeslagen
-
-De app slaat alle data op in de browser (`window.storage` in Claude.ai, `localStorage` lokaal). Er worden geen bestanden aangemaakt op je schijf — tenzij je expliciet exporteert.
-
-### Vaults — meerdere opslaglocaties
-
-Een **vault** is een benoemde, volledig gescheiden opslaglocatie. Handig voor werk vs. privé, of meerdere projecten.
-
-**Vault wisselen:**
-1. Klik op de **`:set`** knop rechtsboven in de app
-2. Typ een naam onder "Vault — Opslaglocatie" (bijv. `werk`, `studie`, `privé`)
-3. Klik **Opslaan**
-
-De actieve vault naam is altijd zichtbaar in de topbalk.
-
-Storage sleutels per vault:
-```
-zk-v3-notes-{vault}       ← notities
-zk-v3-pdfnotes-{vault}    ← PDF annotaties
-zk-vault                   ← actieve vault naam
-```
-
-### Exporteren & Importeren
-
-Via het **`:set`** paneel:
-
-| Actie | Formaat | Inhoud |
-|-------|---------|--------|
-| **Alles exporteren** | `.json` | Notities + PDF annotaties + vault naam |
-| **Exporteer als Markdown** | `.md` | Elke notitie als apart bestand met YAML frontmatter |
-| **Importeren** | `.json` | Eerder geëxporteerde backup (vervangt huidige data) |
-
-**Markdown export formaat:**
+### Notitie formaat (.md)
 ```markdown
 ---
 id: 20240315143022
-title: Mijn notitie
-tags: [rust, async, vim]
-created: 2024-03-15T14:30:22.000Z
-modified: 2024-03-15T15:00:00.000Z
+title: Mijn Notitie
+tags: ["rust", "async", "vim"]
+created: 2024-03-15T14:30:22.000000
+modified: 2024-03-15T15:00:00.000000
 ---
 
-# Mijn notitie
+# Mijn Notitie
 
-Inhoud hier...
+Inhoud hier, met [[links]] en #tags.
 ```
 
 ---
 
-## ✨ Features
+## ⌨️ VIM Editor
 
-### 📝 Zettelkasten notities
-- Bidirectionele links via `[[ID]]` of `[[Titel]]` syntax
-- Automatische backlinks per notitie
-- Markdown rendering met live preview
-- Tag-systeem via `#hash` in tekst of VIM commando's
+### Modes
+| Mode    | Activeer     | Beschrijving              |
+|---------|-------------|---------------------------|
+| NORMAL  | `Esc`       | Navigatie & commando's    |
+| INSERT  | `i` / `a`   | Tekst schrijven           |
+| COMMAND | `:`         | Ex-commando's             |
+| SEARCH  | `/`         | Zoeken in document        |
 
-### ⌨️ VIM editor
+### Navigatie (NORMAL)
+| Toets   | Actie                        |
+|---------|------------------------------|
+| `h j k l` | Karakter / regel           |
+| `w` / `b` | Woord vooruit / achteruit  |
+| `0` / `$` | Begin / einde regel        |
+| `gg` / `G` | Begin / einde document    |
 
-**Navigatie**
+### Bewerken (NORMAL)
+| Toets | Actie                    |
+|-------|--------------------------|
+| `i`   | INSERT voor cursor       |
+| `a`   | INSERT na cursor         |
+| `o`   | Nieuwe regel onder       |
+| `O`   | Nieuwe regel boven       |
+| `dd`  | Verwijder regel          |
+| `yy`  | Kopieer regel            |
+| `p`   | Plak                     |
+| `x`   | Verwijder karakter       |
+| `u`   | Undo                     |
+| `Ctrl+r` | Redo                  |
 
-| Toets | Actie |
-|-------|-------|
-| `h j k l` | Karakter/regel navigatie |
-| `w` / `b` | Woord vooruit / achteruit |
-| `0` / `$` | Begin / einde regel |
-| `gg` / `G` | Begin / einde document |
+### Ex-commando's (`:`)
+| Commando       | Actie                           |
+|---------------|---------------------------------|
+| `:w`          | Opslaan                         |
+| `:wq`         | Opslaan en sluiten              |
+| `:q!`         | Sluiten zonder opslaan          |
+| `:tag rust async` | Alle tags vervangen         |
+| `:tag+ nieuw` | Tag toevoegen                   |
+| `:tag- oud`   | Tag verwijderen                 |
+| `:tags`       | Toon huidige tags               |
+| `:retag`      | Herbereken tags uit #hash       |
+| `:goyo`       | Toggle focusmodus               |
+| `:spell`      | Spellcheck off → en → nl        |
+| `:wrap`       | Tekstomloop aan                 |
+| `:nowrap`     | Tekstomloop uit                 |
+| `Tab`         | Tag autocomplete in commando    |
 
-**Bewerken**
+### Snippets (INSERT mode, `Ctrl+J` of `Tab`)
+Gebaseerd op UltiSnips uit vimrc:
 
-| Toets | Actie |
-|-------|-------|
-| `i` | INSERT mode |
-| `dd` | Verwijder regel |
-| `yy` / `p` | Kopieer / plak |
-| `u` / `Ctrl+r` | Undo / redo |
+| Trigger | Expandeert naar          |
+|---------|--------------------------|
+| `h1`    | `# Titel`                |
+| `h2`    | `## Sectie`              |
+| `h3`    | `### Subsectie`          |
+| `link`  | `[[notitie]]`            |
+| `tag`   | `#tag`                   |
+| `code`  | Codeblok met taal        |
+| `table` | Markdowntabel 2 kolommen |
+| `quote` | Blockquote               |
+| `todo`  | Checkbox taak            |
+| `date`  | Huidige datum            |
+| `hr`    | Horizontale lijn         |
+| `bold`  | **vetgedrukt**           |
+| `em`    | *cursief*                |
 
-**Tag commando's**
+### Auto-pairs (INSERT mode)
+Gebaseerd op vimrc `inoremap`:
 
-| Commando | Actie |
-|----------|-------|
-| `:tag rust async` | Vervang alle tags |
-| `:tag+ nieuw` | Voeg tag toe |
-| `:tag- oud` | Verwijder tag |
-| `:retag` | Herbereken uit `#hash` |
-| `Tab` | Autocomplete |
+`(` → `()` · `[` → `[]` · `{` → `{}` · `"` → `""` · `'` → `''`
 
-### 📄 PDF viewer
-- Laad lokale PDF bestanden
-- Selecteer tekst → popup verschijnt automatisch
-- 5 highlight kleuren + notities + tags per highlight
+### Focusmodus (Goyo + Limelight)
+Gebaseerd op de Goyo/Limelight plugins uit vimrc:
+- `:goyo` of knop ◎ in editor toolbar
+- Verbergt sidebar, meta-panel en navigatietabs
+- Maximale schrijfruimte, minimale afleiding
+- `Esc` of klik ◎ om te verlaten
 
-### 🕸️ Kennisgraaf
-- Force-directed graph van notities, PDF annotaties en tags
-- Klikken op node opent de notitie
+### Spellcheck (F7 of `:spell`)
+Gebaseerd op ToggleSpell() functie uit vimrc:
+- Cycleert: **uit** → **Engels** → **Nederlands** → uit
+- Spelfouten worden onderstreept door de browser
 
 ---
 
-## 🎨 Wombat kleurschema
+## 🕸️ Kennisgraaf (Obsidian-stijl)
 
-Gebaseerd op `wombat.vim` door Lars H. Nielsen.
+### Features
+- **Force-directed layout** — nodes bewegen naar stabiele positie
+- **Nodegrootte** gebaseerd op aantal verbindingen (meer links = groter)
+- **Kleur per tag-groep** — elke tag krijgt eigen kleur (zoals Obsidian)
+- **Hover tooltip** — preview van notitietitel en tags
+- **Lokale graaf** — toon alleen geselecteerde notitie + directe buren
+- **Orphan filter** — toon alleen notities zonder links
+- **Tag filter** — klik op tag om graaf te filteren
+
+### Interactie
+| Actie         | Effect                          |
+|---------------|---------------------------------|
+| Klikken       | Opent de notitie                |
+| Slepen        | Herpositioneert node            |
+| Hoveren       | Toont tooltip                   |
+| Tag klikken   | Filtert graaf op die tag        |
+| "lokaal" knop | Toont alleen directe buren      |
+| "orphans"     | Toont notities zonder verbinding|
+
+### Node types
+| Kleur  | Type         |
+|--------|--------------|
+| 🟡 Geel | Geselecteerde notitie |
+| 🔵 Blauw | Notitie (kleur per tag-groep) |
+| 🟠 Oranje | PDF annotatie |
+| 🟢 Groen | Tag-node |
 
 ---
 
-## 🛠️ Technologie
+## 📄 PDF Viewer
 
-- **React 18** — UI framework
-- **PDF.js 3.11** — PDF rendering en tekst selectie
-- **Canvas API** — kennisgraaf fysica
-- **Hack font** — monospace lettertype via CDN
-- **window.storage / localStorage** — persistente opslag
+### PDF's laden
+1. **Nieuw bestand:** klik `:open PDF` → kies bestand → wordt opgeslagen in vault/pdfs/
+2. **Uit bibliotheek:** klik `📚 bibliotheek` → kies eerder geopend PDF
+
+### Annoteren
+1. Selecteer tekst met de muis
+2. Popup verschijnt automatisch
+3. Kies kleur, voeg notitie en tags toe
+4. Enter of klik **✓ Opslaan**
+
+Annotaties worden opgeslagen in `vault/annotations/` als JSON.
 
 ---
 
-## 📜 Licentie
+## 🔗 Zettelkasten Links
 
-MIT
+```
+Gebruik [[ID]] of [[Titel]] voor bidirectionele links.
+Backlinks worden automatisch getoond onderaan elke notitie.
+```
 
 ---
 
-*Gebouwd met [Claude](https://claude.ai)*
+## 📦 Bestanden
+
+```
+zettelkasten-app/
+├── server.py          ← Python backend (geen dependencies!)
+├── README.md
+└── static/
+    ├── index.html     ← HTML shell
+    └── app.js         ← React frontend
+```
+
+---
+
+## 💡 Tips
+
+- **Meerdere vaults:** start meerdere servers op verschillende poorten
+- **Git backup:** de vault map is gewone tekst → perfect voor git
+- **Obsidian compatibel:** notities zijn standaard Markdown, te openen in Obsidian
+- **Zoeken:** gebruik `/zoekterm` in de sidebar of `/` in NORMAL mode
+
