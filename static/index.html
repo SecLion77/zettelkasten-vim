@@ -2,12 +2,17 @@
 <html lang="nl">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <title>Zettelkasten VIM</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <style>
   @import url('https://cdn.jsdelivr.net/npm/hack-font@3/build/web/hack.css');
   * { box-sizing: border-box; margin: 0; padding: 0; }
+  /* Voorkom ongewenste touch-gedrag op iOS */
+  canvas { touch-action: none; }
+  button { touch-action: manipulation; }
+  /* Smooth scrolling op iOS */
+  .scroll-ios { -webkit-overflow-scrolling: touch; overflow-y: auto; }
   html, body, #root {
     height: 100%; width: 100%;
     font-family: 'Hack', 'Courier New', monospace;
@@ -73,6 +78,9 @@
   textarea::placeholder, input::placeholder { color: #857b6f; }
   input, textarea, button, select { font-family: inherit; }
 </style>
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#242424">
 </head>
 <body>
 <div id="root"></div>

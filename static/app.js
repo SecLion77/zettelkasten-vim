@@ -355,11 +355,32 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
     };
     cv.addEventListener("mousedown", onMouseDown);
 
+    // Touch support (iPad/iPhone)
+    const onTouchStart = (e) => {
+      e.preventDefault(); // voorkom browser scroll tijdens editen
+      const t   = e.touches[0];
+      const r   = cv.getBoundingClientRect();
+      const s   = S.current;
+      const cw  = s.charW;
+      const nw  = numColsWidth(s);
+      const row = Math.min(s.lines.length-1,
+                  Math.max(0, Math.floor((t.clientY-r.top)/LINE_H)+s.scroll));
+      const col = Math.min(s.lines[row].length,
+                  Math.max(0, Math.round((t.clientX-r.left-nw)/cw)));
+      s.cur = {row,col};
+      setMode("INSERT");
+      scrollToCursor(s);
+      inputRef.current?.focus();
+      draw();
+    };
+    cv.addEventListener("touchstart", onTouchStart, {passive:false});
+
     return () => {
       ro.disconnect();
       clearInterval(blinkRef.current);
       cancelAnimationFrame(rafRef.current);
       cv.removeEventListener("mousedown", onMouseDown);
+      cv.removeEventListener("touchstart", onTouchStart);
     };
   }, []);
 
@@ -1572,7 +1593,27 @@ const VaultSettings = ({vaultPath, onChangeVault, onClose}) => {
 };
 
 // ── Main App ───────────────────────────────────────────────────────────────────
+
+// ── Responsive App ─────────────────────────────────────────────────────────────
+// Breakpoints:
+//   mobile  < 768px  : bottom nav + slide-in drawer
+//   tablet  768–1200 : inklapbare sidebar met toggle
+//   desktop > 1200px : volledige 3-kolom layout
+
+const useWindowSize = () => {
+  const [size, setSize] = React.useState({w: window.innerWidth, h: window.innerHeight});
+  React.useEffect(() => {
+    const fn = () => setSize({w: window.innerWidth, h: window.innerHeight});
+    window.addEventListener("resize", fn);
+    window.addEventListener("orientationchange", fn);
+    return () => { window.removeEventListener("resize", fn); window.removeEventListener("orientationchange", fn); };
+  }, []);
+  return size;
+};
+
 const App = () => {
+  const { useState, useEffect, useRef, useMemo, useCallback } = React;
+
   const [notes,        setNotes]       = useState([]);
   const [selId,        setSelId]       = useState(null);
   const [vimMode,      setVimMode]     = useState(false);
@@ -1589,244 +1630,593 @@ const App = () => {
   const [goyoMode,     setGoyoMode]    = useState(false);
   const [loaded,       setLoaded]      = useState(false);
   const [error,        setError]       = useState(null);
+  const [sidebarOpen,  setSidebarOpen] = useState(false); // mobile/tablet drawer
 
-  // ── Load data van server ──────────────────────────────────────────────────
-  useEffect(()=>{
-    const load=async()=>{
+  const {w: winW} = useWindowSize();
+  const isMobile  = winW < 768;
+  const isTablet  = winW >= 768 && winW < 1200;
+  const isDesktop = winW >= 1200;
+
+  // Op desktop sidebar altijd open; tablet/mobile via toggle
+  const showSidebar  = isDesktop || sidebarOpen;
+  const sidebarW     = isMobile ? Math.min(winW - 40, 320) : 240;
+  const showMeta     = isDesktop && !goyoMode;
+
+  // ── Data laden ────────────────────────────────────────────────────────────
+  useEffect(() => {
+    const load = async () => {
       try {
-        const [ns,as,ps,cfg]=await Promise.all([
-          api.get("/notes"),
-          api.get("/annotations"),
-          api.get("/pdfs"),
-          api.get("/config"),
+        const [ns,as,ps,cfg] = await Promise.all([
+          api.get("/notes"), api.get("/annotations"),
+          api.get("/pdfs"),  api.get("/config"),
         ]);
-        setNotes(ns);
-        setPdfNotes(as);
-        setServerPdfs(ps);
-        setVaultPath(cfg.vault_path||"…");
-        if(ns.length>0) setSelId(ns[0].id);
+        setNotes(ns); setPdfNotes(as); setServerPdfs(ps);
+        setVaultPath(cfg.vault_path || "…");
+        if (ns.length > 0) setSelId(ns[0].id);
         setLoaded(true);
       } catch(e) {
-        setError("Kan server niet bereiken op http://localhost:7842\nStart de server met: python3 server.py");
+        setError("Kan server niet bereiken.\nStart de server met: python3 server.py");
       }
     };
     load();
-  },[]);
+  }, []);
 
-  const refreshPdfs=async()=>{
-    const ps=await api.get("/pdfs");
-    setServerPdfs(ps);
-  };
+  const refreshPdfs = async () => { setServerPdfs(await api.get("/pdfs")); };
 
-  // ── Note operations ───────────────────────────────────────────────────────
-  const selNote = notes.find(n=>n.id===selId);
-  const allTags  = useMemo(()=>[...new Set([...notes.flatMap(n=>n.tags||[]),...pdfNotes.flatMap(p=>p.tags||[])])]
-  ,[notes,pdfNotes]);
-  const sidebarTags = useMemo(()=>[...new Set(notes.flatMap(n=>n.tags||[]))]
-  ,[notes]);
-  const filtered = useMemo(()=>{
-    const base=search?notes.filter(n=>n.title?.toLowerCase().includes(search.toLowerCase())||n.content?.toLowerCase().includes(search.toLowerCase())||n.tags?.some(t=>t.includes(search.toLowerCase()))):notes;
-    return tagFilter?base.filter(n=>(n.tags||[]).includes(tagFilter)):base;
-  },[notes,search,tagFilter]);
+  // ── Note helpers ──────────────────────────────────────────────────────────
+  const selNote    = notes.find(n => n.id === selId);
+  const allTags    = useMemo(() => [...new Set([
+    ...notes.flatMap(n => n.tags||[]),
+    ...pdfNotes.flatMap(p => p.tags||[])
+  ])], [notes, pdfNotes]);
+  const sidebarTags = useMemo(() => [...new Set(notes.flatMap(n => n.tags||[]))], [notes]);
+  const filtered    = useMemo(() => {
+    const base = search
+      ? notes.filter(n => n.title?.toLowerCase().includes(search.toLowerCase())
+          || n.content?.toLowerCase().includes(search.toLowerCase())
+          || n.tags?.some(t => t.includes(search.toLowerCase())))
+      : notes;
+    return tagFilter ? base.filter(n => (n.tags||[]).includes(tagFilter)) : base;
+  }, [notes, search, tagFilter]);
 
-  const titleRef  = useRef(null);
-  const contentRef = useRef(null);  // exposed from VimEditor
+  const titleRef   = useRef(null);
+  const contentRef = useRef(null);
 
   const todayHeader = () => {
-    const d = new Date();
+    const d   = new Date();
     const dag = ["zondag","maandag","dinsdag","woensdag","donderdag","vrijdag","zaterdag"][d.getDay()];
-    const dd  = String(d.getDate()).padStart(2,"0");
-    const mm  = String(d.getMonth()+1).padStart(2,"0");
-    const yyyy= d.getFullYear();
-    return `${dag} ${dd}-${mm}-${yyyy}`;
+    return `${dag} ${String(d.getDate()).padStart(2,"0")}-${String(d.getMonth()+1).padStart(2,"0")}-${d.getFullYear()}`;
   };
 
-  const newNote=async()=>{
-    const id=genId();
-    const datum = todayHeader();
-    const content = `# Nieuw zettel\n\n*${datum}*\n\n`;
-    const n={id,title:"Nieuw zettel",content,tags:[],created:new Date().toISOString(),modified:new Date().toISOString()};
-    const saved=await api.post("/notes",n);
-    setNotes(p=>[saved,...p]); setSelId(id);
+  const newNote = async () => {
+    const id      = genId();
+    const content = `# Nieuw zettel\n\n*${todayHeader()}*\n\n`;
+    const n = {id, title:"Nieuw zettel", content, tags:[],
+               created: new Date().toISOString(), modified: new Date().toISOString()};
+    const saved = await api.post("/notes", n);
+    setNotes(p => [saved,...p]); setSelId(id);
     setEditTitle(""); setEditContent(content); setEditTags([]);
     setVimMode(true);
-    // Focus de titelinput na render
-    setTimeout(()=>{ titleRef.current?.focus(); titleRef.current?.select(); }, 60);
+    setSidebarOpen(false); // sluit drawer op mobile na aanmaken
+    setTimeout(() => { titleRef.current?.focus(); titleRef.current?.select(); }, 80);
   };
 
-  const openEdit=()=>{
-    if(!selNote)return;
-    setEditTitle(selNote.title); setEditContent(selNote.content); setEditTags(selNote.tags||[]);
+  const openEdit = () => {
+    if (!selNote) return;
+    setEditTitle(selNote.title);
+    setEditContent(selNote.content);
+    setEditTags(selNote.tags || []);
     setVimMode(true);
-    // Focus textarea direct — niet titel
-    setTimeout(()=>{ contentRef.current?.focus(); }, 60);
+    setSidebarOpen(false);
+    setTimeout(() => { contentRef.current?.focus(); }, 80);
   };
 
-  const save=async()=>{
-    const updated={...selNote,title:editTitle,content:editContent,tags:[...new Set([...editTags,...extractTags(editContent)])]};
-    const saved=await api.put("/notes/"+selId,updated);
-    setNotes(prev=>prev.map(n=>n.id===selId?saved:n));
+  const save = async () => {
+    const updated = {...selNote, title:editTitle, content:editContent,
+      tags:[...new Set([...editTags,...extractTags(editContent)])]};
+    const saved = await api.put("/notes/"+selId, updated);
+    setNotes(prev => prev.map(n => n.id===selId ? saved : n));
   };
 
-  const closeEdit=()=>setVimMode(false);
+  const closeEdit = () => setVimMode(false);
 
-  const del=async()=>{
-    if(!selNote||!window.confirm("Verwijder dit zettel?"))return;
+  const del = async () => {
+    if (!selNote || !window.confirm("Verwijder dit zettel?")) return;
     await api.del("/notes/"+selId);
-    const rest=notes.filter(n=>n.id!==selId);
-    setNotes(rest); setSelId(rest[0]?.id||null); setVimMode(false);
+    const rest = notes.filter(n => n.id !== selId);
+    setNotes(rest); setSelId(rest[0]?.id || null); setVimMode(false);
   };
 
-  const backlinks=useMemo(()=>selId?notes.filter(n=>extractLinks(n.content).includes(selId)):[]
-  ,[notes,selId]);
+  const backlinks = useMemo(() =>
+    selId ? notes.filter(n => extractLinks(n.content).includes(selId)) : [],
+  [notes, selId]);
 
-  const handleLink=e=>{
-    const el=e.target.closest(".zlink"); if(!el)return;
-    const n=notes.find(x=>x.id===el.dataset.id||x.title===el.dataset.id);
-    if(n){setSelId(n.id);setVimMode(false);}
+  const handleLink = e => {
+    const el = e.target.closest(".zlink"); if (!el) return;
+    const n  = notes.find(x => x.id===el.dataset.id || x.title===el.dataset.id);
+    if (n) { setSelId(n.id); setVimMode(false); }
   };
 
-  // ── Error state ───────────────────────────────────────────────────────────
-  if(error) return React.createElement("div",{style:{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",background:W.bg,color:W.fg,flexDirection:"column",gap:"16px",padding:"40px",textAlign:"center"}},
-    React.createElement("div",{style:{fontSize:"40px"}},"⚠️"),
-    React.createElement("div",{style:{fontSize:"16px",color:W.orange}},"Server niet bereikbaar"),
-    React.createElement("pre",{style:{fontSize:"12px",color:W.fgMuted,background:W.bg2,padding:"16px",borderRadius:"8px",border:`1px solid ${W.splitBg}`,lineHeight:"1.8"}},error),
-    React.createElement("div",{style:{fontSize:"11px",color:W.fgDim}},"Zorg dat server.py draait, dan ververs de pagina.")
+  const selectNote = (id) => {
+    setSelId(id);
+    setVimMode(false);
+    if (!isDesktop) setSidebarOpen(false); // sluit drawer na selectie
+  };
+
+  // ── Error / loading ───────────────────────────────────────────────────────
+  if (error) return React.createElement("div", {
+    style:{display:"flex",alignItems:"center",justifyContent:"center",
+           height:"100vh",background:W.bg,color:W.fg,
+           flexDirection:"column",gap:"16px",padding:"32px",textAlign:"center"}
+  },
+    React.createElement("div", {style:{fontSize:"36px"}}, "⚠️"),
+    React.createElement("div", {style:{fontSize:"15px",color:W.orange}}, "Server niet bereikbaar"),
+    React.createElement("pre", {style:{fontSize:"12px",color:W.fgMuted,
+      background:W.bg2,padding:"16px",borderRadius:"8px",
+      border:`1px solid ${W.splitBg}`,lineHeight:"1.8",maxWidth:"400px",
+      whiteSpace:"pre-wrap",textAlign:"left"}}, error),
+    React.createElement("div", {style:{fontSize:"11px",color:W.fgDim}},
+      "Zorg dat server.py draait, ververs dan de pagina.")
   );
 
-  if(!loaded) return React.createElement("div",{style:{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",background:W.bg,color:W.blue,fontSize:"14px"}},"Zettelkasten laden…");
+  if (!loaded) return React.createElement("div", {
+    style:{display:"flex",alignItems:"center",justifyContent:"center",
+           height:"100vh",background:W.bg,color:W.blue,fontSize:"14px"}
+  }, "Zettelkasten laden…");
 
-  return React.createElement("div",{
-    className:goyoMode?"goyo-mode":"",
-    style:{display:"flex",flexDirection:"column",height:"100vh",background:W.bg,color:W.fg,overflow:"hidden"}
+  // ── Sidebar inhoud ────────────────────────────────────────────────────────
+  const sidebarContent = React.createElement("div", {
+    style:{display:"flex",flexDirection:"column",height:"100%",background:W.bg2}
   },
-    // ── Top bar ──
-    !goyoMode&&React.createElement("div",{className:"top-bar-tabs",style:{height:"40px",background:W.statusBg,borderBottom:`1px solid ${W.splitBg}`,display:"flex",alignItems:"center",flexShrink:0}},
-      React.createElement("div",{style:{background:W.blue,color:W.bg,padding:"0 14px",height:"100%",display:"flex",alignItems:"center",fontWeight:"bold",fontSize:"12px",letterSpacing:"2px"}},"ZETTELKASTEN"),
-      [["notes","notities"],["graph","graaf"],["pdf","pdf"]].map(([id,label])=>
-        React.createElement("button",{key:id,onClick:()=>setTab(id),style:{background:tab===id?W.bg:"transparent",color:tab===id?W.statusFg:W.fgMuted,border:"none",borderRight:`1px solid ${W.splitBg}`,padding:"0 18px",height:"100%",fontSize:"12px",cursor:"pointer",letterSpacing:"1px",borderBottom:tab===id?`2px solid ${W.yellow}`:"2px solid transparent"}},label)
+    // Header
+    React.createElement("div", {
+      style:{padding:"10px 10px 8px",background:W.statusBg,
+             borderBottom:`1px solid ${W.splitBg}`,flexShrink:0}
+    },
+      // Sluit-knop op mobile/tablet
+      !isDesktop && React.createElement("div", {
+        style:{display:"flex",justifyContent:"space-between",
+               alignItems:"center",marginBottom:"8px"}
+      },
+        React.createElement("span", {
+          style:{fontSize:"11px",fontWeight:"bold",
+                 letterSpacing:"2px",color:W.statusFg}
+        }, "NOTITIES"),
+        React.createElement("button", {
+          onClick: () => setSidebarOpen(false),
+          style:{background:"none",border:"none",color:W.fgMuted,
+                 fontSize:"18px",cursor:"pointer",padding:"0 4px",lineHeight:1}
+        }, "×")
       ),
-      React.createElement("div",{style:{flex:1}}),
-      React.createElement("div",{style:{padding:"0 10px",fontSize:"10px",color:W.fgMuted,display:"flex",gap:"10px",alignItems:"center"}},
-        React.createElement("span",null,notes.length," zettels"),
-        React.createElement("span",null,pdfNotes.length," annotaties"),
-        React.createElement("span",null,allTags.length," tags"),
-        React.createElement("span",{style:{color:W.splitBg}},"│"),
-        React.createElement("span",{style:{color:W.fgDim,maxWidth:"200px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",fontSize:"9px",cursor:"pointer"},onClick:()=>setShowSettings(true),title:vaultPath},"📁 ",vaultPath.split("/").slice(-2).join("/"))
-      ),
-      React.createElement("button",{onClick:()=>setShowSettings(true),style:{background:"none",border:`1px solid ${W.splitBg}`,borderRadius:"4px",padding:"3px 10px",color:W.fgMuted,fontSize:"11px",cursor:"pointer",margin:"0 8px",letterSpacing:"1px"}},":set")
+      React.createElement("button", {
+        onClick: newNote,
+        style:{background:W.blue,color:W.bg,border:"none",
+               borderRadius:"6px",padding:"8px",fontSize:"12px",
+               cursor:"pointer",fontWeight:"bold",letterSpacing:"1px",
+               width:"100%",marginBottom:"6px"}
+      }, "+ nieuw zettel"),
+      React.createElement("input", {
+        value:search, onChange:e=>setSearch(e.target.value),
+        placeholder:"/zoeken…",
+        style:{background:W.bg,border:`1px solid ${W.splitBg}`,
+               borderRadius:"6px",padding:"7px 10px",color:W.fg,
+               fontSize:"13px",outline:"none",width:"100%",
+               WebkitAppearance:"none"} // iOS styling reset
+      })
     ),
+    // Tags filter
+    sidebarTags.length > 0 && React.createElement("div", {
+      style:{padding:"6px 8px",borderBottom:`1px solid ${W.splitBg}`,
+             display:"flex",gap:"4px",flexWrap:"wrap",
+             background:"rgba(0,0,0,0.1)",flexShrink:0}
+    },
+      sidebarTags.map(t => React.createElement("span", {
+        key:t, onClick:()=>setTagFilter(tagFilter===t?null:t),
+        style:{fontSize:"10px",padding:"2px 6px",borderRadius:"4px",
+               cursor:"pointer",userSelect:"none",
+               background:tagFilter===t?"rgba(159,202,86,0.3)":"rgba(159,202,86,0.08)",
+               color:W.comment,
+               border:`1px solid rgba(159,202,86,${tagFilter===t?0.5:0.15})`}
+      }, "#", t))
+    ),
+    // Lijst
+    React.createElement("div", {style:{flex:1,overflowY:"auto",WebkitOverflowScrolling:"touch"}},
+      filtered.map(n => {
+        const sel = n.id === selId;
+        return React.createElement("div", {
+          key: n.id,
+          onClick: () => selectNote(n.id),
+          style:{padding:"10px 12px",borderBottom:`1px solid ${W.splitBg}`,
+                 cursor:"pointer",background:sel?W.visualBg:"transparent",
+                 borderLeft:`3px solid ${sel?W.yellow:"transparent"}`,
+                 // grotere tap-targets op touch
+                 minHeight:"52px"}
+        },
+          React.createElement("div", {
+            style:{fontSize:"13px",color:sel?W.statusFg:W.fg,
+                   lineHeight:"1.35",marginBottom:"3px",fontWeight:sel?"bold":"normal"}
+          }, n.title),
+          React.createElement("div", {
+            style:{fontSize:"10px",color:W.fgMuted,marginBottom:"4px"}
+          }, n.id?.substring(0,12)),
+          n.tags?.length > 0 && React.createElement("div", {
+            style:{display:"flex",flexWrap:"wrap",gap:"3px"}
+          }, n.tags.slice(0,3).map(t =>
+            React.createElement(TagPill, {key:t,tag:t,small:true})
+          ))
+        );
+      })
+    )
+  );
 
-    // ── Settings modal ──
-    showSettings&&React.createElement(VaultSettings,{vaultPath,onChangeVault:setVaultPath,onClose:()=>setShowSettings(false)}),
+  // ── Tab bar (gedeeld tussen top en bottom nav) ────────────────────────────
+  const tabs = [
+    {id:"notes", icon:"📝", label:"Notities"},
+    {id:"graph", icon:"🕸",  label:"Graaf"},
+    {id:"pdf",   icon:"📄", label:"PDF"},
+  ];
 
-    // ── Content ──
-    tab==="graph"?React.createElement("div",{style:{flex:1,overflow:"hidden"}},
-      React.createElement(Graph,{notes,pdfNotes,onSelect:id=>{setSelId(id);setTab("notes");},selectedId:selId})
-    ):tab==="pdf"?React.createElement("div",{style:{flex:1,overflow:"hidden"}},
-      React.createElement(PDFViewer,{pdfNotes,setPdfNotes,allTags,serverPdfs,onRefreshPdfs:refreshPdfs})
-    ):React.createElement("div",{style:{flex:1,display:"flex",overflow:"hidden"}},
+  // ── Top bar (desktop/tablet) ──────────────────────────────────────────────
+  const topBar = !isMobile && React.createElement("div", {
+    style:{height:"44px",background:W.statusBg,
+           borderBottom:`1px solid ${W.splitBg}`,
+           display:"flex",alignItems:"center",flexShrink:0,gap:0}
+  },
+    // Logo
+    React.createElement("div", {
+      style:{background:W.blue,color:W.bg,padding:"0 16px",
+             height:"100%",display:"flex",alignItems:"center",
+             fontWeight:"bold",fontSize:"12px",letterSpacing:"2px",
+             flexShrink:0}
+    }, "ZETTELKASTEN"),
+    // Sidebar toggle op tablet
+    isTablet && React.createElement("button", {
+      onClick: () => setSidebarOpen(p => !p),
+      style:{background:sidebarOpen?"rgba(138,198,242,0.15)":"none",
+             border:"none",borderRight:`1px solid ${W.splitBg}`,
+             color:sidebarOpen?W.blue:W.fgMuted,
+             padding:"0 14px",height:"100%",
+             fontSize:"16px",cursor:"pointer"}
+    }, "☰"),
+    // Tabs
+    tabs.map(({id,label}) => React.createElement("button", {
+      key:id, onClick:()=>setTab(id),
+      style:{background:tab===id?W.bg:"transparent",
+             color:tab===id?W.statusFg:W.fgMuted,
+             border:"none",borderRight:`1px solid ${W.splitBg}`,
+             padding:"0 18px",height:"100%",fontSize:"12px",
+             cursor:"pointer",letterSpacing:"1px",
+             borderBottom:tab===id?`2px solid ${W.yellow}`:"2px solid transparent"}
+    }, label)),
+    React.createElement("div", {style:{flex:1}}),
+    // Stats
+    React.createElement("div", {
+      style:{padding:"0 10px",fontSize:"10px",color:W.fgMuted,
+             display:"flex",gap:"10px",alignItems:"center"}
+    },
+      React.createElement("span", null, notes.length, " zettels"),
+      React.createElement("span", null, allTags.length, " tags"),
+      React.createElement("span", {style:{color:W.splitBg}}, "│"),
+      React.createElement("span", {
+        style:{color:W.fgDim,maxWidth:"180px",overflow:"hidden",
+               textOverflow:"ellipsis",whiteSpace:"nowrap",
+               fontSize:"9px",cursor:"pointer"},
+        onClick:()=>setShowSettings(true),
+        title:vaultPath
+      }, "📁 ", vaultPath.split("/").slice(-2).join("/"))
+    ),
+    React.createElement("button", {
+      onClick:()=>setShowSettings(true),
+      style:{background:"none",border:`1px solid ${W.splitBg}`,
+             borderRadius:"4px",padding:"4px 12px",color:W.fgMuted,
+             fontSize:"11px",cursor:"pointer",margin:"0 10px",
+             letterSpacing:"1px"}
+    }, "⚙ instellingen")
+  );
 
-      // Sidebar
-      !goyoMode&&React.createElement("div",{className:"sidebar",style:{width:"220px",flexShrink:0,background:W.bg2,borderRight:`1px solid ${W.splitBg}`,display:"flex",flexDirection:"column"}},
-        React.createElement("div",{style:{padding:"8px",borderBottom:`1px solid ${W.splitBg}`,background:W.statusBg,display:"flex",flexDirection:"column",gap:"6px"}},
-          React.createElement("button",{onClick:newNote,style:{background:W.blue,color:W.bg,border:"none",borderRadius:"4px",padding:"6px",fontSize:"11px",cursor:"pointer",fontWeight:"bold",letterSpacing:"1px"}},":new zettel"),
-          React.createElement("input",{value:search,onChange:e=>setSearch(e.target.value),placeholder:"/zoeken…",style:{background:W.bg,border:`1px solid ${W.splitBg}`,borderRadius:"4px",padding:"5px 8px",color:W.fg,fontSize:"12px",outline:"none",width:"100%"}})
-        ),
-        sidebarTags.length>0&&React.createElement("div",{style:{padding:"5px 7px",borderBottom:`1px solid ${W.splitBg}`,display:"flex",gap:"3px",flexWrap:"wrap",background:"rgba(0,0,0,0.1)"}},
-          sidebarTags.map(t=>React.createElement("span",{key:t,onClick:()=>setTagFilter(tagFilter===t?null:t),style:{fontSize:"9px",padding:"1px 5px",borderRadius:"3px",cursor:"pointer",background:tagFilter===t?"rgba(159,202,86,0.3)":"rgba(159,202,86,0.08)",color:W.comment,border:`1px solid rgba(159,202,86,${tagFilter===t?0.5:0.15})`}},"#",t))
-        ),
-        React.createElement("div",{style:{flex:1,overflow:"auto"}},
-          filtered.map(n=>{
-            const sel=n.id===selId;
-            return React.createElement("div",{key:n.id,onClick:()=>{setSelId(n.id);setVimMode(false);},style:{padding:"7px 10px",borderBottom:`1px solid ${W.splitBg}`,cursor:"pointer",background:sel?W.visualBg:"transparent",borderLeft:`3px solid ${sel?W.yellow:"transparent"}`}},
-              React.createElement("div",{style:{fontSize:"12px",color:sel?W.statusFg:W.fg,lineHeight:"1.3",marginBottom:"2px"}},n.title),
-              React.createElement("div",{style:{fontSize:"9px",color:W.fgMuted,marginBottom:"3px"}},n.id?.substring(0,12)),
-              n.tags?.length>0&&React.createElement("div",{style:{display:"flex",flexWrap:"wrap",gap:"2px"}},
-                n.tags.slice(0,4).map(t=>React.createElement(TagPill,{key:t,tag:t,small:true}))
-              )
-            );
-          })
-        )
-      ),
+  // ── Mobile top bar ────────────────────────────────────────────────────────
+  const mobileTopBar = isMobile && React.createElement("div", {
+    style:{height:"48px",background:W.statusBg,
+           borderBottom:`1px solid ${W.splitBg}`,
+           display:"flex",alignItems:"center",
+           padding:"0 12px",flexShrink:0,gap:"8px"}
+  },
+    React.createElement("button", {
+      onClick:()=>setSidebarOpen(p=>!p),
+      style:{background:"none",border:`1px solid ${W.splitBg}`,
+             borderRadius:"6px",color:W.fgMuted,
+             fontSize:"18px",padding:"4px 10px",cursor:"pointer"}
+    }, "☰"),
+    React.createElement("div", {
+      style:{flex:1,fontWeight:"bold",fontSize:"13px",
+             letterSpacing:"2px",color:W.statusFg}
+    }, "ZETTELKASTEN"),
+    React.createElement("button", {
+      onClick:()=>setShowSettings(true),
+      style:{background:"none",border:"none",color:W.fgMuted,
+             fontSize:"18px",cursor:"pointer",padding:"4px"}
+    }, "⚙")
+  );
 
-      // Main editor/preview
-      React.createElement("div",{style:{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}},
-        selNote?(
-          vimMode?React.createElement("div",{style:{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}},
-            React.createElement("div",{style:{background:W.bg2,borderBottom:`1px solid ${W.splitBg}`,padding:"5px 10px",display:"flex",alignItems:"center",gap:"8px",flexShrink:0}},
-              React.createElement("input",{
-                ref:titleRef,
-                value:editTitle,
-                onChange:e=>setEditTitle(e.target.value),
-                placeholder:"Titel… (Enter = naar tekstveld)",
-                onKeyDown:e=>{
-                  if(e.key==="Enter"){ e.preventDefault(); contentRef.current?.focus(); }
-                  if(e.key==="Escape"){ closeEdit(); }
-                },
-                style:{flex:1,background:"transparent",border:"none",color:W.statusFg,fontSize:"15px",fontWeight:"bold",outline:"none"}
-              }),
-              React.createElement("button",{onClick:()=>setGoyoMode(!goyoMode),title:"Focusmodus (Goyo)",style:{background:goyoMode?"rgba(159,202,86,0.2)":"none",border:`1px solid ${goyoMode?W.comment:W.splitBg}`,color:goyoMode?W.comment:W.fgMuted,borderRadius:"4px",padding:"4px 8px",fontSize:"11px",cursor:"pointer"}},goyoMode?"⊙ focus aan":"◎ focus"),
-              React.createElement("button",{onClick:()=>{save();closeEdit();},style:{background:W.comment,color:W.bg,border:"none",borderRadius:"4px",padding:"4px 12px",fontSize:"11px",cursor:"pointer",fontWeight:"bold"}},":wq"),
-              React.createElement("button",{onClick:closeEdit,style:{background:"none",color:W.fgMuted,border:`1px solid ${W.splitBg}`,borderRadius:"4px",padding:"4px 10px",fontSize:"11px",cursor:"pointer"}},":q"),
-              React.createElement("button",{onClick:del,style:{background:"none",color:W.orange,border:`1px solid rgba(229,120,109,0.3)`,borderRadius:"4px",padding:"4px 10px",fontSize:"11px",cursor:"pointer"}},":del")
-            ),
-            React.createElement(VimEditor,{
-              value:editContent,onChange:setEditContent,
-              onSave:save,onEscape:closeEdit,
-              noteTags:editTags,onTagsChange:setEditTags,
-              allTags,goyoMode,onToggleGoyo:()=>setGoyoMode(!goyoMode),
-              onEditorRef:ref=>{ contentRef.current=ref; },
-            })
-          ):React.createElement("div",{style:{flex:1,display:"flex",overflow:"hidden"}},
-            React.createElement("div",{style:{flex:1,overflow:"auto",padding:"24px 32px"}},
-              React.createElement("div",{style:{display:"flex",gap:"6px",marginBottom:"18px",paddingBottom:"10px",borderBottom:`1px solid ${W.splitBg}`,alignItems:"center",flexWrap:"wrap"}},
-                React.createElement("span",{style:{fontSize:"10px",color:W.fgMuted}},selNote.id),
-                ...(selNote.tags||[]).map(t=>React.createElement(TagPill,{key:t,tag:t,onRemove:async t=>{const updated={...selNote,tags:(selNote.tags||[]).filter(x=>x!==t)};const saved=await api.put("/notes/"+selId,updated);setNotes(prev=>prev.map(n=>n.id===selId?saved:n));}})),
-                React.createElement("div",{style:{flex:1}}),
-                React.createElement("button",{onClick:openEdit,style:{background:"none",color:W.blue,border:`1px solid rgba(138,198,242,0.3)`,borderRadius:"4px",padding:"4px 12px",fontSize:"11px",cursor:"pointer"}},"i — bewerken"),
-                React.createElement("button",{onClick:del,style:{background:"none",color:W.orange,border:`1px solid rgba(229,120,109,0.2)`,borderRadius:"4px",padding:"4px 10px",fontSize:"11px",cursor:"pointer"}},":del")
-              ),
-              React.createElement("div",{className:"mdv",dangerouslySetInnerHTML:{__html:renderMd(selNote.content,notes)},onClick:handleLink}),
-              backlinks.length>0&&React.createElement("div",{style:{marginTop:"40px",paddingTop:"14px",borderTop:`1px solid ${W.splitBg}`}},
-                React.createElement("div",{style:{fontSize:"10px",color:W.fgMuted,letterSpacing:"2px",marginBottom:"8px"}},"BACKLINKS"),
-                backlinks.map(n=>React.createElement("div",{key:n.id,onClick:()=>setSelId(n.id),style:{padding:"5px 10px",cursor:"pointer",background:"rgba(138,198,242,0.06)",border:`1px solid rgba(138,198,242,0.12)`,borderRadius:"4px",marginBottom:"5px",fontSize:"12px",color:W.keyword}},"← ",n.title," ",React.createElement("span",{style:{color:W.fgMuted,fontSize:"10px"}},n.id)))
-              )
-            ),
-            // Meta panel
-            !goyoMode&&React.createElement("div",{className:"meta-panel",style:{width:"176px",flexShrink:0,background:W.bg2,borderLeft:`1px solid ${W.splitBg}`,padding:"14px 12px",fontSize:"11px",overflow:"auto"}},
-              React.createElement("div",{style:{color:W.fgMuted,fontSize:"9px",marginBottom:"4px",letterSpacing:"1px"}},"ID"),
-              React.createElement("div",{style:{color:W.comment,wordBreak:"break-all",marginBottom:"14px",fontSize:"10px"}},selNote.id),
-              React.createElement("div",{style:{color:W.fgMuted,fontSize:"9px",marginBottom:"6px",letterSpacing:"1px"}},"TAGS"),
-              React.createElement("div",{style:{display:"flex",flexWrap:"wrap",gap:"4px",marginBottom:"6px"}},
-                ...(selNote.tags||[]).map(t=>React.createElement(TagPill,{key:t,tag:t,onRemove:async t=>{const updated={...selNote,tags:(selNote.tags||[]).filter(x=>x!==t)};const saved=await api.put("/notes/"+selId,updated);setNotes(prev=>prev.map(n=>n.id===selId?saved:n));}})),
-                !(selNote.tags||[]).length&&React.createElement("span",{style:{fontSize:"10px",color:W.splitBg}},"geen")
-              ),
-              React.createElement("div",{style:{fontSize:"9px",color:W.splitBg,lineHeight:"1.8",marginBottom:"14px",padding:"6px 8px",background:"rgba(0,0,0,0.2)",borderRadius:"3px"}},
-                React.createElement("span",{style:{color:W.fgMuted}},":tag")," naam1 naam2",React.createElement("br"),
-                React.createElement("span",{style:{color:W.fgMuted}},":tag+")," naam",React.createElement("br"),
-                React.createElement("span",{style:{color:W.fgMuted}},":tag-")," naam",React.createElement("br"),
-                React.createElement("span",{style:{color:W.fgMuted}},":goyo")," focusmodus",React.createElement("br"),
-                React.createElement("span",{style:{color:W.fgMuted}},":spell")," en/nl/off",React.createElement("br"),
-                React.createElement("span",{style:{color:W.fgMuted}},"Ctrl+J")," snippet",React.createElement("br"),
-                React.createElement("span",{style:{color:W.fgMuted}},"F7")," spellcheck"
-              ),
-              extractLinks(selNote.content).length>0&&React.createElement(React.Fragment,null,
-                React.createElement("div",{style:{color:W.fgMuted,fontSize:"9px",marginBottom:"6px",letterSpacing:"1px"}},"LINKS →"),
-                extractLinks(selNote.content).map(id=>{
-                  const n=notes.find(x=>x.id===id);
-                  return React.createElement("div",{key:id,onClick:()=>n&&setSelId(n.id),style:{fontSize:"10px",color:n?W.keyword:W.fgMuted,cursor:n?"pointer":"default",padding:"3px 0",borderBottom:`1px solid ${W.splitBg}`,marginBottom:"2px"}},"→ ",n?n.title:id);
-                })
-              ),
-              React.createElement("div",{style:{marginTop:"14px",color:W.fgMuted,fontSize:"9px",letterSpacing:"1px",marginBottom:"4px"}},"GEWIJZIGD"),
-              React.createElement("div",{style:{fontSize:"10px",color:W.fgDim}},selNote.modified?new Date(selNote.modified).toLocaleString("nl-NL"):"—")
+  // ── Bottom nav (mobile) ───────────────────────────────────────────────────
+  const bottomNav = isMobile && React.createElement("div", {
+    style:{height:"56px",background:W.statusBg,
+           borderTop:`1px solid ${W.splitBg}`,
+           display:"flex",flexShrink:0,
+           // Safe area voor iPhone home indicator
+           paddingBottom:"env(safe-area-inset-bottom,0px)"}
+  },
+    tabs.map(({id,icon,label}) => React.createElement("button", {
+      key:id, onClick:()=>setTab(id),
+      style:{flex:1,background:"none",border:"none",
+             borderTop:tab===id?`2px solid ${W.yellow}`:"2px solid transparent",
+             color:tab===id?W.yellow:W.fgMuted,
+             display:"flex",flexDirection:"column",
+             alignItems:"center",justifyContent:"center",
+             gap:"2px",cursor:"pointer",fontSize:"18px",
+             paddingTop:"6px"}
+    },
+      React.createElement("span", null, icon),
+      React.createElement("span", {style:{fontSize:"10px",letterSpacing:"0.5px"}}, label)
+    ))
+  );
+
+  // ── Sidebar overlay (mobile/tablet drawer) ────────────────────────────────
+  const sidebarOverlay = !isDesktop && sidebarOpen && React.createElement(React.Fragment, null,
+    // Backdrop
+    React.createElement("div", {
+      onClick:()=>setSidebarOpen(false),
+      style:{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",
+             zIndex:100,backdropFilter:"blur(2px)"}
+    }),
+    // Drawer
+    React.createElement("div", {
+      style:{position:"fixed",top:0,left:0,bottom:0,
+             width:`${sidebarW}px`,zIndex:101,
+             boxShadow:"4px 0 20px rgba(0,0,0,0.5)",
+             display:"flex",flexDirection:"column"}
+    }, sidebarContent)
+  );
+
+  // ── Editor toolbar ────────────────────────────────────────────────────────
+  const editorToolbar = React.createElement("div", {
+    style:{background:W.bg2,borderBottom:`1px solid ${W.splitBg}`,
+           padding:"6px 10px",display:"flex",
+           alignItems:"center",gap:"6px",flexShrink:0,
+           flexWrap: isMobile ? "wrap" : "nowrap"}
+  },
+    React.createElement("input", {
+      ref:titleRef, value:editTitle,
+      onChange:e=>setEditTitle(e.target.value),
+      placeholder:"Titel… (Enter = naar tekstveld)",
+      onKeyDown:e=>{
+        if(e.key==="Enter"){ e.preventDefault(); contentRef.current?.focus(); }
+        if(e.key==="Escape"){ closeEdit(); }
+      },
+      style:{flex:1,minWidth:"120px",background:"transparent",
+             border:"none",color:W.statusFg,
+             fontSize: isMobile ? "15px" : "16px",
+             fontWeight:"bold",outline:"none",
+             WebkitAppearance:"none"}
+    }),
+    // Knoppen — groter op touch
+    ...[
+      {label:"◎ focus", show:true, onClick:()=>setGoyoMode(!goyoMode),
+       active:goyoMode, color:goyoMode?W.comment:W.fgMuted},
+      {label:"✓ opslaan", show:true, onClick:()=>{save();closeEdit();},
+       color:W.comment, bg:W.comment, fgColor:W.bg, bold:true},
+      {label:"✕ sluiten", show:true, onClick:closeEdit, color:W.fgMuted},
+      {label:"🗑 del", show:!isMobile, onClick:del, color:W.orange},
+    ].filter(b=>b.show).map((b,i) => React.createElement("button", {
+      key:i, onClick:b.onClick,
+      style:{background:b.bg?"none":"none",
+             border:`1px solid ${b.bg||W.splitBg}`,
+             borderRadius:"6px",
+             padding: isMobile ? "7px 12px" : "4px 10px",
+             color: b.fgColor || b.color,
+             fontSize: isMobile ? "13px" : "11px",
+             cursor:"pointer",
+             fontWeight:b.bold?"bold":"normal",
+             background: b.bg || (b.active?"rgba(159,202,86,0.15)":"none"),
+             flexShrink:0,
+             WebkitTapHighlightColor:"transparent"}
+    }, b.label))
+  );
+
+  // ── Preview toolbar ───────────────────────────────────────────────────────
+  const previewToolbar = React.createElement("div", {
+    style:{display:"flex",gap:"6px",marginBottom:"16px",
+           paddingBottom:"10px",borderBottom:`1px solid ${W.splitBg}`,
+           alignItems:"center",flexWrap:"wrap"}
+  },
+    React.createElement("span", {
+      style:{fontSize:"10px",color:W.fgMuted}
+    }, selNote.id),
+    ...(selNote.tags||[]).map(t => React.createElement(TagPill, {
+      key:t, tag:t,
+      onRemove: async t => {
+        const updated = {...selNote, tags:(selNote.tags||[]).filter(x=>x!==t)};
+        const saved   = await api.put("/notes/"+selId, updated);
+        setNotes(prev => prev.map(n => n.id===selId ? saved : n));
+      }
+    })),
+    React.createElement("div", {style:{flex:1}}),
+    React.createElement("button", {
+      onClick:openEdit,
+      style:{background:"none",color:W.blue,
+             border:`1px solid rgba(138,198,242,0.3)`,
+             borderRadius:"6px",
+             padding: isMobile ? "8px 16px" : "5px 12px",
+             fontSize: isMobile ? "14px" : "11px",
+             cursor:"pointer",
+             WebkitTapHighlightColor:"transparent"}
+    }, "✏ bewerken"),
+    !isMobile && React.createElement("button", {
+      onClick:del,
+      style:{background:"none",color:W.orange,
+             border:`1px solid rgba(229,120,109,0.2)`,
+             borderRadius:"6px",padding:"5px 10px",
+             fontSize:"11px",cursor:"pointer"}
+    }, "🗑 del")
+  );
+
+  // ── Meta panel ────────────────────────────────────────────────────────────
+  const metaPanel = showMeta && React.createElement("div", {
+    className:"meta-panel",
+    style:{width:"180px",flexShrink:0,background:W.bg2,
+           borderLeft:`1px solid ${W.splitBg}`,
+           padding:"14px 12px",fontSize:"11px",overflowY:"auto"}
+  },
+    React.createElement("div",{style:{color:W.fgMuted,fontSize:"9px",marginBottom:"4px",letterSpacing:"1px"}},"ID"),
+    React.createElement("div",{style:{color:W.comment,wordBreak:"break-all",marginBottom:"14px",fontSize:"10px"}},selNote.id),
+    React.createElement("div",{style:{color:W.fgMuted,fontSize:"9px",marginBottom:"6px",letterSpacing:"1px"}},"TAGS"),
+    React.createElement("div",{style:{display:"flex",flexWrap:"wrap",gap:"4px",marginBottom:"10px"}},
+      ...(selNote.tags||[]).map(t => React.createElement(TagPill,{key:t,tag:t,
+        onRemove:async t=>{
+          const updated={...selNote,tags:(selNote.tags||[]).filter(x=>x!==t)};
+          const saved=await api.put("/notes/"+selId,updated);
+          setNotes(prev=>prev.map(n=>n.id===selId?saved:n));
+        }})),
+      !(selNote.tags||[]).length && React.createElement("span",{style:{fontSize:"10px",color:W.splitBg}},"geen")
+    ),
+    React.createElement("div",{style:{fontSize:"9px",color:W.splitBg,lineHeight:"2",marginBottom:"14px",padding:"6px 8px",background:"rgba(0,0,0,0.2)",borderRadius:"3px"}},
+      [":tag naam1 naam2",":tag+ naam",":tag- naam",":goyo focus",":spell en/nl","Ctrl+J snippet"].map((t,i)=>
+        React.createElement("div",{key:i,style:{color:W.fgMuted}},t))
+    ),
+    extractLinks(selNote.content).length>0 && React.createElement(React.Fragment,null,
+      React.createElement("div",{style:{color:W.fgMuted,fontSize:"9px",marginBottom:"6px",letterSpacing:"1px"}},"LINKS →"),
+      extractLinks(selNote.content).map(id=>{
+        const n=notes.find(x=>x.id===id);
+        return React.createElement("div",{key:id,onClick:()=>n&&setSelId(n.id),
+          style:{fontSize:"10px",color:n?W.keyword:W.fgMuted,cursor:n?"pointer":"default",
+                 padding:"3px 0",borderBottom:`1px solid ${W.splitBg}`,marginBottom:"2px"}
+        },"→ ",n?n.title:id);
+      })
+    ),
+    React.createElement("div",{style:{marginTop:"14px",color:W.fgMuted,fontSize:"9px",letterSpacing:"1px",marginBottom:"4px"}},"GEWIJZIGD"),
+    React.createElement("div",{style:{fontSize:"10px",color:W.fgDim}},
+      selNote.modified?new Date(selNote.modified).toLocaleString("nl-NL"):"—")
+  );
+
+  // ── Notes tab content ─────────────────────────────────────────────────────
+  const notesContent = React.createElement("div", {
+    style:{flex:1,display:"flex",overflow:"hidden"}
+  },
+    // Desktop sidebar (inline, niet als overlay)
+    isDesktop && React.createElement("div", {
+      className:"sidebar",
+      style:{width:`${sidebarW}px`,flexShrink:0,
+             borderRight:`1px solid ${W.splitBg}`,
+             display:"flex",flexDirection:"column"}
+    }, sidebarContent),
+
+    // Hoofd area
+    React.createElement("div", {
+      style:{flex:1,display:"flex",flexDirection:"column",
+             overflow:"hidden",minWidth:0}
+    },
+      selNote ? (
+        vimMode
+          // ── EDITOR modus ──────────────────────────────────────────────
+          ? React.createElement("div", {
+              className: goyoMode ? "goyo-mode" : "",
+              style:{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}
+            },
+              !goyoMode && editorToolbar,
+              React.createElement(VimEditor, {
+                value:editContent, onChange:setEditContent,
+                onSave:save, onEscape:closeEdit,
+                noteTags:editTags, onTagsChange:setEditTags,
+                allTags, goyoMode,
+                onToggleGoyo:()=>setGoyoMode(!goyoMode),
+                onEditorRef:ref=>{ contentRef.current=ref; },
+              })
             )
-          )
-        ):React.createElement("div",{style:{flex:1,display:"flex",alignItems:"center",justifyContent:"center",color:W.fgMuted,fontSize:"13px"}},"Selecteer een zettel")
+          // ── PREVIEW modus ─────────────────────────────────────────────
+          : React.createElement("div", {
+              style:{flex:1,display:"flex",overflow:"hidden"}
+            },
+              React.createElement("div", {
+                style:{flex:1,overflowY:"auto",
+                       padding: isMobile ? "16px" : "24px 32px",
+                       WebkitOverflowScrolling:"touch"}
+              },
+                previewToolbar,
+                React.createElement("div", {
+                  className:"mdv",
+                  style:{fontSize: isMobile ? "15px" : "13px",
+                         lineHeight: isMobile ? "1.9" : "1.85"},
+                  dangerouslySetInnerHTML:{__html:renderMd(selNote.content,notes)},
+                  onClick:handleLink
+                }),
+                backlinks.length>0 && React.createElement("div",{
+                  style:{marginTop:"40px",paddingTop:"14px",
+                         borderTop:`1px solid ${W.splitBg}`}
+                },
+                  React.createElement("div",{style:{fontSize:"10px",color:W.fgMuted,letterSpacing:"2px",marginBottom:"8px"}},"BACKLINKS"),
+                  backlinks.map(n=>React.createElement("div",{key:n.id,
+                    onClick:()=>setSelId(n.id),
+                    style:{padding:"8px 10px",cursor:"pointer",
+                           background:"rgba(138,198,242,0.06)",
+                           border:`1px solid rgba(138,198,242,0.12)`,
+                           borderRadius:"6px",marginBottom:"6px",
+                           fontSize:"13px",color:W.keyword,
+                           WebkitTapHighlightColor:"transparent"}},"← ",n.title))
+                )
+              ),
+              metaPanel
+            )
+      ) : React.createElement("div", {
+        style:{flex:1,display:"flex",alignItems:"center",
+               justifyContent:"center",color:W.fgMuted,fontSize:"14px",
+               flexDirection:"column",gap:"12px"}
+      },
+        React.createElement("div",{style:{fontSize:"32px"}},"📝"),
+        React.createElement("div",null,"Selecteer een zettel"),
+        React.createElement("button",{
+          onClick:newNote,
+          style:{marginTop:"8px",background:W.blue,color:W.bg,
+                 border:"none",borderRadius:"8px",padding:"10px 24px",
+                 fontSize:"14px",cursor:"pointer",fontWeight:"bold"}
+        },"+ nieuw zettel")
       )
     )
   );
+
+  // ── Hoofd render ──────────────────────────────────────────────────────────
+  return React.createElement("div", {
+    style:{display:"flex",flexDirection:"column",height:"100vh",
+           // Safe area insets voor notches / home indicator
+           paddingTop:"env(safe-area-inset-top,0px)",
+           paddingLeft:"env(safe-area-inset-left,0px)",
+           paddingRight:"env(safe-area-inset-right,0px)",
+           background:W.bg,color:W.fg,overflow:"hidden"}
+  },
+    mobileTopBar,
+    topBar,
+    showSettings && React.createElement(VaultSettings, {
+      vaultPath, onChangeVault:setVaultPath, onClose:()=>setShowSettings(false)
+    }),
+    sidebarOverlay,
+
+    // Content
+    React.createElement("div", {style:{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}},
+      tab==="graph" ? React.createElement("div",{style:{flex:1,overflow:"hidden"}},
+        React.createElement(Graph,{notes,pdfNotes,
+          onSelect:id=>{setSelId(id);setTab("notes");},
+          selectedId:selId})
+      )
+      : tab==="pdf" ? React.createElement("div",{style:{flex:1,overflow:"hidden"}},
+        React.createElement(PDFViewer,{pdfNotes,setPdfNotes,allTags,serverPdfs,onRefreshPdfs:refreshPdfs})
+      )
+      : notesContent
+    ),
+
+    bottomNav
+  );
 };
+
+
 
 // ── Mount ──────────────────────────────────────────────────────────────────────
 const root = ReactDOM.createRoot(document.getElementById("root"));
