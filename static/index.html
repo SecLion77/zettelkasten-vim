@@ -8,8 +8,10 @@
 <style>
   @import url('https://cdn.jsdelivr.net/npm/hack-font@3/build/web/hack.css');
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  /* Voorkom ongewenste touch-gedrag op iOS */
+  /* Voorkom ongewenste touch-gedrag op iOS (voor VIM canvas editor) */
   canvas { touch-action: none; }
+  /* PDF textLayer WEL touch-action auto voor tekst selectie */
+  .textLayer, .textLayer * { touch-action: auto !important; }
   button { touch-action: manipulation; }
   /* Smooth scrolling op iOS */
   .scroll-ios { -webkit-overflow-scrolling: touch; overflow-y: auto; }
@@ -27,18 +29,34 @@
   .textLayer {
     position: absolute !important; inset: 0 !important;
     overflow: hidden !important; opacity: 1 !important;
-    line-height: 1 !important; user-select: text !important;
-    -webkit-user-select: text !important; cursor: text !important;
+    line-height: 1 !important;
+    user-select: text !important;
+    -webkit-user-select: text !important;
+    -moz-user-select: text !important;
+    cursor: text !important;
     pointer-events: auto !important;
+    /* iOS Safari: touch-action auto zodat tekst-selectie werkt */
+    touch-action: auto !important;
+    -webkit-touch-callout: default !important;
   }
   .textLayer span, .textLayer br {
     color: transparent !important; position: absolute !important;
     white-space: pre !important; cursor: text !important;
     transform-origin: 0% 0% !important;
-    user-select: text !important; -webkit-user-select: text !important;
+    user-select: text !important;
+    -webkit-user-select: text !important;
     pointer-events: auto !important;
+    touch-action: auto !important;
   }
-  .textLayer ::selection { background: rgba(138,198,242,0.55) !important; color: transparent !important; }
+  .textLayer ::selection {
+    background: rgba(234,231,136,0.5) !important;  /* Wombat geel */
+    color: transparent !important;
+  }
+  /* iOS selectie kleur */
+  .textLayer ::-webkit-selection {
+    background: rgba(234,231,136,0.5) !important;
+    color: transparent !important;
+  }
 
   /* Focus / Goyo mode */
   .goyo-mode .sidebar, .goyo-mode .meta-panel, .goyo-mode .top-bar-tabs { display: none !important; }

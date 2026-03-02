@@ -1282,7 +1282,8 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs}) 
   const [filterTag,  setFilterTag]  = useState(null);
   const [quickNote,  setQuickNote]  = useState("");
   const [quickTags,  setQuickTags]  = useState([]);
-  const [showLibrary,setShowLibrary]= useState(false);
+  const [showLibrary,   setShowLibrary]   = useState(false);
+  const [showAnnotPanel,setShowAnnotPanel]= useState(true);   // wegklapbaar
 
   const canvasRef   = useRef(null);
   const textLayerRef= useRef(null);
@@ -1291,6 +1292,7 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs}) 
   const fileRef     = useRef(null);
   const renderRef   = useRef(null);
   const tlRenderRef = useRef(null);
+  const pinchRef    = useRef({active:false, dist0:0, scale0:1.4});
 
   useEffect(()=>{
     if(!window.pdfjsLib){
@@ -1362,25 +1364,60 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs}) 
     setIsLoading(false);
   };
 
-  const handleMouseUp=useCallback((e)=>{
-    setTimeout(()=>{
-      const sel=window.getSelection();
-      const txt=sel?.toString().trim();
-      if(!txt||txt.length<2)return;
-      const tl=textLayerRef.current; if(!tl)return;
-      const range=sel.getRangeAt(0);
-      if(!tl.contains(range.commonAncestorContainer))return;
-      const scrollEl=scrollRef.current;
-      const sRect=range.getBoundingClientRect();
-      const cRect=scrollEl.getBoundingClientRect();
+  const showSelectionPopup = useCallback(() => {
+    const sel = window.getSelection();
+    const txt = sel?.toString().trim();
+    if (!txt || txt.length < 2) return;
+    const tl = textLayerRef.current; if (!tl) return;
+    try {
+      const range = sel.getRangeAt(0);
+      if (!tl.contains(range.commonAncestorContainer)) return;
+      const scrollEl = scrollRef.current;
+      const sRect = range.getBoundingClientRect();
+      const cRect = scrollEl.getBoundingClientRect();
+      // Op mobile popup boven de selectie tonen (anders valt het onder het toetsenbord)
+      const isMobileView = window.innerWidth < 768;
+      const popupW = isMobileView ? Math.min(window.innerWidth - 24, 340) : 360;
+      const yOffset = isMobileView ? -280 : 10;  // boven vs onder selectie
       setPendingSel(txt);
       setSelPos({
-        x:Math.max(8,Math.min(sRect.left-cRect.left+scrollEl.scrollLeft,cRect.width-360)),
-        y:sRect.bottom-cRect.top+scrollEl.scrollTop+10,
+        x: Math.max(8, Math.min(sRect.left - cRect.left + scrollEl.scrollLeft, cRect.width - popupW - 8)),
+        y: Math.max(8, sRect.bottom - cRect.top + scrollEl.scrollTop + yOffset),
       });
       setQuickNote(""); setQuickTags([]);
-    },10);
-  },[]);
+    } catch(err) {}
+  }, []);
+
+  const handleMouseUp = useCallback((e) => {
+    // Kleine vertraging zodat browser de selectie kan afronden
+    setTimeout(showSelectionPopup, 30);
+  }, [showSelectionPopup]);
+
+  // iOS Safari: selectie via touch gebruikt selectionchange event
+  useEffect(() => {
+    const tl = textLayerRef.current; if (!tl) return;
+
+    // touchend op iOS geeft selectie pas door na kort uitstel
+    const onTouchEnd = () => setTimeout(showSelectionPopup, 150);
+
+    // selectionchange vuurt ook op iOS als de gebruiker tekst markeert
+    const onSelChange = () => {
+      const sel = window.getSelection();
+      const txt = sel?.toString().trim();
+      // Alleen als er daadwerkelijk iets geselecteerd is én selectie klaar is
+      if (txt && txt.length >= 2) {
+        clearTimeout(onSelChange._t);
+        onSelChange._t = setTimeout(showSelectionPopup, 200);
+      }
+    };
+
+    tl.addEventListener("touchend", onTouchEnd);
+    document.addEventListener("selectionchange", onSelChange);
+    return () => {
+      tl.removeEventListener("touchend", onTouchEnd);
+      document.removeEventListener("selectionchange", onSelChange);
+    };
+  }, [showSelectionPopup]);
 
   const saveHighlight=async()=>{
     if(!pendingSel)return;
@@ -1409,7 +1446,7 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs}) 
   const allAnnotTags=[...new Set(highlights.flatMap(h=>h.tags||[]))];
   const panelHl=filterTag?highlights.filter(h=>(h.tags||[]).includes(filterTag)):highlights;
 
-  return React.createElement("div",{style:{display:"flex",height:"100%",background:W.bg}},
+  return React.createElement("div",{style:{display:"flex",height:"100%",background:W.bg,position:"relative"}},
     // Main PDF column
     React.createElement("div",{style:{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",minWidth:0}},
       // Toolbar
@@ -1450,7 +1487,32 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs}) 
       ),
 
       // Scroll area
-      React.createElement("div",{ref:scrollRef,style:{flex:1,overflow:"auto",background:W.lineNrBg,position:"relative",cursor:"text"},onMouseUp:handleMouseUp},
+      React.createElement("div",{
+        ref:scrollRef,
+        style:{flex:1,overflow:"auto",background:W.lineNrBg,position:"relative",cursor:"text"},
+        onMouseUp:handleMouseUp,
+        onTouchStart:(e)=>{
+          if(e.touches.length===2){
+            // Pinch start
+            const dx=e.touches[0].clientX-e.touches[1].clientX;
+            const dy=e.touches[0].clientY-e.touches[1].clientY;
+            pinchRef.current={active:true, dist0:Math.hypot(dx,dy), scale0:scale};
+            e.preventDefault();
+          }
+        },
+        onTouchMove:(e)=>{
+          if(!pinchRef.current.active||e.touches.length!==2)return;
+          e.preventDefault();
+          const dx=e.touches[0].clientX-e.touches[1].clientX;
+          const dy=e.touches[0].clientY-e.touches[1].clientY;
+          const dist=Math.hypot(dx,dy);
+          const ratio=dist/pinchRef.current.dist0;
+          const newScale=Math.min(4, Math.max(0.5,
+            +(pinchRef.current.scale0*ratio).toFixed(2)));
+          setScale(newScale);
+        },
+        onTouchEnd:()=>{ pinchRef.current.active=false; },
+      },
         isLoading&&React.createElement("div",{style:{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center"}},
           React.createElement("span",{style:{color:W.blue,fontSize:"14px"}},"laden…")
         ),
@@ -1461,7 +1523,7 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs}) 
         ),
         pdfDoc&&React.createElement("div",{ref:wrapRef,style:{position:"relative",margin:"24px auto",width:"fit-content"}},
           React.createElement("canvas",{ref:canvasRef,style:{display:"block",boxShadow:"0 4px 32px rgba(0,0,0,0.7)"}}),
-          React.createElement("div",{ref:textLayerRef,className:"textLayer",style:{position:"absolute",top:0,left:0,overflow:"hidden",lineHeight:1,userSelect:"text",WebkitUserSelect:"text",cursor:"text"}}),
+          React.createElement("div",{ref:textLayerRef,className:"textLayer",style:{position:"absolute",top:0,left:0,overflow:"hidden",lineHeight:1,userSelect:"text",WebkitUserSelect:"text",MozUserSelect:"text",cursor:"text",touchAction:"auto",WebkitTouchCallout:"default"}}),
           // Highlight dots
           highlights.filter(h=>h.page===pageNum&&h.file===pdfFile?.name).map((h,i)=>{
             const col=HCOLORS.find(c=>c.id===h.colorId)||HCOLORS[0];
@@ -1487,13 +1549,39 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs}) 
         )
       )
     ),
+    // Annotatiepaneel — knop om te openen (altijd zichtbaar)
+    React.createElement("button",{
+      onClick:()=>setShowAnnotPanel(p=>!p),
+      title: showAnnotPanel ? "Annotaties verbergen" : "Annotaties tonen",
+      style:{
+        position:"absolute", right:showAnnotPanel?286:0, top:"50%",
+        transform:"translateY(-50%)",
+        background:W.bg2, border:`1px solid ${W.splitBg}`,
+        borderRight:showAnnotPanel?"none":"1px solid "+W.splitBg,
+        borderRadius:showAnnotPanel?"4px 0 0 4px":"0 4px 4px 0",
+        color:W.fgMuted, fontSize:"14px", cursor:"pointer",
+        padding:"8px 5px", zIndex:10, lineHeight:1,
+        writingMode:"vertical-rl",
+      }
+    }, showAnnotPanel ? "▶" : "◀ " + (highlights.length > 0 ? highlights.length : "")),
+
     // Annotations panel
-    React.createElement("div",{style:{width:"280px",flexShrink:0,background:W.bg2,borderLeft:`1px solid ${W.splitBg}`,display:"flex",flexDirection:"column"}},
+    showAnnotPanel&&React.createElement("div",{style:{
+      width:"280px",flexShrink:0,background:W.bg2,
+      borderLeft:`1px solid ${W.splitBg}`,
+      display:"flex",flexDirection:"column",
+      // Op mobile als absolute overlay
+      ...(window.innerWidth<768 ? {
+        position:"absolute",right:0,top:0,bottom:0,zIndex:20,
+        boxShadow:"-4px 0 20px rgba(0,0,0,0.5)"
+      } : {}),
+    }},
       React.createElement("div",{style:{background:W.statusBg,borderBottom:`1px solid ${W.splitBg}`,padding:"6px 10px",display:"flex",alignItems:"center",gap:"6px",flexShrink:0}},
         React.createElement("span",{style:{fontSize:"11px",color:W.statusFg,letterSpacing:"1px"}},"ANNOTATIES"),
         React.createElement("span",{style:{background:W.blue,color:W.bg,borderRadius:"10px",padding:"0 6px",fontSize:"10px"}},highlights.length),
         React.createElement("div",{style:{flex:1}}),
-        filterTag&&React.createElement("button",{onClick:()=>setFilterTag(null),style:{background:"rgba(159,202,86,0.15)",color:W.comment,border:`1px solid rgba(159,202,86,0.3)`,borderRadius:"3px",fontSize:"10px",padding:"1px 6px",cursor:"pointer"}},"#",filterTag," ×")
+        filterTag&&React.createElement("button",{onClick:()=>setFilterTag(null),style:{background:"rgba(159,202,86,0.15)",color:W.comment,border:`1px solid rgba(159,202,86,0.3)`,borderRadius:"3px",fontSize:"10px",padding:"1px 6px",cursor:"pointer"}},"#",filterTag," ×"),
+        React.createElement("button",{onClick:()=>setShowAnnotPanel(false),style:{background:"none",border:"none",color:W.fgMuted,fontSize:"16px",cursor:"pointer",padding:"0 2px",lineHeight:1}}, "×")
       ),
       allAnnotTags.length>0&&React.createElement("div",{style:{padding:"5px 8px",borderBottom:`1px solid ${W.splitBg}`,display:"flex",gap:"3px",flexWrap:"wrap",background:"rgba(0,0,0,0.15)"}},
         allAnnotTags.map(t=>React.createElement("span",{key:t,onClick:()=>setFilterTag(filterTag===t?null:t),style:{fontSize:"9px",padding:"1px 5px",borderRadius:"3px",cursor:"pointer",background:filterTag===t?"rgba(159,202,86,0.3)":"rgba(159,202,86,0.08)",color:W.comment,border:`1px solid rgba(159,202,86,${filterTag===t?0.5:0.15})`}},"#",t))
