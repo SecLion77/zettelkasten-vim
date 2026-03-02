@@ -1,0 +1,21 @@
+# Vault inhoud — notities, PDF's en annotaties worden NIET gecommit
+# (persoonlijke data, hoort niet in git)
+Zettelkasten/
+~/Zettelkasten/
+
+# Als je een custom vault hebt opgegeven:
+# /pad/naar/jouw/vault/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+
+# OS bestanden
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
