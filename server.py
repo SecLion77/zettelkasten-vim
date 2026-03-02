@@ -200,10 +200,13 @@ class VaultManager:
 # ── HTTP Handler ───────────────────────────────────────────────────────────────
 
 class ZKHandler(BaseHTTPRequestHandler):
-    vault: VaultManager = None  # ingesteld door main()
+    vault:   VaultManager = None   # ingesteld door main()
+    verbose: bool         = False  # ingesteld door main() via --verbose
 
     def log_message(self, fmt, *args):
-        print(f"  {self.command:6}  {self.path}", flush=True)
+        if self.verbose:
+            status = args[1] if len(args) > 1 else "???"
+            print(f"  {self.command:<7} {status}  {self.path}", flush=True)
 
     def _send(self, code: int, body, content_type="application/json"):
         if isinstance(body, (dict, list)):
@@ -338,30 +341,51 @@ class ZKHandler(BaseHTTPRequestHandler):
         return self._send(404, {"error": "Niet gevonden"})
 
 
+def get_local_ip() -> str:
+    """Detecteer het lokale IPv4-adres (niet 127.0.0.1)."""
+    import socket
+    try:
+        # Verbind naar extern adres — geen echt verkeer, alleen voor routing-info
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "onbekend"
+
+
 def main():
     parser = argparse.ArgumentParser(description="Zettelkasten VIM — Python App")
-    parser.add_argument("--vault",  default=str(DEFAULT_VAULT), help="Pad naar vault map")
-    parser.add_argument("--port",   type=int, default=7842,     help="Poort (standaard: 7842)")
-    parser.add_argument("--no-browser", action="store_true",    help="Open browser niet automatisch")
+    parser.add_argument("--vault",      default=str(DEFAULT_VAULT), help="Pad naar vault map")
+    parser.add_argument("--port",       type=int, default=7842,     help="Poort (standaard: 7842)")
+    parser.add_argument("--no-browser", action="store_true",        help="Open browser niet automatisch")
+    parser.add_argument("--verbose",    action="store_true",        help="Toon HTTP requests in terminal")
+    parser.add_argument("--host",       default="0.0.0.0",          help="Bind adres (standaard: 0.0.0.0)")
     args = parser.parse_args()
 
     vault_path = Path(args.vault).expanduser().resolve()
-    ZKHandler.vault = VaultManager(vault_path)
+    ZKHandler.vault   = VaultManager(vault_path)
+    ZKHandler.verbose = args.verbose
 
-    server = HTTPServer(("127.0.0.1", args.port), ZKHandler)
-    url = f"http://localhost:{args.port}"
+    server  = HTTPServer((args.host, args.port), ZKHandler)
+    local_ip = get_local_ip()
+    url_local = f"http://localhost:{args.port}"
+    url_net   = f"http://{local_ip}:{args.port}"
 
     print(f"""
 ╔══════════════════════════════════════════════════════╗
 ║          ZETTELKASTEN VIM  —  Python Server          ║
 ╚══════════════════════════════════════════════════════╝
-  Vault  : {vault_path}
-  Server : {url}
-  Stop   : Ctrl+C
+  Vault   : {vault_path}
+  Lokaal  : {url_local}
+  Netwerk : {url_net}
+  Logging : {"aan (--verbose)" if args.verbose else "uit  (gebruik --verbose om aan te zetten)"}
+  Stop    : Ctrl+C
 """)
 
     if not args.no_browser:
-        threading.Timer(0.8, lambda: webbrowser.open(url)).start()
+        threading.Timer(0.8, lambda: webbrowser.open(url_local)).start()
 
     try:
         server.serve_forever()
