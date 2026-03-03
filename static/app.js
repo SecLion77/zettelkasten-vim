@@ -1161,12 +1161,12 @@ const Graph = ({notes, pdfNotes, onSelect, selectedId, localMode=false}) => {
         ctx.strokeStyle=sel?W.cursorBg:hov?"rgba(255,255,255,0.4)":"rgba(140,198,242,0.15)";
         ctx.lineWidth=sel?2:hov?1.5:0.8; ctx.stroke();
 
-        // Label
-        const label=n.title?.length>22?n.title.substring(0,20)+"…":n.title||"";
-        ctx.fillStyle=sel?W.statusFg:hov?W.fg:W.fgDim;
-        ctx.font=`${sel||hov?"bold ":""}10px 'Courier New'`;
+        // Label — 2px groter dan voorheen
+        const label=n.title?.length>24?n.title.substring(0,22)+"…":n.title||"";
+        ctx.fillStyle=sel?W.statusFg:hov?W.fg:isTag?"#a8d8f0":W.fgDim;
+        ctx.font=`${sel||hov?"bold ":""}${isTag?11:12}px 'Courier New'`;
         ctx.textAlign="center";
-        ctx.fillText(label,n.x,n.y+r+13);
+        ctx.fillText(label,n.x,n.y+r+15);
 
         // Hover tooltip
         if(hov){
@@ -1196,30 +1196,71 @@ const Graph = ({notes, pdfNotes, onSelect, selectedId, localMode=false}) => {
   const allGraphTags=[...new Set(notes.flatMap(n=>n.tags||[]))];
 
   return React.createElement("div",{style:{position:"relative",width:"100%",height:"100%"}},
-    // Controls
+    // Controls panel — linksbovenin
     React.createElement("div",{style:{
       position:"absolute",top:"10px",left:"10px",zIndex:10,
-      display:"flex",flexDirection:"column",gap:"5px",
+      display:"flex",flexDirection:"column",gap:"6px",
+      background:"rgba(28,28,28,0.82)",borderRadius:"8px",
+      border:"1px solid rgba(255,255,255,0.07)",
+      padding:"10px 12px",backdropFilter:"blur(6px)",
+      maxWidth:"260px",
     }},
-      // Filter tag
-      React.createElement("div",{style:{display:"flex",flexWrap:"wrap",gap:"3px",maxWidth:"200px"}},
-        allGraphTags.slice(0,12).map(t=>React.createElement("span",{
-          key:t,
-          onClick:()=>setFilterTag(filterTag===t?null:t),
-          style:{
-            fontSize:"9px",padding:"1px 5px",borderRadius:"3px",cursor:"pointer",
-            background:filterTag===t?(tagColors[t]||W.comment)+"40":"rgba(0,0,0,0.5)",
-            color:filterTag===t?(tagColors[t]||W.comment):W.fgMuted,
-            border:`1px solid ${filterTag===t?(tagColors[t]||W.comment)+"60":"rgba(255,255,255,0.08)"}`,
-          }
-        },"#"+t))
-      ),
-      React.createElement("div",{style:{display:"flex",gap:"4px",flexWrap:"wrap"}},
-        [{label:"lokaal",val:showLocal,set:setShowLocal},{label:"orphans",val:orphansOnly,set:setOrphansOnly}]
+      // Label
+      React.createElement("div",{style:{fontSize:"9px",color:"rgba(138,198,242,0.5)",
+        letterSpacing:"2px",marginBottom:"2px"}},"FILTER OP TAG"),
+      // Tag pills
+      allGraphTags.length===0
+        ? React.createElement("span",{style:{fontSize:"11px",color:W.fgMuted}},"geen tags")
+        : React.createElement("div",{style:{display:"flex",flexWrap:"wrap",gap:"5px"}},
+            allGraphTags.map(t=>React.createElement("span",{
+              key:t,
+              onClick:()=>setFilterTag(filterTag===t?null:t),
+              style:{
+                fontSize:"11px",padding:"3px 8px",borderRadius:"5px",
+                cursor:"pointer",userSelect:"none",fontWeight:"500",
+                background:filterTag===t
+                  ? (tagColors[t]||W.blue)+"35"
+                  : "rgba(138,198,242,0.08)",
+                color:filterTag===t
+                  ? (tagColors[t]||W.blue)
+                  : "#a8d8f0",
+                border:`1px solid ${filterTag===t
+                  ? (tagColors[t]||W.blue)+"70"
+                  : "rgba(138,198,242,0.22)"}`,
+                boxShadow:filterTag===t?`0 0 8px ${(tagColors[t]||W.blue)}40`:"none",
+              }
+            },"#"+t))
+          ),
+      // Divider
+      React.createElement("div",{style:{height:"1px",background:"rgba(255,255,255,0.06)",margin:"2px 0"}}),
+      // Weergave-opties
+      React.createElement("div",{style:{fontSize:"9px",color:"rgba(138,198,242,0.5)",
+        letterSpacing:"2px",marginBottom:"2px"}},"WEERGAVE"),
+      React.createElement("div",{style:{display:"flex",gap:"5px",flexWrap:"wrap"}},
+        [{label:"lokaal",val:showLocal,set:setShowLocal},
+         {label:"orphans",val:orphansOnly,set:setOrphansOnly}]
         .map(({label,val,set})=>React.createElement("button",{
           key:label,onClick:()=>set(!val),
-          style:{background:val?"rgba(138,198,242,0.2)":"rgba(0,0,0,0.5)",border:`1px solid ${val?W.blue:"rgba(255,255,255,0.1)"}`,color:val?W.blue:W.fgMuted,borderRadius:"3px",padding:"2px 7px",fontSize:"9px",cursor:"pointer"}
+          style:{
+            background:val?"rgba(138,198,242,0.18)":"rgba(0,0,0,0.4)",
+            border:`1px solid ${val?"rgba(138,198,242,0.5)":"rgba(255,255,255,0.1)"}`,
+            color:val?"#a8d8f0":W.fgMuted,
+            borderRadius:"4px",padding:"3px 10px",
+            fontSize:"11px",cursor:"pointer",fontWeight:val?"600":"400",
+          }
         },label))
+      ),
+      // Actief filter tonen + wis knop
+      filterTag && React.createElement("div",{style:{
+        display:"flex",alignItems:"center",gap:"6px",
+        marginTop:"2px",paddingTop:"6px",
+        borderTop:"1px solid rgba(255,255,255,0.06)"
+      }},
+        React.createElement("span",{style:{fontSize:"11px",color:"#a8d8f0"}},"filter: #"+filterTag),
+        React.createElement("button",{onClick:()=>setFilterTag(null),style:{
+          background:"none",border:"none",color:W.fgMuted,
+          fontSize:"13px",cursor:"pointer",padding:"0 2px",lineHeight:1
+        }},"×")
       )
     ),
     React.createElement("canvas",{
@@ -1364,6 +1405,9 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs}) 
     setIsLoading(false);
   };
 
+  // Bewaar selectie-rects voor visuele highlight overlay
+  const pendingRectsRef = useRef([]);
+
   const showSelectionPopup = useCallback(() => {
     const sel = window.getSelection();
     const txt = sel?.toString().trim();
@@ -1372,13 +1416,24 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs}) 
     try {
       const range = sel.getRangeAt(0);
       if (!tl.contains(range.commonAncestorContainer)) return;
+
+      // Verzamel alle client-rects (meerdere regels mogelijk)
+      const tlRect = tl.getBoundingClientRect();
+      const rects = Array.from(range.getClientRects()).map(r => ({
+        x: r.left - tlRect.left,
+        y: r.top  - tlRect.top,
+        w: r.width,
+        h: r.height,
+      })).filter(r => r.w > 1 && r.h > 1);
+      pendingRectsRef.current = rects;
+
       const scrollEl = scrollRef.current;
       const sRect = range.getBoundingClientRect();
       const cRect = scrollEl.getBoundingClientRect();
-      // Op mobile popup boven de selectie tonen (anders valt het onder het toetsenbord)
       const isMobileView = window.innerWidth < 768;
       const popupW = isMobileView ? Math.min(window.innerWidth - 24, 340) : 360;
-      const yOffset = isMobileView ? -280 : 10;  // boven vs onder selectie
+      // Op iPad: popup boven selectie, anders valt hij achter het toetsenbord
+      const yOffset = isMobileView ? -(popupW * 0.85) : 12;
       setPendingSel(txt);
       setSelPos({
         x: Math.max(8, Math.min(sRect.left - cRect.left + scrollEl.scrollLeft, cRect.width - popupW - 8)),
@@ -1393,40 +1448,63 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs}) 
     setTimeout(showSelectionPopup, 30);
   }, [showSelectionPopup]);
 
-  // iOS Safari: selectie via touch gebruikt selectionchange event
+  // iOS Safari: toon "Annoteren"-knop zodra er tekst geselecteerd is.
+  // We gebruiken een zwevende knop ipv automatische popup omdat iOS
+  // de selectionchange event ook vuurt tijdens het slepen van de handvaatjes.
+  const [iosAnnotBtn, setIosAnnotBtn] = useState(null); // {x,y} of null
   useEffect(() => {
-    const tl = textLayerRef.current; if (!tl) return;
+    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+                  (navigator.platform==="MacIntel" && navigator.maxTouchPoints>1);
+    if (!isIOS) return; // alleen op iOS/iPadOS
 
-    // touchend op iOS geeft selectie pas door na kort uitstel
-    const onTouchEnd = () => setTimeout(showSelectionPopup, 150);
-
-    // selectionchange vuurt ook op iOS als de gebruiker tekst markeert
     const onSelChange = () => {
       const sel = window.getSelection();
       const txt = sel?.toString().trim();
-      // Alleen als er daadwerkelijk iets geselecteerd is én selectie klaar is
-      if (txt && txt.length >= 2) {
-        clearTimeout(onSelChange._t);
-        onSelChange._t = setTimeout(showSelectionPopup, 200);
-      }
+      if (!txt || txt.length < 2) { setIosAnnotBtn(null); return; }
+      const tl = textLayerRef.current; if (!tl) return;
+      try {
+        const range = sel.getRangeAt(0);
+        if (!tl.contains(range.commonAncestorContainer)) { setIosAnnotBtn(null); return; }
+        // Positie van de knop: boven het midden van de selectie
+        const sRect = range.getBoundingClientRect();
+        const scrollEl = scrollRef.current;
+        const cRect = scrollEl.getBoundingClientRect();
+        setIosAnnotBtn({
+          x: (sRect.left + sRect.right) / 2 - cRect.left + scrollEl.scrollLeft,
+          y: sRect.top - cRect.top + scrollEl.scrollTop - 44,
+        });
+      } catch(e) { setIosAnnotBtn(null); }
     };
 
-    tl.addEventListener("touchend", onTouchEnd);
-    document.addEventListener("selectionchange", onSelChange);
+    // kleine vertraging: laat iOS de handvaatjes stabiliseren
+    let timer;
+    const debounced = () => { clearTimeout(timer); timer = setTimeout(onSelChange, 400); };
+    document.addEventListener("selectionchange", debounced);
     return () => {
-      tl.removeEventListener("touchend", onTouchEnd);
-      document.removeEventListener("selectionchange", onSelChange);
+      document.removeEventListener("selectionchange", debounced);
+      clearTimeout(timer);
     };
   }, [showSelectionPopup]);
 
   const saveHighlight=async()=>{
     if(!pendingSel)return;
-    const h={id:genId(),text:pendingSel,note:quickNote,tags:quickTags,page:pageNum,file:pdfFile?.name||"PDF",colorId:activeColor.id,created:new Date().toISOString()};
+    // Bewaar rects als fractie van de canvas-afmeting zodat ze schaalbaar zijn
+    const cv = canvasRef.current;
+    const cw = cv ? cv.offsetWidth  : 1;
+    const ch = cv ? cv.offsetHeight : 1;
+    const rects = pendingRectsRef.current.map(r=>({
+      x: r.x/cw, y: r.y/ch, w: r.w/cw, h: r.h/ch,
+    }));
+    const h={id:genId(),text:pendingSel,note:quickNote,tags:quickTags,
+             page:pageNum,file:pdfFile?.name||"PDF",
+             colorId:activeColor.id,rects,
+             created:new Date().toISOString()};
     const updated=[...highlights,h];
     setHighlights(updated);
     setPdfNotes(updated);
     await api.post("/annotations",updated);
     setPendingSel(null); setQuickNote(""); setQuickTags([]);
+    pendingRectsRef.current=[];
     window.getSelection()?.removeAllRanges();
   };
 
@@ -1523,12 +1601,49 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs}) 
         ),
         pdfDoc&&React.createElement("div",{ref:wrapRef,style:{position:"relative",margin:"24px auto",width:"fit-content"}},
           React.createElement("canvas",{ref:canvasRef,style:{display:"block",boxShadow:"0 4px 32px rgba(0,0,0,0.7)"}}),
+          // Highlight overlay — getekend als gekleurde rechthoeken ONDER de textLayer
+          React.createElement("svg",{
+            style:{position:"absolute",top:0,left:0,pointerEvents:"none",overflow:"visible"},
+            width:canvasRef.current?.offsetWidth||0,
+            height:canvasRef.current?.offsetHeight||0,
+          },
+            highlights.filter(h=>h.page===pageNum&&h.file===pdfFile?.name&&h.rects?.length).flatMap((h,hi)=>{
+              const col=HCOLORS.find(c=>c.id===h.colorId)||HCOLORS[0];
+              const cw=canvasRef.current?.offsetWidth||1;
+              const ch=canvasRef.current?.offsetHeight||1;
+              const isActive=editingId===h.id;
+              return h.rects.map((r,ri)=>React.createElement("rect",{
+                key:`${hi}-${ri}`,
+                x:r.x*cw, y:r.y*ch,
+                width:r.w*cw, height:r.h*ch,
+                fill:col.bg,
+                stroke:isActive?col.border:"none",
+                strokeWidth:isActive?1.5:0,
+                rx:2,
+                style:{cursor:"pointer",pointerEvents:"all"},
+                onClick:()=>setEditingId(h.id===editingId?null:h.id),
+                title:h.text.substring(0,60),
+              }));
+            })
+          ),
           React.createElement("div",{ref:textLayerRef,className:"textLayer",style:{position:"absolute",top:0,left:0,overflow:"hidden",lineHeight:1,userSelect:"text",WebkitUserSelect:"text",MozUserSelect:"text",cursor:"text",touchAction:"auto",WebkitTouchCallout:"default"}}),
-          // Highlight dots
-          highlights.filter(h=>h.page===pageNum&&h.file===pdfFile?.name).map((h,i)=>{
-            const col=HCOLORS.find(c=>c.id===h.colorId)||HCOLORS[0];
-            return React.createElement("div",{key:h.id,onClick:()=>setEditingId(h.id===editingId?null:h.id),title:h.text.substring(0,80),style:{position:"absolute",top:`${12+i*28}px`,right:"-22px",width:"14px",height:"14px",borderRadius:"50%",background:col.border,cursor:"pointer",border:"2px solid rgba(0,0,0,0.4)",boxShadow:`0 0 6px ${col.border}`,zIndex:30}});
-          }),
+          // iOS Annoteren-knop: zweeft boven de selectie
+          iosAnnotBtn&&!pendingSel&&React.createElement("button",{
+            onTouchStart:e=>{ e.preventDefault(); showSelectionPopup(); setIosAnnotBtn(null); },
+            onClick:()=>{ showSelectionPopup(); setIosAnnotBtn(null); },
+            style:{
+              position:"absolute",
+              left: Math.max(4, iosAnnotBtn.x - 60),
+              top:  Math.max(4, iosAnnotBtn.y),
+              zIndex:600,
+              background:W.blue,color:W.bg,
+              border:"none",borderRadius:"20px",
+              padding:"8px 18px",fontSize:"14px",
+              fontWeight:"bold",cursor:"pointer",
+              boxShadow:"0 3px 16px rgba(0,0,0,0.6)",
+              WebkitTapHighlightColor:"transparent",
+            }
+          },"✏ Annoteren"),
           // Selection popup
           pendingSel&&React.createElement("div",{style:{position:"absolute",left:selPos.x,top:selPos.y,background:W.bg3,border:`2px solid ${activeColor.border}`,borderRadius:"8px",padding:"14px 16px",zIndex:500,width:"350px",boxShadow:`0 8px 32px rgba(0,0,0,0.8)`},onMouseUp:e=>e.stopPropagation()},
             React.createElement("div",{style:{fontSize:"11px",color:W.fgDim,marginBottom:"10px",padding:"7px 10px",background:activeColor.bg,borderRadius:"4px",fontStyle:"italic",lineHeight:"1.6",borderLeft:`4px solid ${activeColor.border}`}},'"',pendingSel.substring(0,100),pendingSel.length>100?"…":"",'"'),
