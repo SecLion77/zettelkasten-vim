@@ -5,6 +5,7 @@ Bestandsgebaseerde opslag: notities als .md, PDF annotaties als .json
 """
 
 import os, sys, json, shutil, glob, hashlib, mimetypes, threading, webbrowser
+import urllib.request, urllib.error
 from pathlib import Path
 from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -273,7 +274,23 @@ class ZKHandler(BaseHTTPRequestHandler):
             mime = "text/html" if str(file_path).endswith(".html") else "application/javascript"
             return self._send(200, file_path.read_bytes(), mime)
 
+        # LLM model list
+        if path == "/api/llm/models":
+            return self._llm_models()
+
         return self._send(404, {"error": "Niet gevonden"})
+
+    def _llm_models(self):
+        """Haal beschikbare Ollama modellen op."""
+        ollama = os.environ.get("OLLAMA_URL", "http://localhost:11434")
+        try:
+            req = urllib.request.urlopen(f"{ollama}/api/tags", timeout=3)
+            data = json.loads(req.read())
+            models = [m["name"] for m in data.get("models", [])]
+            return self._send(200, {"models": models, "ollama_url": ollama, "ok": True})
+        except Exception as e:
+            return self._send(200, {"models": [], "ok": False, "error": str(e),
+                                    "ollama_url": ollama})
 
     def do_POST(self):
         parsed = urlparse(self.path)
@@ -306,6 +323,9 @@ class ZKHandler(BaseHTTPRequestHandler):
                         return self._send(200, {"name": saved_name})
             return self._send(400, {"error": "Multipart vereist"})
 
+        if path == "/api/llm/chat":
+            return self._llm_chat()
+
         if path == "/api/vault":
             body = self._body()
             new_path = body.get("path", "").strip()
@@ -315,6 +335,95 @@ class ZKHandler(BaseHTTPRequestHandler):
             return self._send(200, {"vault_path": ZKHandler.vault.path_str})
 
         return self._send(404, {"error": "Niet gevonden"})
+
+    def _llm_chat(self):
+        """Proxy naar Ollama /api/chat met streaming via Server-Sent Events."""
+        body = self._body()
+        ollama = os.environ.get("OLLAMA_URL", "http://localhost:11434")
+        model  = body.get("model", "llama3")
+        messages = body.get("messages", [])
+
+        # Bouw system prompt op met vault context
+        context_ids  = body.get("context_notes", [])   # lijst note IDs
+        context_pdfs = body.get("context_pdfs",  [])   # lijst PDF namen
+
+        context_parts = []
+        if context_ids:
+            notes = self.vault.load_notes()
+            selected = [n for n in notes if n["id"] in context_ids]
+            for n in selected[:8]:  # max 8 notities
+                context_parts.append("## Notitie: " + n["title"] + "\n" + n["content"][:3000])
+
+        if context_pdfs:
+            annots = self.vault.load_annotations()
+            for pdf_name in context_pdfs[:4]:
+                pdf_annots = [a for a in annots if a.get("file") == pdf_name]
+                if pdf_annots:
+                    lines = []
+                    for a in pdf_annots[:30]:
+                        line = '- "' + a["text"] + '"'
+                        if a.get("note"):
+                            line += "\n  Noot: " + a["note"]
+                        lines.append(line)
+                    context_parts.append("## PDF annotaties: " + pdf_name + "\n" + "\n".join(lines))
+
+        system = (
+            "Je bent een behulpzame kennisassistent die helpt met het analyseren van "
+            "notities en PDF-annotaties uit een Zettelkasten kennisbank. "
+            "Antwoord in de taal van de gebruiker (Nederlands of Engels). "
+            "Wees precies, analytisch en verwijs naar specifieke notities als dat relevant is."
+        )
+        if context_parts:
+            system += "\n\n# Beschikbare kenniscontext:\n\n" + "\n\n---\n\n".join(context_parts)
+
+        ollama_body = json.dumps({
+            "model": model,
+            "messages": [{"role": "system", "content": system}] + messages,
+            "stream": True,
+        }).encode("utf-8")
+
+        try:
+            req = urllib.request.Request(
+                f"{ollama}/api/chat",
+                data=ollama_body,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            # SSE streaming response
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                for line in resp:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        chunk = json.loads(line)
+                        delta = chunk.get("message", {}).get("content", "")
+                        done  = chunk.get("done", False)
+                        evt   = json.dumps({"delta": delta, "done": done})
+                        self.wfile.write(("data: " + evt + "\n\n").encode("utf-8"))
+                        self.wfile.flush()
+                        if done:
+                            break
+                    except Exception:
+                        pass
+
+        except urllib.error.URLError as e:
+            err = json.dumps({"error": "Ollama niet bereikbaar: " + str(e) + ". Start Ollama met: ollama serve"})
+            self.wfile.write(("data: " + err + "\n\n").encode("utf-8"))
+            self.wfile.flush()
+        except Exception as e:
+            err = json.dumps({"error": str(e)})
+            try:
+                self.wfile.write(("data: " + err + "\n\n").encode("utf-8"))
+                self.wfile.flush()
+            except Exception:
+                pass
 
     def do_PUT(self):
         parsed = urlparse(self.path)
