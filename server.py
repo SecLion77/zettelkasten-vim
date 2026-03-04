@@ -109,6 +109,22 @@ class VaultManager:
     def save_pdf(self, filename, data):
         safe="".join(c if c.isalnum() or c in "-_." else "_" for c in filename)
         (self.pdf_dir/safe).write_bytes(data); return safe
+    def delete_pdf(self, filename):
+        """Verwijder PDF-bestand + annotatie-bestand voor deze PDF."""
+        deleted = {"pdf": False, "annotations": False}
+        p = self.get_pdf_path(filename)
+        if p and p.exists():
+            p.unlink(); deleted["pdf"] = True
+        annot_file = self._annot_path(filename)
+        if annot_file.exists():
+            annot_file.unlink(); deleted["annotations"] = True
+        # Verwijder ook uit gecombineerde annotaties (andere PDF-bestanden)
+        all_annots = self.load_annotations()
+        filtered   = [a for a in all_annots if a.get("file") != filename]
+        if len(filtered) != len(all_annots):
+            self.save_annotations(filtered)
+            deleted["annotations"] = True
+        return deleted
     def get_pdf_path(self, filename):
         p=self.pdf_dir/filename; return p if p.exists() else None
     def extract_pdf_text(self, filename, max_chars=12000):
@@ -277,6 +293,10 @@ class ZKHandler(BaseHTTPRequestHandler):
             return self._send(200,{"deleted":self.vault.delete_note(unquote(p[11:]))})
         if p.startswith("/api/images/"):
             return self._send(200,{"deleted":self.vault.delete_image(unquote(p[12:]))})
+        if p.startswith("/api/pdfs/"):
+            fname=unquote(p[10:])
+            result=self.vault.delete_pdf(fname)
+            return self._send(200,{"ok":True,"filename":fname,**result})
         return self._send(404,{"error":"Niet gevonden"})
 
     # ── LLM ────────────────────────────────────────────────────────────────────

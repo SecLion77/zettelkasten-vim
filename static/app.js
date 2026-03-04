@@ -67,6 +67,10 @@ const api = {
     const r=await fetch(API+"/images/"+encodeURIComponent(name),{method:"DELETE"});
     return r.json();
   },
+  async deletePdf(name) {
+    const r=await fetch(API+"/pdfs/"+encodeURIComponent(name),{method:"DELETE"});
+    return r.json();
+  },
   async llmSummarizePdf(filename,model) {
     const r=await fetch(API+"/llm/summarize-pdf",{method:"POST",
       headers:{"Content-Type":"application/json"},
@@ -1369,7 +1373,7 @@ const Graph = ({notes, pdfNotes, onSelect, selectedId, localMode=false}) => {
 
 
 // ── PDF Viewer ─────────────────────────────────────────────────────────────────
-const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, onAutoSummarize}) => {
+const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, onAutoSummarize, onDeletePdf}) => {
   const [pdfDoc,     setPdfDoc]     = useState(null);
   const [pdfFile,    setPdfFile]    = useState(null);
   const [pageNum,    setPageNum]    = useState(1);
@@ -1615,23 +1619,61 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
           React.createElement("button",{onClick:()=>setScale(s=>Math.min(3,+(s+0.2).toFixed(1))),style:{background:"none",border:"none",color:W.fg,cursor:"pointer",padding:"0 4px",fontSize:"16px"}},"+"),
           React.createElement("span",{style:{color:W.fgMuted}},"│"),
           ...HCOLORS.map(c=>React.createElement("button",{key:c.id,onClick:()=>setActiveColor(c),title:c.label,style:{width:"18px",height:"18px",borderRadius:"4px",background:c.bg,border:`2px solid ${activeColor.id===c.id?c.border:"transparent"}`,cursor:"pointer",padding:0,boxShadow:activeColor.id===c.id?`0 0 6px ${c.border}`:"none"}})),
-          React.createElement("span",{style:{color:W.fgMuted,fontSize:"10px",marginLeft:"4px",maxWidth:"160px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},pdfFile?.name)
+          React.createElement("span",{style:{color:W.fgMuted,fontSize:"10px",marginLeft:"4px",maxWidth:"160px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},pdfFile?.name),
+          pdfFile&&React.createElement("button",{
+            title:"Verwijder deze PDF + annotaties",
+            onClick:async()=>{
+              if(!confirm(`Verwijder "${pdfFile.name}" en alle annotaties?`)) return;
+              const name=pdfFile.name;
+              await api.deletePdf(name);
+              setPdfDoc(null); setPdfFile(null);
+              onRefreshPdfs?.();
+              onDeletePdf?.(name);
+            },
+            style:{background:"rgba(229,120,109,0.1)",border:"1px solid rgba(229,120,109,0.25)",
+                   color:W.orange,borderRadius:"4px",padding:"3px 9px",
+                   fontSize:"10px",cursor:"pointer",marginLeft:"6px",flexShrink:0}
+          },"🗑 verwijder")
         ),
         React.createElement("div",{style:{flex:1}}),
         pdfDoc&&React.createElement("span",{style:{color:W.comment,fontSize:"10px"}},"① selecteer tekst  ② popup  ③ opslaan")
       ),
 
       // PDF library dropdown
-      showLibrary&&React.createElement("div",{style:{background:W.bg2,borderBottom:`1px solid ${W.splitBg}`,padding:"8px 12px",maxHeight:"160px",overflowY:"auto",flexShrink:0}},
+      showLibrary&&React.createElement("div",{style:{background:W.bg2,borderBottom:`1px solid ${W.splitBg}`,padding:"8px 12px",maxHeight:"200px",overflowY:"auto",flexShrink:0}},
         serverPdfs?.length===0
           ? React.createElement("div",{style:{color:W.fgMuted,fontSize:"11px",padding:"8px"}},"Nog geen PDF's opgeslagen. Open een PDF om te beginnen.")
           : (serverPdfs||[]).map(p=>React.createElement("div",{
               key:p.name,
-              onClick:()=>openFromServer(p.name),
-              style:{padding:"5px 8px",cursor:"pointer",borderRadius:"3px",fontSize:"11px",color:W.fg,display:"flex",justifyContent:"space-between",alignItems:"center"}
+              style:{padding:"5px 8px",borderRadius:"3px",fontSize:"11px",color:W.fg,
+                     display:"flex",alignItems:"center",gap:"6px",
+                     borderBottom:`1px solid rgba(255,255,255,0.03)`}
             },
-              React.createElement("span",null,"📄 ",p.name),
-              React.createElement("span",{style:{color:W.fgMuted,fontSize:"9px"}},Math.round(p.size/1024),"KB")
+              React.createElement("span",{
+                onClick:()=>openFromServer(p.name),
+                style:{flex:1,cursor:"pointer",overflow:"hidden",textOverflow:"ellipsis",
+                       whiteSpace:"nowrap",display:"flex",alignItems:"center",gap:"5px"}
+              },
+                React.createElement("span",null,"📄"),
+                React.createElement("span",null,p.name)
+              ),
+              React.createElement("span",{style:{color:W.fgMuted,fontSize:"9px",flexShrink:0}},
+                Math.round(p.size/1024),"KB"),
+              React.createElement("button",{
+                title:"Verwijder PDF + annotaties",
+                onClick:async(e)=>{
+                  e.stopPropagation();
+                  if(!confirm(`Verwijder "${p.name}" en alle annotaties?`)) return;
+                  await api.deletePdf(p.name);
+                  onRefreshPdfs?.();
+                  onDeletePdf?.(p.name);
+                  // Als deze PDF open is, sluit dan de viewer
+                  if(pdfFile?.name===p.name){ setPdfDoc(null); setPdfFile(null); }
+                },
+                style:{background:"rgba(229,120,109,0.1)",border:"1px solid rgba(229,120,109,0.25)",
+                       color:W.orange,borderRadius:"3px",padding:"2px 7px",
+                       fontSize:"10px",cursor:"pointer",flexShrink:0}
+              },"🗑")
             ))
       ),
 
@@ -1907,7 +1949,7 @@ const useWindowSize = () => {
 // Tab voor afbeeldingen: upload, AI-beschrijving, notitie aanmaken.
 // Gebruikt llava (multimodaal) voor beschrijvingen — ollama pull llava
 
-const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote, setAiStatus}) => {
+const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote, setAiStatus, notes, onDeleteNote}) => {
   const { useState, useRef, useCallback } = React;
 
   const [busy,        setBusy]       = useState(null);  // filename die bezig is
@@ -1964,10 +2006,24 @@ const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote, setAiStatu
   }, [llmModel, onAddNote]);
 
   const deleteImg = useCallback(async (fname) => {
-    if (!confirm("Verwijder "+fname+"?")) return;
+    // Tel gekoppelde notities
+    const linked = (notes||[]).filter(n=>
+      n.content?.includes(`![[img:${fname}]]`) ||
+      n.title?.includes(fname.replace(/\.[^.]+$/,""))
+    );
+    const msg = linked.length
+      ? `Verwijder "${fname}" én ${linked.length} gekoppelde notitie(s)?\n\n${linked.map(n=>"• "+n.title).join("\n")}`
+      : `Verwijder "${fname}"?`;
+    if (!confirm(msg)) return;
     await api.deleteImage(fname);
+    // Verwijder gekoppelde notities
+    for (const n of linked) {
+      await api.del("/notes/"+n.id);
+      onDeleteNote?.(n.id);
+    }
+    setDescs(p=>{ const q={...p}; delete q[fname]; return q; });
     await onRefresh();
-  }, [onRefresh]);
+  }, [onRefresh, notes, onDeleteNote]);
 
   const onDrop = (e) => {
     e.preventDefault(); setDragOver(false);
@@ -4299,6 +4355,20 @@ const App = () => {
       : tab==="pdf" ? React.createElement("div",{style:{flex:1,overflow:"hidden"}},
         React.createElement(PDFViewer,{pdfNotes,setPdfNotes,allTags,serverPdfs,
           onRefreshPdfs:refreshPdfs,
+          onDeletePdf:async(fname)=>{
+            // Verwijder ook gekoppelde samenvatting-notities
+            const stem = fname.replace(/\.pdf$/i,"");
+            const linked = notes.filter(n=>
+              n.tags?.includes("samenvatting") &&
+              (n.title?.includes(stem) || n.content?.includes(fname))
+            );
+            for(const n of linked){
+              await api.del("/notes/"+n.id);
+            }
+            if(linked.length) setNotes(p=>p.filter(n=>!linked.find(l=>l.id===n.id)));
+            // Annotaties lokaal bijwerken
+            setPdfNotes(p=>p.filter(a=>a.file!==fname));
+          },
           onAutoSummarize:async(fname)=>{
             const stem=fname.replace(/\.pdf$/i,"");
             setAiStatus("PDF samenvatten: "+stem.slice(0,22)+"…");
@@ -4323,6 +4393,8 @@ const App = () => {
         React.createElement(ImagesGallery,{
           serverImages, onRefresh:refreshImages, llmModel,
           setAiStatus,
+          notes,
+          onDeleteNote: id => setNotes(p=>p.filter(n=>n.id!==id)),
           onAddNote:async(note)=>{
             const saved=await api.post("/notes",note);
             setNotes(p=>[saved,...p]);
