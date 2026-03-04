@@ -586,25 +586,86 @@ class ZKHandler(BaseHTTPRequestHandler):
         ctx_notes=body.get("context_notes",[])
         ctx_pdfs=body.get("context_pdfs",[])
         parts=[]
+        source_type="notes"  # "notes" | "pdf" | "mixed"
+
         if ctx_notes:
             for n in [x for x in self.vault.load_notes() if x["id"] in ctx_notes][:5]:
                 parts.append("## "+n["title"]+"\n"+n["content"][:2000])
         if ctx_pdfs:
-            for pn in ctx_pdfs[:2]:
-                txt=self.vault.extract_pdf_text(pn,4000)
-                if txt.strip(): parts.append("## "+pn+"\n"+txt)
+            source_type = "pdf" if not ctx_notes else "mixed"
+            for pn in ctx_pdfs[:3]:
+                txt=self.vault.extract_pdf_text(pn, 8000)
+                if txt.strip():
+                    parts.append("=== DOCUMENT: "+pn+" ===\n"+txt)
+
         if not parts: return self._send(400,{"error":"Geen context"})
-        prompt=('Analyseer de tekst en geef ALLEEN geldige JSON terug (geen uitleg, geen backticks).\n'
-                'Formaat: {"root":"Titel","branches":[{"label":"Tak","children":["Blad1","Blad2"]}]}\n'
-                'Gebruik 3-6 takken, elk 2-5 bladeren.\n\n'+"\n\n".join(parts))
+
+        if source_type in ("pdf","mixed"):
+            prompt = (
+                'Analyseer dit document grondig en maak een gedetailleerde mindmap die laat zien:\n'
+                '1. Hoe het document is opgebouwd (structuur, hoofdstukken, secties)\n'
+                '2. Wat de kernthema\'s en belangrijkste concepten zijn\n'
+                '3. Hoe details, voorbeelden en argumenten zich vertalen in de boom\n'
+                '4. Verbanden tussen onderdelen\n\n'
+                'Geef ALLEEN geldige JSON terug (geen uitleg, geen backticks, geen markdown).\n'
+                'Verplicht formaat met 3 niveaus:\n'
+                '{\n'
+                '  "root": "Documenttitel of kernthema",\n'
+                '  "branches": [\n'
+                '    {\n'
+                '      "label": "Hoofdtak (sectie of thema)",\n'
+                '      "color": "#hex",\n'
+                '      "importance": "high|medium|low",\n'
+                '      "children": [\n'
+                '        {\n'
+                '          "label": "Subtopic",\n'
+                '          "details": ["detail1", "detail2"]\n'
+                '        }\n'
+                '      ]\n'
+                '    }\n'
+                '  ]\n'
+                '}\n\n'
+                'Gebruik 4-7 hoofdtakken. Elke tak heeft 2-5 subtopics. '
+                'Elk subtopic heeft 1-3 details. '
+                'Kies kleuren die de categorie weergeven: '
+                '#8ac6f2 voor structuur/opbouw, #9fcf56 voor kernconcepten, '
+                '#e5786d voor conclusies/bevindingen, #d4a4f7 voor methodes, '
+                '#e8d44d voor voorbeelden, #f4bf75 voor aanbevelingen.\n\n'
+                + "\n\n".join(parts)
+            )
+        else:
+            prompt = (
+                'Analyseer de notities en maak een mindmap van de kennisstructuur.\n'
+                'Geef ALLEEN geldige JSON terug (geen uitleg, geen backticks).\n'
+                'Formaat:\n'
+                '{"root":"Overzicht","branches":[{"label":"Tak","color":"#hex",'
+                '"importance":"high","children":[{"label":"Sub","details":["detail"]}]}]}\n'
+                'Gebruik 3-6 takken met elk 2-4 subtopics.\n\n'
+                + "\n\n".join(parts)
+            )
+
         try:
-            r=self._ollama_post("/api/generate",{"model":model,"prompt":prompt,"stream":False},120)
+            r=self._ollama_post("/api/generate",{"model":model,"prompt":prompt,"stream":False},180)
             raw=r.get("response","").strip()
+            # Extracteer JSON — ook als model er tekst omheen zet
             m=re.search(r'\{[\s\S]*\}',raw)
             if m:
                 mm=json.loads(m.group(0))
-                return self._send(200,{"ok":True,"mindmap":mm})
-            return self._send(200,{"ok":False,"error":"Geen JSON in response","raw":raw[:500]})
+                # Normaliseer naar consistent formaat
+                if "branches" not in mm: mm["branches"]=[]
+                for b in mm["branches"]:
+                    if "children" not in b: b["children"]=[]
+                    for c in b["children"]:
+                        if isinstance(c,str):
+                            # Oud formaat: string kinderen
+                            b["children"]=[{"label":ch,"details":[]} if isinstance(ch,str) else ch
+                                           for ch in b["children"]]
+                            break
+                        if "details" not in c: c["details"]=[]
+                return self._send(200,{"ok":True,"mindmap":mm,"source_type":source_type})
+            return self._send(200,{"ok":False,"error":"Model gaf geen geldige JSON terug","raw":raw[:800]})
+        except json.JSONDecodeError as e:
+            return self._send(200,{"ok":False,"error":"JSON parse fout: "+str(e),"raw":raw[:400] if 'raw' in dir() else ""})
         except Exception as e:
             return self._send(200,{"ok":False,"error":str(e)})
 

@@ -2326,11 +2326,11 @@ const MM_NODE_H  = 32;
 const MM_RADIUS  = 200;  // afstand root→tag
 const MM_LEAF_R  = 140;  // afstand tag→notitie
 
-const MindMap = ({notes, allTags, onSelectNote}) => {
+const MindMap = ({notes, allTags, onSelectNote, aiMindmap}) => {
   const { useState, useEffect, useRef, useCallback, useMemo } = React;
 
   // ── Node state ────────────────────────────────────────────────────────────
-  // Elke node: {id, label, type:'root'|'tag'|'note'|'custom', x, y, parentId, noteId?, color?}
+  // Elke node: {id, label, type:'root'|'tag'|'note'|'branch'|'sub'|'detail', x, y, parentId, noteId?, color?}
   const [nodes,      setNodes]     = useState([]);
   const [edges,      setEdges]     = useState([]);
   const [selId,      setSelId]     = useState(null);
@@ -2338,11 +2338,12 @@ const MindMap = ({notes, allTags, onSelectNote}) => {
   const [editLabel,  setEditLabel] = useState("");
   const [zoom,       setZoom]      = useState(1);
   const [pan,        setPan]       = useState({x:0, y:0});
-  const [mode,       setMode]      = useState("view"); // view | edit
-  const [layout,     setLayout]    = useState("radial"); // radial | tree | free
+  const [mode,       setMode]      = useState("view");
+  const [layout,     setLayout]    = useState("radial");
   const [showTags,   setShowTags]  = useState(true);
   const [showNotes,  setShowNotes] = useState(true);
-  const [tagFilter,  setTagFilter] = useState(null); // null = alle tags
+  const [tagFilter,  setTagFilter] = useState(null);
+  const [aiMode,     setAiMode]    = useState(false);  // toon AI mindmap ipv vault
 
   const cvRef     = useRef(null);
   const dragRef   = useRef(null);   // {nodeId, startX, startY, origX, origY}
@@ -2494,6 +2495,88 @@ const MindMap = ({notes, allTags, onSelectNote}) => {
 
   useEffect(() => { buildLayout(); }, [buildLayout]);
 
+  // ── AI mindmap layout (3-laags: root → tak → subtopic → detail) ───────────
+  const buildAiLayout = useCallback(() => {
+    if (!aiMindmap || !cvRef.current) return;
+    const cv = cvRef.current;
+    const CW = cv.clientWidth, CH = cv.clientHeight;
+    const cx = CW/2, cy = CH/2;
+
+    const newNodes = [];
+    const newEdges = [];
+    const branches = aiMindmap.branches || [];
+
+    // Root
+    newNodes.push({id:"root", label: aiMindmap.root||"Overzicht",
+                   type:"root", x:cx, y:cy, fixed:true});
+
+    const BRANCH_R  = Math.min(220, CW*0.28);
+    const SUB_R     = 130;
+    const DETAIL_R  = 90;
+    const PALETTE   = ["#8ac6f2","#9fcf56","#e5786d","#d4a4f7","#e8d44d","#f4bf75","#a8d8a0","#f097c0"];
+
+    branches.forEach((b, bi) => {
+      const angle = (bi / branches.length) * Math.PI*2 - Math.PI/2;
+      const bx = cx + BRANCH_R * Math.cos(angle);
+      const by = cy + BRANCH_R * Math.sin(angle);
+      const color = b.color || PALETTE[bi % PALETTE.length];
+      const isHigh = b.importance === "high";
+
+      const bId = "branch-"+bi;
+      newNodes.push({id:bId, label:b.label, type:"branch",
+                     x:bx, y:by, color, parentId:"root",
+                     important: isHigh});
+      newEdges.push({from:"root", to:bId, weight: isHigh?3:1.5});
+
+      const children = b.children || [];
+      children.forEach((c, ci) => {
+        const cLabel = typeof c==="string" ? c : c.label;
+        const cDetails = typeof c==="string" ? [] : (c.details||[]);
+        const spread = Math.min(Math.PI*0.7, children.length*0.28);
+        const cAngle = angle - spread/2 + (children.length>1?(ci/(children.length-1))*spread:0);
+        const sx = bx + SUB_R * Math.cos(cAngle);
+        const sy = by + SUB_R * Math.sin(cAngle);
+        const sId = "sub-"+bi+"-"+ci;
+        newNodes.push({id:sId, label:cLabel, type:"sub",
+                       x:sx, y:sy, color, parentId:bId});
+        newEdges.push({from:bId, to:sId});
+
+        // Detail-niveau (derde laag)
+        cDetails.slice(0,3).forEach((d, di) => {
+          const detailSpread = Math.min(Math.PI*0.4, cDetails.length*0.2);
+          const dAngle = cAngle - detailSpread/2 +
+                         (cDetails.length>1?(di/(cDetails.length-1))*detailSpread:0);
+          const dId = "detail-"+bi+"-"+ci+"-"+di;
+          newNodes.push({id:dId, label: d.length>28?d.slice(0,26)+"…":d,
+                         fullLabel:d, type:"detail",
+                         x: sx + DETAIL_R*Math.cos(dAngle),
+                         y: sy + DETAIL_R*Math.sin(dAngle),
+                         color: color+"99", parentId:sId});
+          newEdges.push({from:sId, to:dId, detail:true});
+        });
+      });
+    });
+
+    setNodes(newNodes);
+    setEdges(newEdges);
+    // Centreer view
+    setPan({x:0,y:0});
+    setZoom(0.85);
+  }, [aiMindmap]);
+
+  // Schakel automatisch naar AI-modus als nieuwe mindmap binnenkomt
+  useEffect(() => {
+    if (aiMindmap) {
+      setAiMode(true);
+      setTimeout(()=>buildAiLayout(), 60);
+    }
+  }, [aiMindmap, buildAiLayout]);
+
+  useEffect(() => {
+    if (!aiMode) buildLayout();
+    else buildAiLayout();
+  }, [aiMode, buildLayout, buildAiLayout]);
+
   // ── Canvas rendering ──────────────────────────────────────────────────────
   useEffect(() => {
     const cv = cvRef.current; if (!cv) return;
@@ -2538,16 +2621,20 @@ const MindMap = ({notes, allTags, onSelectNote}) => {
         const to   = ns.find(n=>n.id===e.to);
         if (!from||!to) return;
         ctx.beginPath();
-        // Bezier curve voor elegante bogen
         const mx = (from.x+to.x)/2;
         const my = (from.y+to.y)/2;
         ctx.moveTo(from.x, from.y);
         ctx.quadraticCurveTo(mx, my, to.x, to.y);
         ctx.strokeStyle = e.secondary
           ? "rgba(255,255,255,0.06)"
-          : (to.color||W.splitBg)+"50";
-        ctx.lineWidth = e.secondary ? 0.5 : (from.type==="root"?2:1);
-        ctx.setLineDash(e.secondary?[3,5]:[]);
+          : e.detail
+            ? (to.color||W.splitBg)+"30"
+            : (to.color||W.splitBg)+"55";
+        ctx.lineWidth = e.secondary ? 0.5
+          : e.detail ? 0.6
+          : e.weight ? e.weight
+          : (from.type==="root" ? 2 : 1);
+        ctx.setLineDash(e.secondary?[3,5]:e.detail?[2,4]:[]);
         ctx.stroke();
         ctx.setLineDash([]);
       });
@@ -2597,8 +2684,63 @@ const MindMap = ({notes, allTags, onSelectNote}) => {
           ctx.textBaseline = "middle";
           ctx.fillText(n.label, n.x, n.y);
 
+        } else if (n.type === "branch") {
+          // AI Hoofdtak: hexagon-achtige pill, groter dan tag
+          const pw = 140, ph = 32, pr = 16;
+          const lx = n.x - pw/2, ly = n.y - ph/2;
+          if (isSel || n.important) {
+            ctx.shadowBlur = 16; ctx.shadowColor = color+"90";
+          }
+          ctx.beginPath(); ctx.roundRect(lx,ly,pw,ph,pr);
+          ctx.fillStyle   = color+"35";
+          ctx.strokeStyle = isSel ? color : color+"90";
+          ctx.lineWidth   = isSel ? 2.5 : (n.important ? 2 : 1.5);
+          ctx.fill(); ctx.stroke();
+          if (n.important) {
+            // Ster icoontje voor high-importance
+            ctx.fillStyle = color;
+            ctx.font = "10px sans-serif";
+            ctx.textAlign = "right"; ctx.textBaseline = "middle";
+            ctx.fillText("⭐", n.x + pw/2 - 5, n.y);
+          }
+          ctx.shadowBlur = 0;
+          ctx.fillStyle  = isSel ? W.statusFg : color;
+          ctx.font       = `bold 11px 'Hack','Courier New',monospace`;
+          ctx.textAlign  = "center"; ctx.textBaseline = "middle";
+          ctx.fillText(n.label.length>20?n.label.slice(0,18)+"…":n.label, n.x, n.y);
+
+        } else if (n.type === "sub") {
+          // AI Subtopic: afgeronde pill, medium
+          const pw = 110, ph = 24, pr = 12;
+          const lx = n.x - pw/2, ly = n.y - ph/2;
+          if (isSel) { ctx.shadowBlur=8; ctx.shadowColor=color+"60"; }
+          ctx.beginPath(); ctx.roundRect(lx,ly,pw,ph,pr);
+          ctx.fillStyle   = isSel ? color+"28" : color+"18";
+          ctx.strokeStyle = isSel ? color       : color+"55";
+          ctx.lineWidth   = isSel ? 1.8 : 1;
+          ctx.fill(); ctx.stroke();
+          ctx.shadowBlur  = 0;
+          ctx.fillStyle   = isSel ? W.statusFg : W.fg;
+          ctx.font        = `${isSel?"bold ":""}10px 'Hack','Courier New',monospace`;
+          ctx.textAlign   = "center"; ctx.textBaseline = "middle";
+          ctx.fillText(n.label.length>18?n.label.slice(0,16)+"…":n.label, n.x, n.y);
+
+        } else if (n.type === "detail") {
+          // AI Detail: klein, subtiel
+          const pw = 86, ph = 18, pr = 9;
+          const lx = n.x - pw/2, ly = n.y - ph/2;
+          ctx.beginPath(); ctx.roundRect(lx,ly,pw,ph,pr);
+          ctx.fillStyle   = isSel ? color+"25" : "transparent";
+          ctx.strokeStyle = isSel ? color       : color+"40";
+          ctx.lineWidth   = isSel ? 1.5 : 0.8;
+          ctx.fill(); ctx.stroke();
+          ctx.fillStyle  = isSel ? W.statusFg : W.fgMuted;
+          ctx.font       = `9px 'Hack','Courier New',monospace`;
+          ctx.textAlign  = "center"; ctx.textBaseline = "middle";
+          ctx.fillText(n.label, n.x, n.y);
+
         } else {
-          // Notitie: rechthoekje
+          // Notitie (vault): rechthoekje
           const nw = 124, nh = 28, nr = 5;
           const lx = n.x - nw/2, ly = n.y - nh/2;
           if (isSel) { ctx.shadowBlur=10; ctx.shadowColor=color+"60"; }
@@ -2610,8 +2752,7 @@ const MindMap = ({notes, allTags, onSelectNote}) => {
           ctx.shadowBlur  = 0;
           ctx.fillStyle   = isSel ? W.statusFg : W.fgDim;
           ctx.font        = `${isSel?"bold ":""}10px 'Hack','Courier New',monospace`;
-          ctx.textAlign   = "center";
-          ctx.textBaseline = "middle";
+          ctx.textAlign   = "center"; ctx.textBaseline = "middle";
           ctx.fillText(n.label, n.x, n.y);
         }
       });
@@ -2774,8 +2915,36 @@ const MindMap = ({notes, allTags, onSelectNote}) => {
              borderRadius:"8px",padding:"10px 12px",backdropFilter:"blur(6px)",
              display:"flex",flexDirection:"column",gap:"7px",minWidth:"210px"}
     },
-      // Modus
-      React.createElement("div",{style:{display:"flex",gap:"5px",alignItems:"center"}},
+
+      // AI/Vault toggle — bovenaan als er een AI mindmap is
+      aiMindmap && React.createElement("div",{
+        style:{display:"flex",gap:"4px",background:"rgba(0,0,0,0.3)",
+               borderRadius:"6px",padding:"3px",marginBottom:"2px"}
+      },
+        [{id:true,label:"🧠 AI mindmap"},{id:false,label:"🕸 Vault"}].map(opt=>
+          React.createElement("button",{key:String(opt.id),
+            onClick:()=>setAiMode(opt.id),
+            style:{flex:1,background:aiMode===opt.id?"rgba(138,198,242,0.2)":"none",
+                   border:`1px solid ${aiMode===opt.id?"rgba(138,198,242,0.5)":"transparent"}`,
+                   color:aiMode===opt.id?"#a8d8f0":W.fgMuted,
+                   borderRadius:"4px",padding:"3px 6px",fontSize:"10px",cursor:"pointer"}
+          },opt.label)
+        )
+      ),
+
+      // AI mindmap info
+      aiMode && aiMindmap && React.createElement("div",{
+        style:{fontSize:"9px",color:W.comment,padding:"3px 6px",
+               background:"rgba(159,202,86,0.08)",borderRadius:"4px",
+               borderLeft:"2px solid rgba(159,202,86,0.4)"}
+      },
+        "📄 ",aiMindmap.root,
+        React.createElement("br"),
+        `${aiMindmap.branches?.length||0} takken · `,
+        `${aiMindmap.branches?.reduce((a,b)=>(a+(b.children?.length||0)),0)||0} subtopics`
+      ),
+      // Modus (alleen in vault-modus relevant)
+      !aiMode && React.createElement("div",{style:{display:"flex",gap:"5px",alignItems:"center"}},
         React.createElement("span",{style:{fontSize:"9px",color:"rgba(138,198,242,0.5)",
           letterSpacing:"2px",flex:1}},"MODUS"),
         [{id:"view",label:"👁 bekijk"},{id:"edit",label:"✏ bewerk"}].map(m=>
@@ -2787,50 +2956,51 @@ const MindMap = ({notes, allTags, onSelectNote}) => {
           },m.label))
       ),
 
-      // Layout
-      React.createElement("div",{style:{display:"flex",gap:"5px",alignItems:"center"}},
-        React.createElement("span",{style:{fontSize:"9px",color:"rgba(138,198,242,0.5)",
-          letterSpacing:"2px",flex:1}},"LAYOUT"),
-        [{id:"radial",label:"⊙"},{id:"tree",label:"⊤"}].map(l=>
-          React.createElement("button",{key:l.id, onClick:()=>setLayout(l.id),
-            style:{background:layout===l.id?"rgba(138,198,242,0.18)":"none",
-                   border:`1px solid ${layout===l.id?"rgba(138,198,242,0.5)":W.splitBg}`,
-                   color:layout===l.id?"#a8d8f0":W.fgMuted,
-                   borderRadius:"4px",padding:"2px 10px",fontSize:"12px",cursor:"pointer"}
-          },l.label))
-      ),
-
-      // Weergave
-      React.createElement("div",{style:{display:"flex",gap:"5px",flexWrap:"wrap"}},
-        [{label:"tags",val:showTags,set:setShowTags},
-         {label:"notities",val:showNotes,set:setShowNotes}].map(({label,val,set})=>
-          React.createElement("button",{key:label,onClick:()=>set(v=>!v),
-            style:{background:val?"rgba(138,198,242,0.12)":"none",
-                   border:`1px solid ${val?"rgba(138,198,242,0.4)":W.splitBg}`,
-                   color:val?"#a8d8f0":W.fgMuted,
-                   borderRadius:"4px",padding:"2px 9px",fontSize:"10px",cursor:"pointer"}
-          },val?"✓ "+label:"○ "+label))
-      ),
-
-      // Tag filter
-      allTags.length>0 && React.createElement("div",null,
-        React.createElement("div",{style:{fontSize:"9px",color:"rgba(138,198,242,0.5)",
-          letterSpacing:"2px",marginBottom:"4px"}},"TAG FILTER"),
-        React.createElement("div",{style:{display:"flex",flexWrap:"wrap",gap:"3px"}},
-          React.createElement("span",{
-            onClick:()=>setTagFilter(null),
-            style:{fontSize:"10px",padding:"2px 6px",borderRadius:"4px",cursor:"pointer",
-                   background:!tagFilter?"rgba(138,198,242,0.18)":"rgba(138,198,242,0.05)",
-                   color:!tagFilter?"#a8d8f0":"rgba(168,216,240,0.5)",
-                   border:`1px solid ${!tagFilter?"rgba(138,198,242,0.4)":"rgba(138,198,242,0.12)"}`}
-          },"alle"),
-          allTags.map(t=>React.createElement("span",{key:t,
-            onClick:()=>setTagFilter(tagFilter===t?null:t),
-            style:{fontSize:"10px",padding:"2px 6px",borderRadius:"4px",cursor:"pointer",
-                   background:tagFilter===t?(tagColorMap[t]||W.comment)+"25":"rgba(138,198,242,0.05)",
-                   color:tagFilter===t?(tagColorMap[t]||W.comment):"rgba(168,216,240,0.5)",
-                   border:`1px solid ${tagFilter===t?(tagColorMap[t]||W.comment)+"50":"rgba(138,198,242,0.12)"}`}
-          },"#"+t))
+      // Layout + weergave + tag filter: alleen in vault-modus
+      !aiMode && React.createElement(React.Fragment,null,
+        // Layout
+        React.createElement("div",{style:{display:"flex",gap:"5px",alignItems:"center"}},
+          React.createElement("span",{style:{fontSize:"9px",color:"rgba(138,198,242,0.5)",
+            letterSpacing:"2px",flex:1}},"LAYOUT"),
+          [{id:"radial",label:"⊙"},{id:"tree",label:"⊤"}].map(l=>
+            React.createElement("button",{key:l.id, onClick:()=>setLayout(l.id),
+              style:{background:layout===l.id?"rgba(138,198,242,0.18)":"none",
+                     border:`1px solid ${layout===l.id?"rgba(138,198,242,0.5)":W.splitBg}`,
+                     color:layout===l.id?"#a8d8f0":W.fgMuted,
+                     borderRadius:"4px",padding:"2px 10px",fontSize:"12px",cursor:"pointer"}
+            },l.label))
+        ),
+        // Weergave
+        React.createElement("div",{style:{display:"flex",gap:"5px",flexWrap:"wrap"}},
+          [{label:"tags",val:showTags,set:setShowTags},
+           {label:"notities",val:showNotes,set:setShowNotes}].map(({label,val,set})=>
+            React.createElement("button",{key:label,onClick:()=>set(v=>!v),
+              style:{background:val?"rgba(138,198,242,0.12)":"none",
+                     border:`1px solid ${val?"rgba(138,198,242,0.4)":W.splitBg}`,
+                     color:val?"#a8d8f0":W.fgMuted,
+                     borderRadius:"4px",padding:"2px 9px",fontSize:"10px",cursor:"pointer"}
+            },val?"✓ "+label:"○ "+label))
+        ),
+        // Tag filter
+        allTags.length>0 && React.createElement("div",null,
+          React.createElement("div",{style:{fontSize:"9px",color:"rgba(138,198,242,0.5)",
+            letterSpacing:"2px",marginBottom:"4px"}},"TAG FILTER"),
+          React.createElement("div",{style:{display:"flex",flexWrap:"wrap",gap:"3px"}},
+            React.createElement("span",{
+              onClick:()=>setTagFilter(null),
+              style:{fontSize:"10px",padding:"2px 6px",borderRadius:"4px",cursor:"pointer",
+                     background:!tagFilter?"rgba(138,198,242,0.18)":"rgba(138,198,242,0.05)",
+                     color:!tagFilter?"#a8d8f0":"rgba(168,216,240,0.5)",
+                     border:`1px solid ${!tagFilter?"rgba(138,198,242,0.4)":"rgba(138,198,242,0.12)"}`}
+            },"alle"),
+            allTags.map(t=>React.createElement("span",{key:t,
+              onClick:()=>setTagFilter(tagFilter===t?null:t),
+              style:{fontSize:"10px",padding:"2px 6px",borderRadius:"4px",cursor:"pointer",
+                     background:tagFilter===t?(tagColorMap[t]||W.comment)+"25":"rgba(138,198,242,0.05)",
+                     color:tagFilter===t?(tagColorMap[t]||W.comment):"rgba(168,216,240,0.5)",
+                     border:`1px solid ${tagFilter===t?(tagColorMap[t]||W.comment)+"50":"rgba(138,198,242,0.12)"}`}
+            },"#"+t))
+          )
         )
       ),
 
@@ -2981,7 +3151,7 @@ const SUGGESTED_MODELS = [
   { id:"gemma2",          label:"Gemma 2 9B",             desc:"Google · modern, goed voor lange context" },
 ];
 
-const LLMNotebook = ({notes, pdfNotes, serverPdfs, serverImages, allTags, onAddNote, llmModel, setLlmModel}) => {
+const LLMNotebook = ({notes, pdfNotes, serverPdfs, serverImages, allTags, onAddNote, llmModel, setLlmModel, onMindmapReady}) => {
   const { useState, useEffect, useRef, useCallback, useMemo } = React;
 
   // ── State ─────────────────────────────────────────────────────────────────
@@ -3203,23 +3373,35 @@ const LLMNotebook = ({notes, pdfNotes, serverPdfs, serverImages, allTags, onAddN
       });
       if (res?.ok && res.mindmap) {
         const mm = res.mindmap;
-        let md = "## 🗺 Mindmap: " + (mm.root||"Overzicht") + "\n\n";
+        // Stuur naar visuele MindMap tab
+        onMindmapReady?.(mm);
+        // Toon ook tekstsamenvatting in chat
+        let md = "## 🗺 Mindmap gegenereerd: **" + (mm.root||"Overzicht") + "**\n\n";
+        md += `*${mm.branches?.length||0} hoofdtakken — bekijk de visuele weergave in het 🗺 Mindmap tab*\n\n`;
         (mm.branches||[]).forEach(b=>{
-          md += "**" + b.label + "**\n";
-          (b.children||[]).forEach(c=>{ md += "  - " + c + "\n"; });
+          md += "**" + b.label + "**";
+          if (b.importance==="high") md += " ⭐";
+          md += "\n";
+          (b.children||[]).forEach(c=>{
+            const lbl = typeof c==="string" ? c : c.label;
+            md += "  - " + lbl + "\n";
+            if (c.details?.length) {
+              c.details.forEach(d=>{ md += "    · " + d + "\n"; });
+            }
+          });
           md += "\n";
         });
         setMessages(p=>[...p,{role:"assistant",content:md}]);
       } else {
         setMessages(p=>[...p,{role:"assistant",
           content:"⚠ Mindmap genereren mislukt: "+(res?.error||"geen JSON response van model")+
-          (res?.raw ? "\n\nRaw: "+res.raw.slice(0,200) : "")}]);
+          (res?.raw ? "\n\n```\n"+res.raw.slice(0,300)+"\n```" : "")}]);
       }
     } catch(e){
       setMessages(p=>[...p,{role:"assistant",content:"⚠ "+e.message}]);
     }
     setMmPending(false);
-  }, [model, ctxNotes, ctxPdfs]);
+  }, [model, ctxNotes, ctxPdfs, onMindmapReady]);
 
   // ── Render markdown in chat (eenvoudig) ───────────────────────────────────
   const renderMsg = (content) => {
@@ -3740,6 +3922,7 @@ const App = () => {
   const [serverPdfs,   setServerPdfs]  = useState([]);
   const [serverImages, setServerImages]= useState([]);
   const [llmModel,     setLlmModel]    = useState("llama3.2-vision"); // gedeeld model state
+  const [aiMindmap,    setAiMindmap]   = useState(null);  // AI-gegenereerde mindmap data
   const [tagFilter,    setTagFilter]   = useState(null);
   const [showSettings, setShowSettings]= useState(false);
   const [vaultPath,    setVaultPath]   = useState("…");
@@ -4606,12 +4789,13 @@ const App = () => {
         })
       )
       : tab==="mindmap" ? React.createElement("div",{style:{flex:1,overflow:"hidden"}},
-        React.createElement(MindMap,{notes,allTags,
+        React.createElement(MindMap,{notes,allTags,aiMindmap,
           onSelectNote:id=>{ setSelId(id); setTab("notes"); }})
       )
       : tab==="llm" ? React.createElement("div",{style:{flex:1,overflow:"hidden"}},
         React.createElement(LLMNotebook,{notes,pdfNotes,serverPdfs,serverImages,allTags,
           llmModel,setLlmModel,
+          onMindmapReady:(mm)=>{ setAiMindmap(mm); setTab("mindmap"); },
           onAddNote:async(note)=>{
             const saved=await api.post("/notes",note);
             setNotes(p=>[saved,...p]); setSelId(saved.id); setTab("notes");
