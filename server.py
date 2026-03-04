@@ -22,6 +22,7 @@ class VaultManager:
         self.pdf_dir    = vault_path / "pdfs"
         self.annot_dir  = vault_path / "annotations"
         self.images_dir = vault_path / "images"
+        self.img_annot_file = vault_path / "annotations" / "_image_annotations.json"
         self.config_file = vault_path / "config.json"
         self._init_dirs()
 
@@ -89,6 +90,7 @@ class VaultManager:
     def load_annotations(self):
         r=[]
         for p in self.annot_dir.glob("*.json"):
+            if p.name.startswith("_"): continue   # sla interne bestanden over
             try:
                 d=json.loads(p.read_text(encoding="utf-8"))
                 if isinstance(d,list): r.extend(d)
@@ -100,6 +102,18 @@ class VaultManager:
         for pdf_name,annots in by_pdf.items():
             self._annot_path(pdf_name).write_text(
                 json.dumps(annots,ensure_ascii=False,indent=2),encoding="utf-8")
+
+    def load_img_annotations(self):
+        try:
+            if self.img_annot_file.exists():
+                d = json.loads(self.img_annot_file.read_text(encoding="utf-8"))
+                return d if isinstance(d, list) else []
+        except: pass
+        return []
+
+    def save_img_annotations(self, annotations):
+        self.img_annot_file.write_text(
+            json.dumps(annotations, ensure_ascii=False, indent=2), encoding="utf-8")
 
     # PDFs
     def list_pdfs(self):
@@ -282,8 +296,13 @@ class VaultManager:
         p=self.images_dir/filename; return p if p.exists() else None
     def delete_image(self, filename):
         p=self.get_image_path(filename)
-        if p and p.exists(): p.unlink(); return True
-        return False
+        if p and p.exists(): p.unlink()
+        # Verwijder ook annotaties van deze afbeelding
+        current = self.load_img_annotations()
+        filtered = [a for a in current if a.get("file") != filename]
+        if len(filtered) != len(current):
+            self.save_img_annotations(filtered)
+        return True
     def image_as_base64(self, filename):
         p=self.get_image_path(filename)
         if not p: return None
@@ -336,10 +355,11 @@ class ZKHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         p = urlparse(self.path).path.rstrip("/") or "/"
-        if p=="/api/notes":       return self._send(200,self.vault.load_notes())
-        if p=="/api/annotations": return self._send(200,self.vault.load_annotations())
-        if p=="/api/pdfs":        return self._send(200,self.vault.list_pdfs())
-        if p=="/api/images":      return self._send(200,self.vault.list_images())
+        if p=="/api/notes":            return self._send(200,self.vault.load_notes())
+        if p=="/api/annotations":      return self._send(200,self.vault.load_annotations())
+        if p=="/api/img-annotations":  return self._send(200,self.vault.load_img_annotations())
+        if p=="/api/pdfs":             return self._send(200,self.vault.list_pdfs())
+        if p=="/api/images":           return self._send(200,self.vault.list_images())
         if p=="/api/llm/models":  return self._llm_models()
         if p=="/api/config":      return self._send(200,{"vault_path":self.vault.path_str,"config":self.vault.get_config()})
         if p.startswith("/api/pdf/"):
@@ -367,6 +387,10 @@ class ZKHandler(BaseHTTPRequestHandler):
         if p=="/api/annotations":
             a=self._body()
             if isinstance(a,list): self.vault.save_annotations(a); return self._send(200,{"ok":True})
+            return self._send(400,{"error":"Verwacht een lijst"})
+        if p=="/api/img-annotations":
+            a=self._body()
+            if isinstance(a,list): self.vault.save_img_annotations(a); return self._send(200,{"ok":True})
             return self._send(400,{"error":"Verwacht een lijst"})
         if p=="/api/pdfs":
             ct=self.headers.get("Content-Type","")

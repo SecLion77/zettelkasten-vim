@@ -89,6 +89,8 @@ const api = {
       body:JSON.stringify(payload)});
     return r.json();
   },
+  async getImgAnnotations()        { const r=await fetch(API+"/img-annotations"); return r.json(); },
+  async saveImgAnnotations(annots) { const r=await fetch(API+"/img-annotations",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(annots)}); return r.json(); },
 };
 
 // ── Utils ──────────────────────────────────────────────────────────────────────
@@ -2048,16 +2050,89 @@ const useWindowSize = () => {
 
 // ── ImagesGallery ───────────────────────────────────────────────────────────────
 // Tab voor afbeeldingen: upload, AI-beschrijving, notitie aanmaken.
-// Gebruikt llava (multimodaal) voor beschrijvingen — ollama pull llava
+// Annotaties via klikpunt op afbeelding — zelfde methodiek als PDF annotaties.
 
-const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote, setAiStatus, notes, onDeleteNote}) => {
-  const { useState, useRef, useCallback } = React;
+const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote, setAiStatus,
+                        notes, onDeleteNote, imgNotes, setImgNotes, allTags}) => {
+  const { useState, useRef, useCallback, useEffect, useMemo } = React;
 
-  const [busy,        setBusy]       = useState(null);  // filename die bezig is
-  const [descriptions,setDescs]      = useState({});    // fname → beschrijving
-  const [lightbox,    setLightbox]   = useState(null);  // fname of null
-  const [dragOver,    setDragOver]   = useState(false);
-  const fileRef = useRef(null);
+  const [busy,          setBusy]         = useState(null);
+  const [descriptions,  setDescs]        = useState({});
+  const [lightbox,      setLightbox]     = useState(null);
+  const [dragOver,      setDragOver]     = useState(false);
+
+  // Annotatie state — identiek aan PDF
+  const [annotations,   setAnnotations]  = useState(imgNotes||[]);
+  const [activeImg,     setActiveImg]    = useState(null);    // fname van geselecteerde afbeelding
+  const [pendingPin,    setPendingPin]   = useState(null);    // {x,y} fractie van afbeelding
+  const [quickNote,     setQuickNote]    = useState("");
+  const [quickTags,     setQuickTags]    = useState([]);
+  const [activeColor,   setActiveColor]  = useState(HCOLORS[0]);
+  const [editingId,     setEditingId]    = useState(null);
+  const [showAnnotPanel,setShowAnnotPanel] = useState(true);
+  const [filterTag,     setFilterTag]   = useState(null);
+
+  const fileRef   = useRef(null);
+  const imgRef    = useRef(null);   // ref naar actieve afbeelding in annotatiemodus
+
+  // Sync imgNotes → lokale state
+  useEffect(() => { setAnnotations(imgNotes||[]); }, [imgNotes]);
+
+  const saveAnnotations = useCallback(async (updated) => {
+    setAnnotations(updated);
+    setImgNotes?.(updated);
+    await api.saveImgAnnotations(updated);
+  }, [setImgNotes]);
+
+  const addAnnotation = useCallback(async () => {
+    if (!pendingPin || !activeImg) return;
+    const a = {
+      id:      genId(),
+      text:    quickNote || "(pin)",
+      note:    quickNote,
+      tags:    quickTags,
+      file:    activeImg,
+      x:       pendingPin.x,   // fractie 0–1
+      y:       pendingPin.y,
+      colorId: activeColor.id,
+      created: new Date().toISOString(),
+    };
+    await saveAnnotations([...annotations, a]);
+    setPendingPin(null); setQuickNote(""); setQuickTags([]);
+  }, [pendingPin, activeImg, quickNote, quickTags, activeColor, annotations, saveAnnotations]);
+
+  const updateAnnotation = useCallback(async (id, patch) => {
+    await saveAnnotations(annotations.map(a => a.id===id ? {...a,...patch} : a));
+  }, [annotations, saveAnnotations]);
+
+  const removeAnnotation = useCallback(async (id) => {
+    await saveAnnotations(annotations.filter(a => a.id!==id));
+    if (editingId===id) setEditingId(null);
+  }, [annotations, saveAnnotations, editingId]);
+
+  // Annotaties voor de actieve afbeelding
+  const fileAnnots = useMemo(() =>
+    activeImg ? annotations.filter(a => a.file===activeImg) : [],
+  [annotations, activeImg]);
+
+  const allAnnotTags = useMemo(() =>
+    [...new Set(fileAnnots.flatMap(a => a.tags||[]))],
+  [fileAnnots]);
+
+  const panelAnnots = (filterTag
+    ? fileAnnots.filter(a => (a.tags||[]).includes(filterTag))
+    : fileAnnots
+  ).sort((a,b) => new Date(a.created) - new Date(b.created));
+
+  // Klik op afbeelding in annotatiemodus → pin plaatsen
+  const handleImgClick = useCallback((e) => {
+    if (!activeImg) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / rect.width;
+    const y = (e.clientY - rect.top)  / rect.height;
+    setPendingPin({x, y});
+    setQuickNote(""); setQuickTags([]);
+  }, [activeImg]);
 
   const upload = useCallback(async (files) => {
     for (const f of Array.from(files)) {
@@ -2068,7 +2143,6 @@ const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote, setAiStatu
         const res = await api.uploadImage(f);
         if (res?.name) {
           await onRefresh();
-          // Automatisch beschrijving + notitie in achtergrond
           describeImage(res.name);
         }
       } catch(e) { console.error("upload:", e); setAiStatus?.(null); }
@@ -2081,204 +2155,538 @@ const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote, setAiStatu
     const stem = fname.replace(/\.[^.]+$/,"");
     setAiStatus?.("AI beschrijft: "+stem.slice(0,22)+"…");
     try {
-      const model = llmModel || "llava";
-      const res   = await api.llmDescribeImage(fname, model||"llama3.2-vision");
+      const model = llmModel || "llama3.2-vision";
+      const res   = await api.llmDescribeImage(fname, model);
       if (res?.description) {
         setDescs(p=>({...p, [fname]: res.description}));
-        // Automatisch notitie aanmaken op de achtergrond
         if (onAddNote) {
           await onAddNote({
-            id:      genId(),
-            title:   "Afbeelding — " + stem,
+            id: genId(), title: "Afbeelding — "+stem,
             content: "*Automatisch gegenereerd*\n\n![[img:"+fname+"]]\n\n## Beschrijving\n\n"+res.description,
-            tags:    ["afbeelding","media"],
+            tags: ["afbeelding","media"],
             created: new Date().toISOString(), modified: new Date().toISOString(),
           });
         }
       } else {
-        setDescs(p=>({...p, [fname]: "⚠ Beschrijving niet beschikbaar (ollama pull llava)"}));
+        setDescs(p=>({...p, [fname]: "⚠ Beschrijving niet beschikbaar (ollama pull llama3.2-vision)"}));
       }
     } catch(e) {
-      setDescs(p=>({...p, [fname]: "⚠ Beschrijving niet beschikbaar (ollama pull llava)"}));
-    } finally {
-      setBusy(null);
-      setAiStatus?.(null);
-    }
+      setDescs(p=>({...p, [fname]: "⚠ "+e.message}));
+    } finally { setBusy(null); setAiStatus?.(null); }
   }, [llmModel, onAddNote]);
 
   const deleteImg = useCallback(async (fname) => {
-    // Tel gekoppelde notities
-    const linked = (notes||[]).filter(n=>
+    const linked = (notes||[]).filter(n =>
       n.content?.includes(`![[img:${fname}]]`) ||
       n.title?.includes(fname.replace(/\.[^.]+$/,""))
     );
-    const msg = linked.length
-      ? `Verwijder "${fname}" én ${linked.length} gekoppelde notitie(s)?\n\n${linked.map(n=>"• "+n.title).join("\n")}`
+    const imgAnnotCount = annotations.filter(a => a.file===fname).length;
+    const parts = [];
+    if (linked.length) parts.push(`${linked.length} notitie(s):\n`+linked.map(n=>"• "+n.title).join("\n"));
+    if (imgAnnotCount) parts.push(`${imgAnnotCount} annotatie(s)`);
+    const msg = parts.length
+      ? `Verwijder "${fname}" én:\n${parts.join("\n")}?`
       : `Verwijder "${fname}"?`;
     if (!confirm(msg)) return;
     await api.deleteImage(fname);
-    // Verwijder gekoppelde notities
-    for (const n of linked) {
-      await api.del("/notes/"+n.id);
-      onDeleteNote?.(n.id);
-    }
+    for (const n of linked) { await api.del("/notes/"+n.id); onDeleteNote?.(n.id); }
+    // Verwijder ook annotaties van dit bestand
+    if (imgAnnotCount) await saveAnnotations(annotations.filter(a => a.file!==fname));
     setDescs(p=>{ const q={...p}; delete q[fname]; return q; });
+    if (activeImg===fname) setActiveImg(null);
     await onRefresh();
-  }, [onRefresh, notes, onDeleteNote]);
+  }, [onRefresh, notes, onDeleteNote, annotations, saveAnnotations, activeImg]);
 
-  const onDrop = (e) => {
-    e.preventDefault(); setDragOver(false);
-    upload(e.dataTransfer.files);
-  };
+  const onDrop = (e) => { e.preventDefault(); setDragOver(false); upload(e.dataTransfer.files); };
 
   const imgs = serverImages || [];
 
   return React.createElement("div", {
-    style:{display:"flex",flexDirection:"column",height:"100%",overflow:"hidden"}
+    style:{display:"flex",height:"100%",overflow:"hidden",position:"relative"}
   },
-    // ── Toolbar ─────────────────────────────────────────────────────────────
-    React.createElement("div",{
-      style:{background:W.statusBg,borderBottom:`1px solid ${W.splitBg}`,
-             padding:"8px 14px",display:"flex",alignItems:"center",
-             gap:"10px",flexShrink:0,flexWrap:"wrap"}
-    },
-      React.createElement("span",{style:{fontSize:"11px",color:W.statusFg,
-        letterSpacing:"2px",fontWeight:"bold"}},"AFBEELDINGEN"),
-      React.createElement("span",{style:{background:W.blue,color:W.bg,
-        borderRadius:"10px",padding:"0 7px",fontSize:"10px"}}, imgs.length),
-      React.createElement("div",{style:{flex:1}}),
-      React.createElement("span",{style:{fontSize:"10px",color:W.fgMuted}},
-        "llava vereist voor AI beschrijvingen"),
-      React.createElement("button",{
-        onClick:()=>fileRef.current?.click(),
-        style:{background:W.blue,color:W.bg,border:"none",borderRadius:"6px",
-               padding:"6px 14px",fontSize:"11px",cursor:"pointer",fontWeight:"bold"}
-      },"+ upload plaatje"),
-      React.createElement("input",{
-        ref:fileRef, type:"file", multiple:true,
-        accept:"image/*", style:{display:"none"},
-        onChange:e=>{ upload(e.target.files); e.target.value=""; }
-      })
-    ),
 
-    // ── Drop zone + galerij ──────────────────────────────────────────────────
-    React.createElement("div",{
-      style:{flex:1,overflowY:"auto",padding:"16px",
-             background: dragOver?"rgba(138,198,242,0.05)":W.bg,
-             WebkitOverflowScrolling:"touch"},
-      onDragOver: e=>{ e.preventDefault(); setDragOver(true); },
-      onDragLeave: ()=>setDragOver(false),
-      onDrop,
-    },
+    // ── Hoofdkolom: toolbar + galerij ────────────────────────────────────────
+    React.createElement("div",{style:{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",minWidth:0}},
 
-      // Lege staat met drop-zone uitnodiging
-      imgs.length===0 && React.createElement("div",{
-        style:{display:"flex",flexDirection:"column",alignItems:"center",
-               justifyContent:"center",height:"60%",gap:"14px",color:W.fgMuted,
-               border:`2px dashed ${dragOver?"rgba(138,198,242,0.5)":W.splitBg}`,
-               borderRadius:"12px",margin:"20px",padding:"40px",transition:"all 0.2s"}
+      // Toolbar
+      React.createElement("div",{
+        style:{background:W.statusBg,borderBottom:`1px solid ${W.splitBg}`,
+               padding:"8px 14px",display:"flex",alignItems:"center",
+               gap:"10px",flexShrink:0,flexWrap:"wrap"}
       },
-        React.createElement("div",{style:{fontSize:"48px"}},"🖼"),
-        React.createElement("div",{style:{fontSize:"15px",color:W.fgDim}},"Nog geen afbeeldingen"),
-        React.createElement("div",{style:{fontSize:"12px",textAlign:"center",lineHeight:"1.7"}},
-          "Sleep afbeeldingen hierheen of klik '+ upload plaatje'.\n",
-          React.createElement("br"),
-          "De lokale AI (llava) maakt automatisch een beschrijving\nen een notitie aan."
-        ),
+        React.createElement("span",{style:{fontSize:"11px",color:W.statusFg,
+          letterSpacing:"2px",fontWeight:"bold"}},"AFBEELDINGEN"),
+        React.createElement("span",{style:{background:W.blue,color:W.bg,
+          borderRadius:"10px",padding:"0 7px",fontSize:"10px"}}, imgs.length),
+        activeImg && React.createElement("span",{
+          style:{fontSize:"10px",color:W.comment,background:"rgba(159,202,86,0.1)",
+                 border:"1px solid rgba(159,202,86,0.3)",borderRadius:"4px",
+                 padding:"2px 8px",maxWidth:"180px",overflow:"hidden",
+                 textOverflow:"ellipsis",whiteSpace:"nowrap"}
+        },"✏ "+activeImg),
+        activeImg && React.createElement("button",{
+          onClick:()=>{ setActiveImg(null); setPendingPin(null); },
+          style:{background:"none",border:`1px solid ${W.splitBg}`,color:W.fgMuted,
+                 borderRadius:"4px",padding:"2px 8px",fontSize:"10px",cursor:"pointer"}
+        },"× sluiten"),
+        React.createElement("div",{style:{flex:1}}),
+        React.createElement("span",{style:{fontSize:"10px",color:W.fgMuted}},
+          activeImg ? "klik op afbeelding om een annotatie te plaatsen" : "klik ✏ om te annoteren"),
         React.createElement("button",{
           onClick:()=>fileRef.current?.click(),
-          style:{marginTop:"8px",background:"rgba(138,198,242,0.1)",
-                 border:"1px solid rgba(138,198,242,0.3)",color:"#a8d8f0",
-                 borderRadius:"8px",padding:"10px 24px",fontSize:"13px",cursor:"pointer"}
-        },"+ afbeelding kiezen")
+          style:{background:W.blue,color:W.bg,border:"none",borderRadius:"6px",
+                 padding:"6px 14px",fontSize:"11px",cursor:"pointer",fontWeight:"bold"}
+        },"+ upload"),
+        React.createElement("input",{
+          ref:fileRef, type:"file", multiple:true, accept:"image/*",
+          style:{display:"none"},
+          onChange:e=>{ upload(e.target.files); e.target.value=""; }
+        })
       ),
 
-      // Galerij grid
-      imgs.length>0 && React.createElement("div",{
-        style:{display:"grid",
-               gridTemplateColumns:"repeat(auto-fill,minmax(240px,1fr))",
-               gap:"14px"}
+      // Galerij / annotatie-view
+      React.createElement("div",{
+        style:{flex:1,overflowY:"auto",padding:"16px",
+               background: dragOver?"rgba(138,198,242,0.05)":W.bg,
+               WebkitOverflowScrolling:"touch"},
+        onDragOver:e=>{ e.preventDefault(); setDragOver(true); },
+        onDragLeave:()=>setDragOver(false),
+        onDrop,
       },
-        imgs.map(img => {
-          const desc  = descriptions[img.name];
-          const isBusy= busy===img.name;
-          return React.createElement("div",{
-            key:img.name,
-            style:{background:W.bg2,border:`1px solid ${W.splitBg}`,
-                   borderRadius:"8px",overflow:"hidden",
-                   display:"flex",flexDirection:"column",
-                   boxShadow:isBusy?"0 0 0 2px rgba(138,198,242,0.4)":"none",
-                   transition:"box-shadow 0.2s"}
-          },
-            // Thumbnail
-            React.createElement("div",{
-              style:{position:"relative",paddingTop:"60%",background:W.bg,cursor:"pointer"},
-              onClick:()=>setLightbox(img.name)
+
+        // Lege staat
+        imgs.length===0 && React.createElement("div",{
+          style:{display:"flex",flexDirection:"column",alignItems:"center",
+                 justifyContent:"center",height:"60%",gap:"14px",color:W.fgMuted,
+                 border:`2px dashed ${dragOver?"rgba(138,198,242,0.5)":W.splitBg}`,
+                 borderRadius:"12px",margin:"20px",padding:"40px"}
+        },
+          React.createElement("div",{style:{fontSize:"48px"}},"🖼"),
+          React.createElement("div",{style:{fontSize:"15px",color:W.fgDim}},"Nog geen afbeeldingen"),
+          React.createElement("div",{style:{fontSize:"12px",textAlign:"center",lineHeight:"1.7"}},
+            "Sleep afbeeldingen hierheen of klik '+ upload'.\n",
+            React.createElement("br"),
+            "De AI maakt automatisch een beschrijving en een notitie aan."
+          ),
+          React.createElement("button",{
+            onClick:()=>fileRef.current?.click(),
+            style:{marginTop:"8px",background:"rgba(138,198,242,0.1)",
+                   border:"1px solid rgba(138,198,242,0.3)",color:"#a8d8f0",
+                   borderRadius:"8px",padding:"10px 24px",fontSize:"13px",cursor:"pointer"}
+          },"+ afbeelding kiezen")
+        ),
+
+        // Annotatiemodus: grote weergave met klikbare afbeelding + pinnen
+        activeImg && React.createElement("div",{style:{position:"relative",display:"inline-block",maxWidth:"100%"}},
+          React.createElement("img",{
+            ref:imgRef,
+            src:"/api/image/"+encodeURIComponent(activeImg),
+            alt:activeImg,
+            onClick:handleImgClick,
+            style:{maxWidth:"100%",maxHeight:"calc(100vh - 140px)",objectFit:"contain",
+                   display:"block",cursor:"crosshair",borderRadius:"6px",
+                   boxShadow:"0 4px 24px rgba(0,0,0,0.5)",
+                   border:`2px solid ${W.splitBg}`}
+          }),
+
+          // Bestaande pins
+          ...fileAnnots.map(a => {
+            const col = HCOLORS.find(c=>c.id===a.colorId)||HCOLORS[0];
+            const isEditing = editingId===a.id;
+            return React.createElement("div",{
+              key:a.id,
+              onClick:e=>{ e.stopPropagation(); setEditingId(isEditing?null:a.id); setPendingPin(null); },
+              style:{position:"absolute",
+                     left:`calc(${a.x*100}% - 10px)`,
+                     top:`calc(${a.y*100}% - 20px)`,
+                     zIndex: isEditing ? 20 : 10,
+                     cursor:"pointer"}
             },
-              React.createElement("img",{
-                src:"/api/image/"+encodeURIComponent(img.name),
-                alt:img.name,
-                loading:"lazy",
-                style:{position:"absolute",inset:0,width:"100%",height:"100%",
-                       objectFit:"cover"}
+              // Pin symbool
+              React.createElement("div",{style:{
+                width:"20px",height:"20px",borderRadius:"50% 50% 50% 0",
+                background:col.border,border:"2px solid white",
+                transform:"rotate(-45deg)",
+                boxShadow:`0 2px 8px rgba(0,0,0,0.6)`,
+                transition:"transform 0.1s",
+              }}),
+              // Tooltip / edit popup boven de pin
+              isEditing && React.createElement("div",{
+                onClick:e=>e.stopPropagation(),
+                style:{position:"absolute",bottom:"28px",left:"-160px",
+                       width:"300px",background:W.bg3,
+                       border:`2px solid ${col.border}`,borderRadius:"8px",
+                       padding:"12px 14px",zIndex:500,
+                       boxShadow:"0 8px 32px rgba(0,0,0,0.8)"}
+              },
+                // Notitietekst
+                React.createElement("div",{style:{fontSize:"11px",color:W.fgDim,
+                  marginBottom:"8px",padding:"6px 8px",background:col.bg,
+                  borderRadius:"4px",fontStyle:"italic",lineHeight:"1.5",
+                  borderLeft:`4px solid ${col.border}`}},
+                  a.note||"(geen notitie)"),
+                // Notitie bewerken
+                React.createElement("textarea",{
+                  value:a.note||"",
+                  onChange:e=>updateAnnotation(a.id,{note:e.target.value}),
+                  onKeyDown:e=>{ if(e.key==="Escape") setEditingId(null); },
+                  rows:2,
+                  placeholder:"Notitie…",
+                  style:{width:"100%",background:W.bg,border:`1px solid ${W.splitBg}`,
+                         borderRadius:"4px",padding:"6px 8px",color:W.fg,
+                         fontSize:"11px",outline:"none",resize:"none",marginBottom:"6px"}
+                }),
+                // Tags
+                React.createElement("div",{style:{fontSize:"9px",color:W.fgMuted,
+                  marginBottom:"4px",letterSpacing:"1px"}},"TAGS"),
+                React.createElement(TagEditor,{tags:a.tags||[],
+                  onChange:tags=>updateAnnotation(a.id,{tags}),
+                  allTags:[...(allTags||[]),...allAnnotTags]}),
+                // Kleur
+                React.createElement("div",{style:{display:"flex",gap:"5px",margin:"8px 0"}},
+                  ...HCOLORS.map(c=>React.createElement("button",{key:c.id,
+                    onClick:()=>updateAnnotation(a.id,{colorId:c.id}),
+                    style:{width:"18px",height:"18px",borderRadius:"3px",background:c.bg,
+                           border:`2px solid ${a.colorId===c.id?c.border:W.splitBg}`,
+                           cursor:"pointer",padding:0}}))
+                ),
+                // Acties
+                React.createElement("div",{style:{display:"flex",gap:"6px",marginTop:"4px"}},
+                  React.createElement("button",{
+                    onClick:()=>setEditingId(null),
+                    style:{background:W.comment,color:W.bg,border:"none",borderRadius:"3px",
+                           padding:"3px 10px",fontSize:"10px",cursor:"pointer",fontWeight:"bold"}
+                  },"✓ klaar"),
+                  React.createElement("button",{
+                    onClick:()=>removeAnnotation(a.id),
+                    style:{background:"none",color:W.orange,
+                           border:`1px solid rgba(229,120,109,0.3)`,
+                           borderRadius:"3px",padding:"3px 8px",fontSize:"10px",cursor:"pointer"}
+                  },":del")
+                )
+              )
+            );
+          }),
+
+          // Pending pin: nieuw te plaatsen annotatie
+          pendingPin && React.createElement("div",{
+            style:{position:"absolute",
+                   left:`calc(${pendingPin.x*100}% - 10px)`,
+                   top:`calc(${pendingPin.y*100}% - 20px)`,
+                   zIndex:30}
+          },
+            // Knipperende pin
+            React.createElement("div",{style:{
+              width:"20px",height:"20px",borderRadius:"50% 50% 50% 0",
+              background:activeColor.border,border:"2px solid white",
+              transform:"rotate(-45deg)",
+              animation:"ai-pulse 0.8s ease-in-out infinite",
+            }}),
+            // Invoerformulier — identiek aan PDF popup
+            React.createElement("div",{
+              onClick:e=>e.stopPropagation(),
+              style:{position:"absolute",bottom:"28px",left:"-160px",
+                     width:"320px",background:W.bg3,
+                     border:`2px solid ${activeColor.border}`,borderRadius:"8px",
+                     padding:"14px 16px",zIndex:500,
+                     boxShadow:"0 8px 32px rgba(0,0,0,0.8)"}
+            },
+              React.createElement("div",{style:{fontSize:"10px",color:W.fgMuted,
+                marginBottom:"8px",letterSpacing:"1px"}},"NIEUWE ANNOTATIE"),
+              // Kleur kiezen
+              React.createElement("div",{style:{display:"flex",gap:"6px",
+                marginBottom:"10px",alignItems:"center"}},
+                React.createElement("span",{style:{fontSize:"10px",color:W.fgMuted,
+                  marginRight:"2px"}},"kleur:"),
+                ...HCOLORS.map(c=>React.createElement("button",{key:c.id,
+                  onClick:()=>setActiveColor(c),
+                  style:{width:"22px",height:"22px",borderRadius:"4px",background:c.bg,
+                         border:`2px solid ${activeColor.id===c.id?c.border:W.splitBg}`,
+                         cursor:"pointer",padding:0}}))
+              ),
+              // Notitie textarea
+              React.createElement("textarea",{
+                autoFocus:true,
+                value:quickNote,
+                onChange:e=>setQuickNote(e.target.value),
+                onKeyDown:e=>{
+                  if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();addAnnotation();}
+                  if(e.key==="Escape"){setPendingPin(null);}
+                },
+                placeholder:"Notitie — Enter=opslaan · Esc=annuleren",
+                rows:2,
+                style:{width:"100%",background:W.bg,border:`1px solid ${W.splitBg}`,
+                       borderRadius:"4px",padding:"8px 10px",color:W.fg,
+                       fontSize:"12px",outline:"none",resize:"none",marginBottom:"8px"}
               }),
-              isBusy && React.createElement("div",{
-                style:{position:"absolute",inset:0,background:"rgba(0,0,0,0.5)",
-                       display:"flex",alignItems:"center",justifyContent:"center",
-                       color:"#a8d8f0",fontSize:"12px",gap:"6px"}
-              },"⏳ AI verwerkt…")
-            ),
-            // Info
-            React.createElement("div",{style:{padding:"10px 12px",flex:1,
-              display:"flex",flexDirection:"column",gap:"6px"}},
-              React.createElement("div",{style:{fontSize:"11px",color:W.fg,
-                fontWeight:"bold",overflow:"hidden",textOverflow:"ellipsis",
-                whiteSpace:"nowrap",flex:0}}, img.name),
-              // Beschrijving
-              desc
-                ? React.createElement("div",{style:{fontSize:"11px",color:W.fgDim,
-                    lineHeight:"1.55",flex:1}}, desc)
-                : React.createElement("button",{
-                    onClick:()=>describeImage(img.name),
-                    disabled:!!busy,
-                    style:{background:"rgba(138,198,242,0.07)",
-                           border:"1px solid rgba(138,198,242,0.2)",color:"#a8d8f0",
-                           borderRadius:"4px",padding:"4px 10px",fontSize:"10px",
-                           cursor:busy?"not-allowed":"pointer",textAlign:"left",
-                           opacity:busy?0.5:1}
-                  },"🧠 AI beschrijving genereren"),
-              // Acties
-              React.createElement("div",{style:{display:"flex",gap:"5px",marginTop:"4px"}},
+              // Tags
+              React.createElement("div",{style:{marginBottom:"12px"}},
+                React.createElement("div",{style:{fontSize:"10px",color:W.fgMuted,
+                  marginBottom:"4px"}},"tags:"),
+                React.createElement(TagEditor,{tags:quickTags,onChange:setQuickTags,
+                  allTags:[...(allTags||[]),...allAnnotTags]})
+              ),
+              // Opslaan / annuleren
+              React.createElement("div",{style:{display:"flex",gap:"8px"}},
                 React.createElement("button",{
-                  onClick:()=>setLightbox(img.name),
-                  style:{flex:1,background:"none",border:`1px solid ${W.splitBg}`,
-                         color:W.fgMuted,borderRadius:"4px",padding:"4px",
-                         fontSize:"10px",cursor:"pointer"}
-                },"🔍 bekijken"),
-                desc && onAddNote && React.createElement("button",{
-                  onClick:async()=>{
-                    const stem=img.name.replace(/\.[^.]+$/,"");
-                    await onAddNote({
-                      id:genId(),title:"Afbeelding — "+stem,
-                      content:"*Automatisch gegenereerd*\n\n![[img:"+img.name+"]]\n\n## Beschrijving\n\n"+desc,
-                      tags:["afbeelding","media"],
-                      created:new Date().toISOString(),modified:new Date().toISOString()
-                    });
-                  },
-                  style:{flex:1,background:"rgba(138,198,242,0.08)",
-                         border:"1px solid rgba(138,198,242,0.2)",color:"#a8d8f0",
-                         borderRadius:"4px",padding:"4px",fontSize:"10px",cursor:"pointer"}
-                },"📝 notitie"),
+                  onClick:addAnnotation,
+                  style:{background:activeColor.border,color:W.bg,border:"none",
+                         borderRadius:"4px",padding:"6px 16px",fontSize:"11px",
+                         cursor:"pointer",fontWeight:"bold"}
+                },"✓ Opslaan"),
                 React.createElement("button",{
-                  onClick:()=>deleteImg(img.name),
-                  style:{background:"rgba(229,120,109,0.08)",
-                         border:"1px solid rgba(229,120,109,0.2)",color:W.orange,
-                         borderRadius:"4px",padding:"4px 8px",fontSize:"10px",cursor:"pointer"}
-                },"🗑")
+                  onClick:()=>setPendingPin(null),
+                  style:{background:"none",color:W.fgMuted,
+                         border:`1px solid ${W.splitBg}`,
+                         borderRadius:"4px",padding:"6px 12px",
+                         fontSize:"11px",cursor:"pointer"}
+                },"Esc")
               )
             )
-          );
-        })
+          )
+        ),
+
+        // Galerij grid (als geen activeImg)
+        !activeImg && imgs.length>0 && React.createElement("div",{
+          style:{display:"grid",
+                 gridTemplateColumns:"repeat(auto-fill,minmax(240px,1fr))",
+                 gap:"14px"}
+        },
+          imgs.map(img => {
+            const desc       = descriptions[img.name];
+            const isBusy     = busy===img.name;
+            const annotCount = annotations.filter(a=>a.file===img.name).length;
+            return React.createElement("div",{
+              key:img.name,
+              style:{background:W.bg2,border:`1px solid ${W.splitBg}`,
+                     borderRadius:"8px",overflow:"hidden",
+                     display:"flex",flexDirection:"column",
+                     boxShadow:isBusy?"0 0 0 2px rgba(138,198,242,0.4)":"none",
+                     transition:"box-shadow 0.2s"}
+            },
+              // Thumbnail
+              React.createElement("div",{
+                style:{position:"relative",paddingTop:"60%",background:W.bg,cursor:"pointer"},
+                onClick:()=>setLightbox(img.name)
+              },
+                React.createElement("img",{
+                  src:"/api/image/"+encodeURIComponent(img.name),
+                  alt:img.name, loading:"lazy",
+                  style:{position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"cover"}
+                }),
+                isBusy && React.createElement("div",{
+                  style:{position:"absolute",inset:0,background:"rgba(0,0,0,0.5)",
+                         display:"flex",alignItems:"center",justifyContent:"center",
+                         color:"#a8d8f0",fontSize:"12px",gap:"6px"}
+                },"⏳ AI verwerkt…"),
+                // Annotatie-teller badge
+                annotCount>0 && React.createElement("div",{
+                  style:{position:"absolute",top:"6px",right:"6px",
+                         background:"rgba(229,120,109,0.85)",color:"white",
+                         borderRadius:"10px",padding:"1px 7px",fontSize:"10px",
+                         fontWeight:"bold",backdropFilter:"blur(4px)"}
+                },"📌 "+annotCount)
+              ),
+              // Info
+              React.createElement("div",{style:{padding:"10px 12px",flex:1,
+                display:"flex",flexDirection:"column",gap:"6px"}},
+                React.createElement("div",{style:{fontSize:"11px",color:W.fg,
+                  fontWeight:"bold",overflow:"hidden",textOverflow:"ellipsis",
+                  whiteSpace:"nowrap"}}, img.name),
+                desc
+                  ? React.createElement("div",{style:{fontSize:"11px",color:W.fgDim,
+                      lineHeight:"1.55",flex:1}}, desc)
+                  : React.createElement("button",{
+                      onClick:()=>describeImage(img.name), disabled:!!busy,
+                      style:{background:"rgba(138,198,242,0.07)",
+                             border:"1px solid rgba(138,198,242,0.2)",color:"#a8d8f0",
+                             borderRadius:"4px",padding:"4px 10px",fontSize:"10px",
+                             cursor:busy?"not-allowed":"pointer",opacity:busy?0.5:1}
+                    },"🧠 AI beschrijving genereren"),
+                // Acties
+                React.createElement("div",{style:{display:"flex",gap:"5px",marginTop:"4px"}},
+                  React.createElement("button",{
+                    onClick:()=>setLightbox(img.name),
+                    style:{flex:1,background:"none",border:`1px solid ${W.splitBg}`,
+                           color:W.fgMuted,borderRadius:"4px",padding:"4px",
+                           fontSize:"10px",cursor:"pointer"}
+                  },"🔍"),
+                  React.createElement("button",{
+                    onClick:()=>{ setActiveImg(img.name); setPendingPin(null); setEditingId(null); setFilterTag(null); },
+                    style:{flex:1,background:"rgba(229,120,109,0.08)",
+                           border:`1px solid rgba(229,120,109,0.2)`,
+                           color:W.orange,borderRadius:"4px",padding:"4px",
+                           fontSize:"10px",cursor:"pointer"}
+                  },"✏ "+(annotCount>0?annotCount+" ann.":"annoteren")),
+                  desc && onAddNote && React.createElement("button",{
+                    onClick:async()=>{
+                      const stem=img.name.replace(/\.[^.]+$/,"");
+                      await onAddNote({
+                        id:genId(),title:"Afbeelding — "+stem,
+                        content:"*Automatisch gegenereerd*\n\n![[img:"+img.name+"]]\n\n## Beschrijving\n\n"+desc,
+                        tags:["afbeelding","media"],
+                        created:new Date().toISOString(),modified:new Date().toISOString()
+                      });
+                    },
+                    style:{flex:1,background:"rgba(138,198,242,0.08)",
+                           border:"1px solid rgba(138,198,242,0.2)",color:"#a8d8f0",
+                           borderRadius:"4px",padding:"4px",fontSize:"10px",cursor:"pointer"}
+                  },"📝"),
+                  React.createElement("button",{
+                    onClick:()=>deleteImg(img.name),
+                    style:{background:"rgba(229,120,109,0.08)",
+                           border:"1px solid rgba(229,120,109,0.2)",color:W.orange,
+                           borderRadius:"4px",padding:"4px 8px",fontSize:"10px",cursor:"pointer"}
+                  },"🗑")
+                )
+              )
+            );
+          })
+        )
+      )
+    ),
+
+    // ── Annotatiepaneel rechts — identiek aan PDF ─────────────────────────────
+    activeImg && React.createElement("button",{
+      onClick:()=>setShowAnnotPanel(p=>!p),
+      title: showAnnotPanel ? "Annotaties verbergen" : "Annotaties tonen",
+      style:{
+        position:"absolute", right:showAnnotPanel?286:0, top:"50%",
+        transform:"translateY(-50%)",
+        background:W.bg2, border:`1px solid ${W.splitBg}`,
+        borderRight:showAnnotPanel?"none":"1px solid "+W.splitBg,
+        borderRadius:showAnnotPanel?"4px 0 0 4px":"0 4px 4px 0",
+        color:W.fgMuted, fontSize:"14px", cursor:"pointer",
+        padding:"8px 5px", zIndex:10, lineHeight:1,
+        writingMode:"vertical-rl",
+      }
+    }, showAnnotPanel ? "▶" : "◀ " + (fileAnnots.length > 0 ? fileAnnots.length : "")),
+
+    activeImg && showAnnotPanel && React.createElement("div",{style:{
+      width:"280px",flexShrink:0,background:W.bg2,
+      borderLeft:`1px solid ${W.splitBg}`,
+      display:"flex",flexDirection:"column",
+      ...(window.innerWidth<768 ? {
+        position:"absolute",right:0,top:0,bottom:0,zIndex:20,
+        boxShadow:"-4px 0 20px rgba(0,0,0,0.5)"
+      } : {}),
+    }},
+      // Paneel header
+      React.createElement("div",{style:{background:W.statusBg,
+        borderBottom:`1px solid ${W.splitBg}`,padding:"6px 10px",
+        display:"flex",alignItems:"center",gap:"6px",flexShrink:0}},
+        React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:"1px",flex:1}},
+          React.createElement("span",{style:{fontSize:"11px",color:W.statusFg,
+            letterSpacing:"1px"}},"ANNOTATIES"),
+          React.createElement("span",{style:{fontSize:"9px",color:W.fgMuted,
+            maxWidth:"180px",overflow:"hidden",textOverflow:"ellipsis",
+            whiteSpace:"nowrap"}}, activeImg)
+        ),
+        React.createElement("span",{style:{background:W.blue,color:W.bg,
+          borderRadius:"10px",padding:"0 6px",fontSize:"10px"}}, fileAnnots.length),
+        React.createElement("div",{style:{flex:1}}),
+        filterTag && React.createElement("button",{
+          onClick:()=>setFilterTag(null),
+          style:{background:"rgba(159,202,86,0.15)",color:W.comment,
+                 border:`1px solid rgba(159,202,86,0.3)`,
+                 borderRadius:"3px",fontSize:"10px",padding:"1px 6px",cursor:"pointer"}
+        },"#",filterTag," ×"),
+        React.createElement("button",{
+          onClick:()=>setShowAnnotPanel(false),
+          style:{background:"none",border:"none",color:W.fgMuted,
+                 fontSize:"16px",cursor:"pointer",padding:"0 2px",lineHeight:1}
+        },"×")
+      ),
+      // Tag filter
+      allAnnotTags.length>0 && React.createElement("div",{style:{
+        padding:"5px 8px",borderBottom:`1px solid ${W.splitBg}`,
+        display:"flex",gap:"3px",flexWrap:"wrap",background:"rgba(0,0,0,0.15)"}},
+        allAnnotTags.map(t=>React.createElement("span",{key:t,
+          onClick:()=>setFilterTag(filterTag===t?null:t),
+          style:{fontSize:"9px",padding:"1px 5px",borderRadius:"3px",cursor:"pointer",
+                 background:filterTag===t?"rgba(159,202,86,0.3)":"rgba(159,202,86,0.08)",
+                 color:W.comment,
+                 border:`1px solid rgba(159,202,86,${filterTag===t?0.5:0.15})`}},"#",t))
+      ),
+      // Annotatielijst
+      React.createElement("div",{style:{flex:1,overflow:"auto"}},
+        panelAnnots.length===0
+          ? React.createElement("div",{style:{padding:"24px 14px",color:W.fgMuted,
+              fontSize:"11px",textAlign:"center",lineHeight:"2"}},
+              filterTag
+                ? `Geen annotaties met #${filterTag}`
+                : React.createElement(React.Fragment,null,
+                    React.createElement("div",{style:{fontSize:"20px",marginBottom:"8px"}},"📌"),
+                    React.createElement("div",{style:{color:W.fgDim}},"Nog geen annotaties"),
+                    React.createElement("div",{style:{fontSize:"10px",color:W.splitBg,
+                      lineHeight:"1.7",marginTop:"4px"}},
+                      "Klik op de afbeelding\nom een pin te plaatsen.")
+                  ))
+          : panelAnnots.map(a => {
+              const col = HCOLORS.find(c=>c.id===a.colorId)||HCOLORS[0];
+              const isEditing = editingId===a.id;
+              return React.createElement("div",{key:a.id,style:{
+                borderBottom:`1px solid ${W.splitBg}`,
+                borderLeft:`3px solid ${col.border}`,
+                background:isEditing?"rgba(255,255,255,0.025)":"transparent"
+              }},
+                React.createElement("div",{
+                  style:{padding:"8px 10px",cursor:"pointer"},
+                  onClick:()=>setEditingId(isEditing?null:a.id)
+                },
+                  React.createElement("div",{style:{fontSize:"11px",color:W.fg,
+                    lineHeight:"1.5",marginBottom:"3px"}},
+                    a.note||(React.createElement("span",{style:{color:W.fgMuted,fontStyle:"italic"}},"(geen notitie)"))),
+                  React.createElement("div",{style:{display:"flex",gap:"3px",
+                    flexWrap:"wrap",alignItems:"center"}},
+                    ...(a.tags||[]).map(t=>React.createElement(TagPill,{key:t,tag:t,small:true})),
+                    React.createElement("span",{style:{fontSize:"9px",color:W.fgMuted,marginLeft:"auto"}},
+                      `${Math.round(a.x*100)}%,${Math.round(a.y*100)}%`),
+                    React.createElement("span",{style:{fontSize:"9px",color:W.splitBg}},
+                      isEditing?"▲":"▼")
+                  )
+                ),
+                isEditing && React.createElement("div",{style:{
+                  padding:"0 10px 12px",borderTop:`1px solid ${W.splitBg}`}},
+                  React.createElement("div",{style:{fontSize:"9px",color:W.fgMuted,
+                    margin:"8px 0 4px",letterSpacing:"1px"}},"NOTITIE"),
+                  React.createElement("textarea",{
+                    value:a.note||"",
+                    onChange:e=>updateAnnotation(a.id,{note:e.target.value}),
+                    rows:3,
+                    style:{width:"100%",background:W.bg,border:`1px solid ${W.splitBg}`,
+                           borderRadius:"4px",padding:"6px 8px",color:W.fg,
+                           fontSize:"11px",outline:"none",resize:"vertical"},
+                    placeholder:"Notitie toevoegen…"
+                  }),
+                  React.createElement("div",{style:{fontSize:"9px",color:W.fgMuted,
+                    margin:"8px 0 4px",letterSpacing:"1px"}},"TAGS"),
+                  React.createElement(TagEditor,{tags:a.tags||[],
+                    onChange:tags=>updateAnnotation(a.id,{tags}),
+                    allTags:[...(allTags||[]),...allAnnotTags]}),
+                  React.createElement("div",{style:{display:"flex",gap:"5px",margin:"8px 0"}},
+                    ...HCOLORS.map(c=>React.createElement("button",{key:c.id,
+                      onClick:()=>updateAnnotation(a.id,{colorId:c.id}),
+                      style:{width:"18px",height:"18px",borderRadius:"3px",background:c.bg,
+                             border:`2px solid ${a.colorId===c.id?c.border:W.splitBg}`,
+                             cursor:"pointer",padding:0}}))
+                  ),
+                  React.createElement("div",{style:{display:"flex",gap:"6px"}},
+                    React.createElement("button",{
+                      onClick:()=>setEditingId(null),
+                      style:{background:W.comment,color:W.bg,border:"none",borderRadius:"3px",
+                             padding:"3px 10px",fontSize:"10px",cursor:"pointer",fontWeight:"bold"}
+                    },"✓ klaar"),
+                    React.createElement("button",{
+                      onClick:()=>removeAnnotation(a.id),
+                      style:{background:"none",color:W.orange,
+                             border:`1px solid rgba(229,120,109,0.3)`,
+                             borderRadius:"3px",padding:"3px 8px",fontSize:"10px",cursor:"pointer"}
+                    },":del")
+                  )
+                )
+              );
+            })
       )
     ),
 
@@ -2286,12 +2694,10 @@ const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote, setAiStatu
     lightbox && React.createElement("div",{
       onClick:()=>setLightbox(null),
       style:{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:1000,
-             display:"flex",alignItems:"center",justifyContent:"center",
-             cursor:"zoom-out"}
+             display:"flex",alignItems:"center",justifyContent:"center",cursor:"zoom-out"}
     },
       React.createElement("img",{
-        src:"/api/image/"+encodeURIComponent(lightbox),
-        alt:lightbox,
+        src:"/api/image/"+encodeURIComponent(lightbox), alt:lightbox,
         onClick:e=>e.stopPropagation(),
         style:{maxWidth:"92vw",maxHeight:"88vh",objectFit:"contain",
                borderRadius:"8px",boxShadow:"0 16px 64px rgba(0,0,0,0.8)"}
@@ -2506,7 +2912,6 @@ const MindMap = ({notes, allTags, onSelectNote, aiMindmap}) => {
     const newEdges = [];
     const branches = aiMindmap.branches || [];
 
-    // Root
     newNodes.push({id:"root", label: aiMindmap.root||"Overzicht",
                    type:"root", x:cx, y:cy, fixed:true});
 
@@ -2515,54 +2920,87 @@ const MindMap = ({notes, allTags, onSelectNote, aiMindmap}) => {
     const DETAIL_R  = 90;
     const PALETTE   = ["#8ac6f2","#9fcf56","#e5786d","#d4a4f7","#e8d44d","#f4bf75","#a8d8a0","#f097c0"];
 
-    branches.forEach((b, bi) => {
-      const angle = (bi / branches.length) * Math.PI*2 - Math.PI/2;
-      const bx = cx + BRANCH_R * Math.cos(angle);
-      const by = cy + BRANCH_R * Math.sin(angle);
-      const color = b.color || PALETTE[bi % PALETTE.length];
-      const isHigh = b.importance === "high";
+    if (layout === "tree") {
+      // Verticale boom: takken als rij bovenaan, subtopics eronder, details nog verder
+      const bCount = branches.length;
+      const bSpacing = Math.min(180, (CW - 80) / Math.max(bCount, 1));
+      const startX = cx - ((bCount-1)/2) * bSpacing;
 
-      const bId = "branch-"+bi;
-      newNodes.push({id:bId, label:b.label, type:"branch",
-                     x:bx, y:by, color, parentId:"root",
-                     important: isHigh});
-      newEdges.push({from:"root", to:bId, weight: isHigh?3:1.5});
+      branches.forEach((b, bi) => {
+        const color = b.color || PALETTE[bi % PALETTE.length];
+        const bx = startX + bi * bSpacing;
+        const by = cy - 160;
+        const bId = "branch-"+bi;
+        newNodes.push({id:bId, label:b.label, type:"branch",
+                       x:bx, y:by, color, parentId:"root", important:b.importance==="high"});
+        newEdges.push({from:"root", to:bId, weight: b.importance==="high"?3:1.5});
 
-      const children = b.children || [];
-      children.forEach((c, ci) => {
-        const cLabel = typeof c==="string" ? c : c.label;
-        const cDetails = typeof c==="string" ? [] : (c.details||[]);
-        const spread = Math.min(Math.PI*0.7, children.length*0.28);
-        const cAngle = angle - spread/2 + (children.length>1?(ci/(children.length-1))*spread:0);
-        const sx = bx + SUB_R * Math.cos(cAngle);
-        const sy = by + SUB_R * Math.sin(cAngle);
-        const sId = "sub-"+bi+"-"+ci;
-        newNodes.push({id:sId, label:cLabel, type:"sub",
-                       x:sx, y:sy, color, parentId:bId});
-        newEdges.push({from:bId, to:sId});
+        const children = b.children || [];
+        children.forEach((c, ci) => {
+          const cLabel = typeof c==="string" ? c : c.label;
+          const cDetails = typeof c==="string" ? [] : (c.details||[]);
+          const sx = bx + (ci - (children.length-1)/2) * 110;
+          const sy = by - 100;
+          const sId = "sub-"+bi+"-"+ci;
+          newNodes.push({id:sId, label:cLabel, type:"sub", x:sx, y:sy, color, parentId:bId});
+          newEdges.push({from:bId, to:sId});
 
-        // Detail-niveau (derde laag)
-        cDetails.slice(0,3).forEach((d, di) => {
-          const detailSpread = Math.min(Math.PI*0.4, cDetails.length*0.2);
-          const dAngle = cAngle - detailSpread/2 +
-                         (cDetails.length>1?(di/(cDetails.length-1))*detailSpread:0);
-          const dId = "detail-"+bi+"-"+ci+"-"+di;
-          newNodes.push({id:dId, label: d.length>28?d.slice(0,26)+"…":d,
-                         fullLabel:d, type:"detail",
-                         x: sx + DETAIL_R*Math.cos(dAngle),
-                         y: sy + DETAIL_R*Math.sin(dAngle),
-                         color: color+"99", parentId:sId});
-          newEdges.push({from:sId, to:dId, detail:true});
+          cDetails.slice(0,3).forEach((d, di) => {
+            const dId = "detail-"+bi+"-"+ci+"-"+di;
+            newNodes.push({id:dId, label: d.length>28?d.slice(0,26)+"…":d,
+                           fullLabel:d, type:"detail",
+                           x: sx + (di - (cDetails.length-1)/2) * 95,
+                           y: sy - 70,
+                           color: color+"99", parentId:sId});
+            newEdges.push({from:sId, to:dId, detail:true});
+          });
         });
       });
-    });
+    } else {
+      // Radiaal (standaard)
+      branches.forEach((b, bi) => {
+        const angle = (bi / branches.length) * Math.PI*2 - Math.PI/2;
+        const bx = cx + BRANCH_R * Math.cos(angle);
+        const by = cy + BRANCH_R * Math.sin(angle);
+        const color = b.color || PALETTE[bi % PALETTE.length];
+        const bId = "branch-"+bi;
+        newNodes.push({id:bId, label:b.label, type:"branch",
+                       x:bx, y:by, color, parentId:"root", important:b.importance==="high"});
+        newEdges.push({from:"root", to:bId, weight: b.importance==="high"?3:1.5});
+
+        const children = b.children || [];
+        children.forEach((c, ci) => {
+          const cLabel = typeof c==="string" ? c : c.label;
+          const cDetails = typeof c==="string" ? [] : (c.details||[]);
+          const spread = Math.min(Math.PI*0.7, children.length*0.28);
+          const cAngle = angle - spread/2 + (children.length>1?(ci/(children.length-1))*spread:0);
+          const sx = bx + SUB_R * Math.cos(cAngle);
+          const sy = by + SUB_R * Math.sin(cAngle);
+          const sId = "sub-"+bi+"-"+ci;
+          newNodes.push({id:sId, label:cLabel, type:"sub", x:sx, y:sy, color, parentId:bId});
+          newEdges.push({from:bId, to:sId});
+
+          cDetails.slice(0,3).forEach((d, di) => {
+            const detailSpread = Math.min(Math.PI*0.4, cDetails.length*0.2);
+            const dAngle = cAngle - detailSpread/2 +
+                           (cDetails.length>1?(di/(cDetails.length-1))*detailSpread:0);
+            const dId = "detail-"+bi+"-"+ci+"-"+di;
+            newNodes.push({id:dId, label: d.length>28?d.slice(0,26)+"…":d,
+                           fullLabel:d, type:"detail",
+                           x: sx + DETAIL_R*Math.cos(dAngle),
+                           y: sy + DETAIL_R*Math.sin(dAngle),
+                           color: color+"99", parentId:sId});
+            newEdges.push({from:sId, to:dId, detail:true});
+          });
+        });
+      });
+    }
 
     setNodes(newNodes);
     setEdges(newEdges);
-    // Centreer view
     setPan({x:0,y:0});
     setZoom(0.85);
-  }, [aiMindmap]);
+  }, [aiMindmap, layout]);
 
   // Schakel automatisch naar AI-modus als nieuwe mindmap binnenkomt
   useEffect(() => {
@@ -2943,8 +3381,8 @@ const MindMap = ({notes, allTags, onSelectNote, aiMindmap}) => {
         `${aiMindmap.branches?.length||0} takken · `,
         `${aiMindmap.branches?.reduce((a,b)=>(a+(b.children?.length||0)),0)||0} subtopics`
       ),
-      // Modus (alleen in vault-modus relevant)
-      !aiMode && React.createElement("div",{style:{display:"flex",gap:"5px",alignItems:"center"}},
+      // Modus (bekijk/bewerk) — beschikbaar in beide modi
+      React.createElement("div",{style:{display:"flex",gap:"5px",alignItems:"center"}},
         React.createElement("span",{style:{fontSize:"9px",color:"rgba(138,198,242,0.5)",
           letterSpacing:"2px",flex:1}},"MODUS"),
         [{id:"view",label:"👁 bekijk"},{id:"edit",label:"✏ bewerk"}].map(m=>
@@ -2956,8 +3394,8 @@ const MindMap = ({notes, allTags, onSelectNote, aiMindmap}) => {
           },m.label))
       ),
 
-      // Layout + weergave + tag filter: alleen in vault-modus
-      !aiMode && React.createElement(React.Fragment,null,
+      // Layout + weergave — in vault-modus ook tag-filter
+      React.createElement(React.Fragment,null,
         // Layout
         React.createElement("div",{style:{display:"flex",gap:"5px",alignItems:"center"}},
           React.createElement("span",{style:{fontSize:"9px",color:"rgba(138,198,242,0.5)",
@@ -2970,8 +3408,8 @@ const MindMap = ({notes, allTags, onSelectNote, aiMindmap}) => {
                      borderRadius:"4px",padding:"2px 10px",fontSize:"12px",cursor:"pointer"}
             },l.label))
         ),
-        // Weergave
-        React.createElement("div",{style:{display:"flex",gap:"5px",flexWrap:"wrap"}},
+        // Weergave (tags/notities toggle alleen zinvol in vault-modus)
+        !aiMode && React.createElement("div",{style:{display:"flex",gap:"5px",flexWrap:"wrap"}},
           [{label:"tags",val:showTags,set:setShowTags},
            {label:"notities",val:showNotes,set:setShowNotes}].map(({label,val,set})=>
             React.createElement("button",{key:label,onClick:()=>set(v=>!v),
@@ -2981,8 +3419,8 @@ const MindMap = ({notes, allTags, onSelectNote, aiMindmap}) => {
                      borderRadius:"4px",padding:"2px 9px",fontSize:"10px",cursor:"pointer"}
             },val?"✓ "+label:"○ "+label))
         ),
-        // Tag filter
-        allTags.length>0 && React.createElement("div",null,
+        // Tag filter: alleen in vault-modus
+        !aiMode && allTags.length>0 && React.createElement("div",null,
           React.createElement("div",{style:{fontSize:"9px",color:"rgba(138,198,242,0.5)",
             letterSpacing:"2px",marginBottom:"4px"}},"TAG FILTER"),
           React.createElement("div",{style:{display:"flex",flexWrap:"wrap",gap:"3px"}},
@@ -3004,7 +3442,7 @@ const MindMap = ({notes, allTags, onSelectNote, aiMindmap}) => {
         )
       ),
 
-      // Edit-modus acties
+      // Edit-modus acties — beschikbaar in beide modi
       mode==="edit" && React.createElement("div",{
         style:{borderTop:`1px solid ${W.splitBg}`,paddingTop:"7px",
                display:"flex",gap:"5px",flexWrap:"wrap"}
@@ -3019,7 +3457,7 @@ const MindMap = ({notes, allTags, onSelectNote, aiMindmap}) => {
                  color:W.orange,borderRadius:"4px",padding:"3px 9px",
                  fontSize:"10px",cursor:"pointer"}
         },"✕ verwijder"),
-        React.createElement("button",{onClick:buildLayout,
+        React.createElement("button",{onClick:()=>aiMode?buildAiLayout():buildLayout(),
           style:{background:"none",border:`1px solid ${W.splitBg}`,color:W.fgMuted,
                  borderRadius:"4px",padding:"3px 9px",fontSize:"10px",cursor:"pointer"}
         },"↺ reset"),
@@ -3919,6 +4357,7 @@ const App = () => {
   const [tab,          setTab]         = useState("notes");
   const [search,       setSearch]      = useState("");
   const [pdfNotes,     setPdfNotes]    = useState([]);
+  const [imgNotes,     setImgNotes]    = useState([]);
   const [serverPdfs,   setServerPdfs]  = useState([]);
   const [serverImages, setServerImages]= useState([]);
   const [llmModel,     setLlmModel]    = useState("llama3.2-vision"); // gedeeld model state
@@ -3978,11 +4417,11 @@ const App = () => {
   useEffect(() => {
     const load = async () => {
       try {
-        const [ns,as,ps,imgs,cfg] = await Promise.all([
-          api.get("/notes"), api.get("/annotations"),
+        const [ns,as,ias,ps,imgs,cfg] = await Promise.all([
+          api.get("/notes"), api.get("/annotations"), api.get("/img-annotations"),
           api.get("/pdfs"),  api.get("/images"), api.get("/config"),
         ]);
-        setNotes(ns); setPdfNotes(as); setServerPdfs(ps); setServerImages(imgs||[]);
+        setNotes(ns); setPdfNotes(as); setImgNotes(ias||[]); setServerPdfs(ps); setServerImages(imgs||[]);
         setVaultPath(cfg.vault_path || "…");
         if (ns.length > 0) setSelId(ns[0].id);
         setLoaded(true);
@@ -4781,6 +5220,8 @@ const App = () => {
           serverImages, onRefresh:refreshImages, llmModel,
           setAiStatus,
           notes,
+          imgNotes, setImgNotes,
+          allTags,
           onDeleteNote: id => setNotes(p=>p.filter(n=>n.id!==id)),
           onAddNote:async(note)=>{
             const saved=await api.post("/notes",note);
