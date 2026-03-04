@@ -295,9 +295,19 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
     }
   }, [value]);
 
-  // Geef inputRef door zodat parent kan focussen
+  // Geef een object terug met focus() + setCursor(row,col)
   useEffect(() => {
-    if (onEditorRef) onEditorRef(inputRef.current);
+    if (onEditorRef) onEditorRef({
+      focus: () => inputRef.current?.focus(),
+      setCursor: (row, col) => {
+        const s = S.current;
+        s.cur.row = Math.max(0, Math.min(row, s.lines.length - 1));
+        s.cur.col = Math.max(0, Math.min(col, (s.lines[s.cur.row]||"").length));
+        scrollToCursor(s);
+        inputRef.current?.focus();
+        draw();
+      },
+    });
   }, [onEditorRef]);
 
   // ── Canvas setup & resize ─────────────────────────────────────────────────
@@ -1709,10 +1719,22 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs}) 
       ),
       React.createElement("div",{style:{flex:1,overflow:"auto"}},
         panelHl.length===0
-          ?React.createElement("div",{style:{padding:"28px 14px",color:W.fgMuted,fontSize:"11px",textAlign:"center",lineHeight:"1.9"}},
-              !pdfFile ? "Open een PDF om annotaties te zien"
-              : filterTag ? `Geen annotaties met #${filterTag} in ${pdfFile.name}`
-              : `Nog geen annotaties in ${pdfFile.name}`)
+          ?React.createElement("div",{style:{padding:"24px 14px",color:W.fgMuted,fontSize:"11px",textAlign:"center",lineHeight:"2"}},
+              !pdfFile
+              ? React.createElement(React.Fragment,null,
+                  React.createElement("div",{style:{fontSize:"28px",marginBottom:"8px"}},"📄"),
+                  React.createElement("div",{style:{color:W.fgDim,marginBottom:"4px"}},"Geen PDF geopend"),
+                  React.createElement("div",{style:{fontSize:"10px",color:W.splitBg,lineHeight:"1.7"}},
+                    "Open een PDF via de toolbar.","\n","Annotaties worden hier getoond.")
+                )
+              : filterTag
+                ? `Geen annotaties met #${filterTag}`
+                : React.createElement(React.Fragment,null,
+                    React.createElement("div",{style:{fontSize:"20px",marginBottom:"8px"}},"✏"),
+                    React.createElement("div",{style:{color:W.fgDim}},"Nog geen annotaties"),
+                    React.createElement("div",{style:{fontSize:"10px",color:W.splitBg,lineHeight:"1.7",marginTop:"4px"}},
+                      "Selecteer tekst in de PDF","\n","om een annotatie te maken.")
+                  ))
           :panelHl.map(h=>{
             const col=HCOLORS.find(c=>c.id===h.colorId)||HCOLORS[0];
             const isEditing=editingId===h.id;
@@ -2065,10 +2087,11 @@ const App = () => {
 
   // ── Tab bar (gedeeld tussen top en bottom nav) ────────────────────────────
   const tabs = [
-    {id:"notes", icon:"📝", label:"Notities"},
-    {id:"graph", icon:"🕸",  label:"Graaf"},
-    {id:"pdf",   icon:"📄", label:"PDF"},
-    {id:"llm",   icon:"🧠", label:"Notebook"},
+    {id:"notes",   icon:"📝", label:"Notities"},
+    {id:"graph",   icon:"🕸",  label:"Graaf"},
+    {id:"pdf",     icon:"📄", label:"PDF"},
+    {id:"mindmap", icon:"🗺",  label:"Mindmap"},
+    {id:"llm",     icon:"🧠", label:"Notebook"},
   ];
 
   // ── Top bar (desktop/tablet) ──────────────────────────────────────────────
@@ -2207,12 +2230,8 @@ const App = () => {
       onKeyDown:e=>{
         if(e.key==="Enter"){
           e.preventDefault();
-          contentRef.current?.focus();
-          // Stuur G zodat canvas-cursor naar laatste regel springt (regel 3 = schrijfpositie)
-          setTimeout(()=>{
-            const ev=new KeyboardEvent("keydown",{key:"G",bubbles:true,cancelable:true});
-            document.activeElement?.dispatchEvent(ev);
-          }, 40);
+          // Zet cursor direct op regel 3 (index 2), kolom 0 — na datum + lege regel
+          setTimeout(()=>{ contentRef.current?.setCursor(2, 0); }, 40);
         }
         if(e.key==="Escape"){ closeEdit(); }
       },
@@ -2432,6 +2451,10 @@ const App = () => {
       : tab==="pdf" ? React.createElement("div",{style:{flex:1,overflow:"hidden"}},
         React.createElement(PDFViewer,{pdfNotes,setPdfNotes,allTags,serverPdfs,onRefreshPdfs:refreshPdfs})
       )
+      : tab==="mindmap" ? React.createElement("div",{style:{flex:1,overflow:"hidden"}},
+        React.createElement(MindMap,{notes,allTags,
+          onSelectNote:id=>{ setSelId(id); setTab("notes"); }})
+      )
       : tab==="llm" ? React.createElement("div",{style:{flex:1,overflow:"hidden"}},
         React.createElement(LLMNotebook,{notes,pdfNotes,serverPdfs,allTags})
       )
@@ -2443,6 +2466,652 @@ const App = () => {
 };
 
 
+
+
+
+// ── Mindmap ────────────────────────────────────────────────────────────────────
+// Interactieve mindmap op basis van notities en tags.
+// Layout: radiale boom — root in midden, takken per tag, notities als bladeren.
+// Editor: klik node om te hernoemen/verwijderen, sleep om te herpositioneren.
+// Exporteerbaar als JSON (opgeslagen in vault).
+
+const MM_NODE_W  = 130;
+const MM_NODE_H  = 32;
+const MM_RADIUS  = 200;  // afstand root→tag
+const MM_LEAF_R  = 140;  // afstand tag→notitie
+
+const MindMap = ({notes, allTags, onSelectNote}) => {
+  const { useState, useEffect, useRef, useCallback, useMemo } = React;
+
+  // ── Node state ────────────────────────────────────────────────────────────
+  // Elke node: {id, label, type:'root'|'tag'|'note'|'custom', x, y, parentId, noteId?, color?}
+  const [nodes,      setNodes]     = useState([]);
+  const [edges,      setEdges]     = useState([]);
+  const [selId,      setSelId]     = useState(null);
+  const [editingId,  setEditingId] = useState(null);
+  const [editLabel,  setEditLabel] = useState("");
+  const [zoom,       setZoom]      = useState(1);
+  const [pan,        setPan]       = useState({x:0, y:0});
+  const [mode,       setMode]      = useState("view"); // view | edit
+  const [layout,     setLayout]    = useState("radial"); // radial | tree | free
+  const [showTags,   setShowTags]  = useState(true);
+  const [showNotes,  setShowNotes] = useState(true);
+  const [tagFilter,  setTagFilter] = useState(null); // null = alle tags
+
+  const cvRef     = useRef(null);
+  const dragRef   = useRef(null);   // {nodeId, startX, startY, origX, origY}
+  const panRef    = useRef(null);   // {startX, startY, origPanX, origPanY}
+  const afRef     = useRef(null);
+  const editRef   = useRef(null);
+  const nodesRef  = useRef([]);     // voor canvas rendering
+  const edgesRef  = useRef([]);
+  const selRef    = useRef(null);
+
+  // Sync refs
+  nodesRef.current = nodes;
+  edgesRef.current = edges;
+  selRef.current   = selId;
+
+  // ── Tag kleur palet ───────────────────────────────────────────────────────
+  const tagColorMap = useMemo(() => {
+    const palette = [W.blue, W.comment, W.orange, W.purple,
+                     W.string, W.type, W.keyword, "#e8d44d"];
+    const map = {};
+    allTags.forEach((t,i) => { map[t] = palette[i % palette.length]; });
+    return map;
+  }, [allTags]);
+
+  // ── Bouw mindmap op basis van notities + tags ─────────────────────────────
+  const buildLayout = useCallback(() => {
+    const cv = cvRef.current; if (!cv) return;
+    const CW = cv.clientWidth, CH = cv.clientHeight;
+    const cx = CW / 2, cy = CH / 2;
+
+    const visibleTags = tagFilter ? [tagFilter]
+      : (showTags ? allTags : []);
+
+    const newNodes = [];
+    const newEdges = [];
+
+    // Root node
+    const root = {id:"root", label:"Zettelkasten", type:"root",
+                  x:cx, y:cy, fixed:true};
+    newNodes.push(root);
+
+    if (layout === "radial") {
+      // Radiale layout: tags als eerste ring, notities als tweede ring
+      const tagCount = visibleTags.length;
+      visibleTags.forEach((tag, ti) => {
+        const angle = (ti / tagCount) * Math.PI * 2 - Math.PI/2;
+        const tx = cx + MM_RADIUS * Math.cos(angle);
+        const ty = cy + MM_RADIUS * Math.sin(angle);
+        const tagNode = {
+          id: "tag-"+tag, label:"#"+tag, type:"tag",
+          x: tx, y: ty, color: tagColorMap[tag]||W.comment,
+          parentId:"root"
+        };
+        newNodes.push(tagNode);
+        newEdges.push({from:"root", to:"tag-"+tag});
+
+        if (showNotes) {
+          const tagNotes = notes.filter(n => (n.tags||[]).includes(tag));
+          const nCount   = tagNotes.length;
+          tagNotes.forEach((note, ni) => {
+            const spread  = Math.min(Math.PI * 0.8, (nCount * 0.35));
+            const leafAngle = angle - spread/2 + (nCount>1 ? (ni/(nCount-1))*spread : 0);
+            // Al toegevoegd? Gebruik bestaande positie
+            const existingNode = newNodes.find(n => n.id === "note-"+note.id);
+            if (!existingNode) {
+              newNodes.push({
+                id:      "note-"+note.id,
+                label:   note.title?.length > 20 ? note.title.slice(0,18)+"…" : (note.title||"–"),
+                fullLabel: note.title || "–",
+                type:    "note",
+                x:       tx + MM_LEAF_R * Math.cos(leafAngle),
+                y:       ty + MM_LEAF_R * Math.sin(leafAngle),
+                noteId:  note.id,
+                color:   tagColorMap[tag]||W.keyword,
+                parentId:"tag-"+tag,
+              });
+              newEdges.push({from:"tag-"+tag, to:"note-"+note.id});
+            } else {
+              // Extra edge van andere tag naar dezelfde notitie
+              newEdges.push({from:"tag-"+tag, to:"note-"+note.id, secondary:true});
+            }
+          });
+        }
+      });
+
+      // Notities zonder tags
+      if (showNotes) {
+        const untagged = notes.filter(n => !(n.tags||[]).length ||
+          !(n.tags||[]).some(t => visibleTags.includes(t)));
+        if (untagged.length > 0) {
+          const utAngle = tagCount > 0 ? (tagCount/(tagCount+1)) * Math.PI*2 - Math.PI/2
+                                       : 0;
+          const utNode = {id:"untagged", label:"zonder tag", type:"tag",
+                          x: cx + MM_RADIUS * Math.cos(utAngle),
+                          y: cy + MM_RADIUS * Math.sin(utAngle),
+                          color: W.fgMuted, parentId:"root"};
+          newNodes.push(utNode);
+          newEdges.push({from:"root", to:"untagged"});
+          untagged.slice(0,15).forEach((note,ni) => {
+            const spread = Math.min(Math.PI*0.8, untagged.length*0.3);
+            const la = utAngle - spread/2 + (untagged.length>1?(ni/(untagged.length-1))*spread:0);
+            newNodes.push({
+              id:"note-"+note.id, label:note.title?.slice(0,18)||(note.title||"–"),
+              fullLabel:note.title||"–", type:"note",
+              x:utNode.x + MM_LEAF_R*Math.cos(la),
+              y:utNode.y + MM_LEAF_R*Math.sin(la),
+              noteId:note.id, color:W.fgDim, parentId:"untagged"
+            });
+            newEdges.push({from:"untagged", to:"note-"+note.id});
+          });
+        }
+      }
+    } else if (layout === "tree") {
+      // Verticale boom: root bovenaan, tags als rij, notities eronder
+      const tagCount = visibleTags.length;
+      const tagSpacing = Math.min(200, (CW-80) / Math.max(tagCount,1));
+      const startX = cx - ((tagCount-1)/2) * tagSpacing;
+      visibleTags.forEach((tag, ti) => {
+        const tx = startX + ti*tagSpacing;
+        const ty = cy - 120;
+        const tagNode = {id:"tag-"+tag, label:"#"+tag, type:"tag",
+                         x:tx, y:ty, color:tagColorMap[tag]||W.comment, parentId:"root"};
+        newNodes.push(tagNode);
+        newEdges.push({from:"root", to:"tag-"+tag});
+
+        if (showNotes) {
+          const tagNotes = notes.filter(n=>(n.tags||[]).includes(tag));
+          tagNotes.forEach((note,ni) => {
+            if (newNodes.find(n=>n.id==="note-"+note.id)) {
+              newEdges.push({from:"tag-"+tag, to:"note-"+note.id, secondary:true});
+              return;
+            }
+            newNodes.push({
+              id:"note-"+note.id, label:note.title?.slice(0,18)||"–",
+              fullLabel:note.title||"–", type:"note",
+              x:tx + (ni - (tagNotes.length-1)/2)*100,
+              y:ty - 110 - Math.floor(ni/3)*60,
+              noteId:note.id, color:tagColorMap[tag]||W.keyword, parentId:"tag-"+tag
+            });
+            newEdges.push({from:"tag-"+tag, to:"note-"+note.id});
+          });
+        }
+      });
+    }
+
+    setNodes(newNodes);
+    setEdges(newEdges);
+  }, [notes, allTags, tagFilter, showTags, showNotes, layout, tagColorMap]);
+
+  useEffect(() => { buildLayout(); }, [buildLayout]);
+
+  // ── Canvas rendering ──────────────────────────────────────────────────────
+  useEffect(() => {
+    const cv = cvRef.current; if (!cv) return;
+    const ctx = cv.getContext("2d");
+    const dpr = window.devicePixelRatio||1;
+
+    const resize = () => {
+      const p = cv.parentElement;
+      cv.width  = p.clientWidth  * dpr;
+      cv.height = p.clientHeight * dpr;
+      cv.style.width  = p.clientWidth  + "px";
+      cv.style.height = p.clientHeight + "px";
+      ctx.scale(dpr, dpr);
+    };
+    resize();
+    const ro = new ResizeObserver(resize);
+    ro.observe(cv.parentElement);
+
+    const draw = () => {
+      const CW = cv.clientWidth, CH = cv.clientHeight;
+      ctx.clearRect(0,0,CW,CH);
+      ctx.fillStyle = W.bg;
+      ctx.fillRect(0,0,CW,CH);
+
+      // Lichte grid
+      ctx.strokeStyle = "rgba(255,255,255,0.02)";
+      ctx.lineWidth = 1;
+      for (let x=0; x<CW; x+=40) { ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,CH); ctx.stroke(); }
+      for (let y=0; y<CH; y+=40) { ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(CW,y); ctx.stroke(); }
+
+      ctx.save();
+      ctx.translate(pan.x, pan.y);
+      ctx.scale(zoom, zoom);
+
+      const ns = nodesRef.current;
+      const es = edgesRef.current;
+      const sel = selRef.current;
+
+      // Edges
+      es.forEach(e => {
+        const from = ns.find(n=>n.id===e.from);
+        const to   = ns.find(n=>n.id===e.to);
+        if (!from||!to) return;
+        ctx.beginPath();
+        // Bezier curve voor elegante bogen
+        const mx = (from.x+to.x)/2;
+        const my = (from.y+to.y)/2;
+        ctx.moveTo(from.x, from.y);
+        ctx.quadraticCurveTo(mx, my, to.x, to.y);
+        ctx.strokeStyle = e.secondary
+          ? "rgba(255,255,255,0.06)"
+          : (to.color||W.splitBg)+"50";
+        ctx.lineWidth = e.secondary ? 0.5 : (from.type==="root"?2:1);
+        ctx.setLineDash(e.secondary?[3,5]:[]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      });
+
+      // Nodes
+      ns.forEach(n => {
+        const isSel = n.id === sel;
+        const color = n.color || W.fgMuted;
+
+        if (n.type === "root") {
+          // Root: grote cirkel
+          const r = 38;
+          if (isSel) {
+            ctx.beginPath(); ctx.arc(n.x,n.y,r+8,0,Math.PI*2);
+            const g = ctx.createRadialGradient(n.x,n.y,0,n.x,n.y,r+8);
+            g.addColorStop(0,"rgba(138,198,242,0.25)"); g.addColorStop(1,"rgba(138,198,242,0)");
+            ctx.fillStyle=g; ctx.fill();
+          }
+          ctx.beginPath(); ctx.arc(n.x,n.y,r,0,Math.PI*2);
+          ctx.fillStyle   = isSel?"rgba(138,198,242,0.25)":"rgba(138,198,242,0.1)";
+          ctx.strokeStyle = isSel?"rgba(138,198,242,0.9)":"rgba(138,198,242,0.4)";
+          ctx.lineWidth   = isSel ? 2.5 : 1.5;
+          ctx.fill(); ctx.stroke();
+          ctx.fillStyle  = isSel ? W.statusFg : W.fg;
+          ctx.font       = `bold 13px 'Hack','Courier New',monospace`;
+          ctx.textAlign  = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText(n.label, n.x, n.y);
+
+        } else if (n.type === "tag") {
+          // Tag: afgeronde pill
+          const pw = 100, ph = 26, pr = 13;
+          const lx = n.x - pw/2, ly = n.y - ph/2;
+          if (isSel) {
+            ctx.shadowBlur = 12; ctx.shadowColor = color+"80";
+          }
+          ctx.beginPath();
+          ctx.roundRect(lx,ly,pw,ph,pr);
+          ctx.fillStyle   = color+"28";
+          ctx.strokeStyle = isSel ? color : color+"70";
+          ctx.lineWidth   = isSel ? 2 : 1.2;
+          ctx.fill(); ctx.stroke();
+          ctx.shadowBlur  = 0;
+          ctx.fillStyle   = isSel ? W.statusFg : color;
+          ctx.font        = `${isSel?"bold ":""}11px 'Hack','Courier New',monospace`;
+          ctx.textAlign   = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText(n.label, n.x, n.y);
+
+        } else {
+          // Notitie: rechthoekje
+          const nw = 124, nh = 28, nr = 5;
+          const lx = n.x - nw/2, ly = n.y - nh/2;
+          if (isSel) { ctx.shadowBlur=10; ctx.shadowColor=color+"60"; }
+          ctx.beginPath(); ctx.roundRect(lx,ly,nw,nh,nr);
+          ctx.fillStyle   = isSel ? color+"30" : W.bg2;
+          ctx.strokeStyle = isSel ? color       : color+"45";
+          ctx.lineWidth   = isSel ? 2 : 0.8;
+          ctx.fill(); ctx.stroke();
+          ctx.shadowBlur  = 0;
+          ctx.fillStyle   = isSel ? W.statusFg : W.fgDim;
+          ctx.font        = `${isSel?"bold ":""}10px 'Hack','Courier New',monospace`;
+          ctx.textAlign   = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText(n.label, n.x, n.y);
+        }
+      });
+
+      ctx.restore();
+      afRef.current = requestAnimationFrame(draw);
+    };
+
+    afRef.current = requestAnimationFrame(draw);
+    return () => {
+      cancelAnimationFrame(afRef.current);
+      ro.disconnect();
+    };
+  }, [nodes, edges, selId, zoom, pan]);
+
+  // ── Muis/touch interactie ─────────────────────────────────────────────────
+  const worldPos = useCallback((clientX, clientY) => {
+    const r = cvRef.current.getBoundingClientRect();
+    return {
+      x: (clientX - r.left - pan.x) / zoom,
+      y: (clientY - r.top  - pan.y) / zoom,
+    };
+  }, [pan, zoom]);
+
+  const nodeAt = useCallback((wx, wy) => {
+    return nodesRef.current.find(n => {
+      const dx = n.x - wx, dy = n.y - wy;
+      const hitR = n.type==="root" ? 38 : n.type==="tag" ? 55 : 65;
+      return Math.sqrt(dx*dx+dy*dy) < hitR/2 + 8;
+    });
+  }, []);
+
+  const onMouseDown = useCallback((e) => {
+    if (e.button === 1 || (e.button===0 && e.altKey)) {
+      // Middelklik of Alt+klik = pannen
+      panRef.current = {startX:e.clientX, startY:e.clientY,
+                        origPanX:pan.x, origPanY:pan.y};
+      return;
+    }
+    const {x,y} = worldPos(e.clientX, e.clientY);
+    const n = nodeAt(x,y);
+    if (n) {
+      dragRef.current = {nodeId:n.id, startX:e.clientX, startY:e.clientY,
+                         origX:n.x, origY:n.y, moved:false};
+      setSelId(n.id);
+    } else {
+      setSelId(null);
+      panRef.current = {startX:e.clientX, startY:e.clientY,
+                        origPanX:pan.x, origPanY:pan.y};
+    }
+  }, [worldPos, nodeAt, pan]);
+
+  const onMouseMove = useCallback((e) => {
+    if (panRef.current) {
+      const dx = e.clientX - panRef.current.startX;
+      const dy = e.clientY - panRef.current.startY;
+      setPan({x: panRef.current.origPanX+dx, y: panRef.current.origPanY+dy});
+      return;
+    }
+    if (!dragRef.current) return;
+    const dx = e.clientX - dragRef.current.startX;
+    const dy = e.clientY - dragRef.current.startY;
+    if (Math.abs(dx)>3||Math.abs(dy)>3) dragRef.current.moved = true;
+    const nx = dragRef.current.origX + dx/zoom;
+    const ny = dragRef.current.origY + dy/zoom;
+    setNodes(prev => prev.map(n =>
+      n.id===dragRef.current.nodeId ? {...n,x:nx,y:ny} : n
+    ));
+  }, [zoom]);
+
+  const onMouseUp = useCallback((e) => {
+    if (panRef.current) { panRef.current=null; return; }
+    if (!dragRef.current) return;
+    const {nodeId, moved} = dragRef.current;
+    dragRef.current = null;
+    if (!moved) {
+      // Klik zonder bewegen
+      const n = nodesRef.current.find(x=>x.id===nodeId);
+      if (!n) return;
+      if (n.type==="note" && n.noteId) {
+        onSelectNote?.(n.noteId);
+      }
+    }
+  }, [onSelectNote]);
+
+  const onDblClick = useCallback((e) => {
+    const {x,y} = worldPos(e.clientX, e.clientY);
+    const n = nodeAt(x,y);
+    if (n && mode==="edit") {
+      setEditingId(n.id);
+      setEditLabel(n.fullLabel||n.label);
+      setTimeout(()=>editRef.current?.focus(),30);
+    }
+  }, [worldPos, nodeAt, mode]);
+
+  const onWheel = useCallback((e) => {
+    e.preventDefault();
+    const factor = e.deltaY < 0 ? 1.1 : 0.9;
+    setZoom(z => Math.max(0.2, Math.min(3, z*factor)));
+  }, []);
+
+  // ── Nieuwe custom node toevoegen ──────────────────────────────────────────
+  const addCustomNode = () => {
+    const sel = nodesRef.current.find(n=>n.id===selId);
+    const parentId = sel?.id || "root";
+    const parent   = nodesRef.current.find(n=>n.id===parentId);
+    const angle    = Math.random() * Math.PI*2;
+    const dist     = 120;
+    const newNode  = {
+      id: "custom-"+Date.now(), label:"Nieuw", fullLabel:"Nieuw",
+      type: "custom", color: W.yellow,
+      x: (parent?.x||300) + dist*Math.cos(angle),
+      y: (parent?.y||300) + dist*Math.sin(angle),
+      parentId,
+    };
+    setNodes(p=>[...p, newNode]);
+    setEdges(p=>[...p,{from:parentId, to:newNode.id}]);
+    setSelId(newNode.id);
+    setEditingId(newNode.id);
+    setEditLabel("Nieuw");
+    setMode("edit");
+    setTimeout(()=>editRef.current?.focus(),30);
+  };
+
+  const deleteSelected = () => {
+    if (!selId || selId==="root") return;
+    setNodes(p=>p.filter(n=>n.id!==selId));
+    setEdges(p=>p.filter(e=>e.from!==selId&&e.to!==selId));
+    setSelId(null);
+  };
+
+  const commitEdit = () => {
+    if (!editingId) return;
+    setNodes(p=>p.map(n=>n.id===editingId
+      ?{...n, label:editLabel.slice(0,22)+(editLabel.length>22?"…":""),
+               fullLabel:editLabel} : n));
+    setEditingId(null);
+  };
+
+  const selNode = nodes.find(n=>n.id===selId);
+
+  // ── Render ────────────────────────────────────────────────────────────────
+  return React.createElement("div", {
+    style:{position:"relative",width:"100%",height:"100%",overflow:"hidden"}
+  },
+
+    // Canvas
+    React.createElement("canvas", {
+      ref: cvRef,
+      style:{width:"100%",height:"100%",cursor: dragRef.current?"grabbing":"crosshair"},
+      onMouseDown, onMouseMove, onMouseUp, onDblClick,
+      onWheel,
+      onContextMenu: e=>e.preventDefault(),
+    }),
+
+    // ── Controls panel linksboven ────────────────────────────────────────────
+    React.createElement("div", {
+      style:{position:"absolute",top:"10px",left:"10px",zIndex:10,
+             background:"rgba(28,28,28,0.88)",border:`1px solid ${W.splitBg}`,
+             borderRadius:"8px",padding:"10px 12px",backdropFilter:"blur(6px)",
+             display:"flex",flexDirection:"column",gap:"7px",minWidth:"210px"}
+    },
+      // Modus
+      React.createElement("div",{style:{display:"flex",gap:"5px",alignItems:"center"}},
+        React.createElement("span",{style:{fontSize:"9px",color:"rgba(138,198,242,0.5)",
+          letterSpacing:"2px",flex:1}},"MODUS"),
+        [{id:"view",label:"👁 bekijk"},{id:"edit",label:"✏ bewerk"}].map(m=>
+          React.createElement("button",{key:m.id, onClick:()=>setMode(m.id),
+            style:{background:mode===m.id?"rgba(138,198,242,0.18)":"none",
+                   border:`1px solid ${mode===m.id?"rgba(138,198,242,0.5)":W.splitBg}`,
+                   color:mode===m.id?"#a8d8f0":W.fgMuted,
+                   borderRadius:"4px",padding:"2px 8px",fontSize:"10px",cursor:"pointer"}
+          },m.label))
+      ),
+
+      // Layout
+      React.createElement("div",{style:{display:"flex",gap:"5px",alignItems:"center"}},
+        React.createElement("span",{style:{fontSize:"9px",color:"rgba(138,198,242,0.5)",
+          letterSpacing:"2px",flex:1}},"LAYOUT"),
+        [{id:"radial",label:"⊙"},{id:"tree",label:"⊤"}].map(l=>
+          React.createElement("button",{key:l.id, onClick:()=>setLayout(l.id),
+            style:{background:layout===l.id?"rgba(138,198,242,0.18)":"none",
+                   border:`1px solid ${layout===l.id?"rgba(138,198,242,0.5)":W.splitBg}`,
+                   color:layout===l.id?"#a8d8f0":W.fgMuted,
+                   borderRadius:"4px",padding:"2px 10px",fontSize:"12px",cursor:"pointer"}
+          },l.label))
+      ),
+
+      // Weergave
+      React.createElement("div",{style:{display:"flex",gap:"5px",flexWrap:"wrap"}},
+        [{label:"tags",val:showTags,set:setShowTags},
+         {label:"notities",val:showNotes,set:setShowNotes}].map(({label,val,set})=>
+          React.createElement("button",{key:label,onClick:()=>set(v=>!v),
+            style:{background:val?"rgba(138,198,242,0.12)":"none",
+                   border:`1px solid ${val?"rgba(138,198,242,0.4)":W.splitBg}`,
+                   color:val?"#a8d8f0":W.fgMuted,
+                   borderRadius:"4px",padding:"2px 9px",fontSize:"10px",cursor:"pointer"}
+          },val?"✓ "+label:"○ "+label))
+      ),
+
+      // Tag filter
+      allTags.length>0 && React.createElement("div",null,
+        React.createElement("div",{style:{fontSize:"9px",color:"rgba(138,198,242,0.5)",
+          letterSpacing:"2px",marginBottom:"4px"}},"TAG FILTER"),
+        React.createElement("div",{style:{display:"flex",flexWrap:"wrap",gap:"3px"}},
+          React.createElement("span",{
+            onClick:()=>setTagFilter(null),
+            style:{fontSize:"10px",padding:"2px 6px",borderRadius:"4px",cursor:"pointer",
+                   background:!tagFilter?"rgba(138,198,242,0.18)":"rgba(138,198,242,0.05)",
+                   color:!tagFilter?"#a8d8f0":"rgba(168,216,240,0.5)",
+                   border:`1px solid ${!tagFilter?"rgba(138,198,242,0.4)":"rgba(138,198,242,0.12)"}`}
+          },"alle"),
+          allTags.map(t=>React.createElement("span",{key:t,
+            onClick:()=>setTagFilter(tagFilter===t?null:t),
+            style:{fontSize:"10px",padding:"2px 6px",borderRadius:"4px",cursor:"pointer",
+                   background:tagFilter===t?(tagColorMap[t]||W.comment)+"25":"rgba(138,198,242,0.05)",
+                   color:tagFilter===t?(tagColorMap[t]||W.comment):"rgba(168,216,240,0.5)",
+                   border:`1px solid ${tagFilter===t?(tagColorMap[t]||W.comment)+"50":"rgba(138,198,242,0.12)"}`}
+          },"#"+t))
+        )
+      ),
+
+      // Edit-modus acties
+      mode==="edit" && React.createElement("div",{
+        style:{borderTop:`1px solid ${W.splitBg}`,paddingTop:"7px",
+               display:"flex",gap:"5px",flexWrap:"wrap"}
+      },
+        React.createElement("button",{onClick:addCustomNode,
+          style:{background:"rgba(138,198,242,0.1)",border:`1px solid rgba(138,198,242,0.3)`,
+                 color:"#a8d8f0",borderRadius:"4px",padding:"3px 9px",
+                 fontSize:"10px",cursor:"pointer"}
+        },"+ knoop"),
+        selId&&selId!=="root"&&React.createElement("button",{onClick:deleteSelected,
+          style:{background:"rgba(229,120,109,0.08)",border:`1px solid rgba(229,120,109,0.25)`,
+                 color:W.orange,borderRadius:"4px",padding:"3px 9px",
+                 fontSize:"10px",cursor:"pointer"}
+        },"✕ verwijder"),
+        React.createElement("button",{onClick:buildLayout,
+          style:{background:"none",border:`1px solid ${W.splitBg}`,color:W.fgMuted,
+                 borderRadius:"4px",padding:"3px 9px",fontSize:"10px",cursor:"pointer"}
+        },"↺ reset"),
+        React.createElement("div",{style:{fontSize:"9px",color:W.fgMuted,
+          width:"100%",marginTop:"2px"}},"dubbelklik = hernoemen · sleep = verplaatsen")
+      )
+    ),
+
+    // ── Zoom controls rechtsonder ─────────────────────────────────────────────
+    React.createElement("div",{
+      style:{position:"absolute",bottom:"14px",right:"14px",zIndex:10,
+             display:"flex",gap:"5px",alignItems:"center"}
+    },
+      React.createElement("button",{onClick:()=>setZoom(z=>Math.max(0.2,z/1.2)),
+        style:{background:W.bg2,border:`1px solid ${W.splitBg}`,color:W.fg,
+               borderRadius:"4px",padding:"4px 10px",fontSize:"16px",cursor:"pointer"}
+      },"−"),
+      React.createElement("span",{
+        onClick:()=>{setZoom(1);setPan({x:0,y:0});},
+        style:{fontSize:"10px",color:W.fgMuted,cursor:"pointer",minWidth:"38px",textAlign:"center"}
+      },Math.round(zoom*100)+"%"),
+      React.createElement("button",{onClick:()=>setZoom(z=>Math.min(3,z*1.2)),
+        style:{background:W.bg2,border:`1px solid ${W.splitBg}`,color:W.fg,
+               borderRadius:"4px",padding:"4px 10px",fontSize:"16px",cursor:"pointer"}
+      },"＋")
+    ),
+
+    // ── Geselecteerde node info rechtsbovenin ─────────────────────────────────
+    selNode && React.createElement("div",{
+      style:{position:"absolute",top:"10px",right:"10px",zIndex:10,
+             background:"rgba(28,28,28,0.9)",border:`1px solid ${selNode.color||W.splitBg}40`,
+             borderRadius:"8px",padding:"10px 14px",maxWidth:"220px",
+             backdropFilter:"blur(6px)"}
+    },
+      React.createElement("div",{style:{fontSize:"10px",color:selNode.color||W.fgMuted,
+        letterSpacing:"1px",marginBottom:"4px"}},
+        selNode.type==="root"?"ROOT":selNode.type==="tag"?"TAG":"NOTITIE"),
+      React.createElement("div",{style:{fontSize:"12px",color:W.fg,
+        fontWeight:"bold",wordBreak:"break-word",marginBottom:"6px"}},
+        selNode.fullLabel||selNode.label),
+      selNode.type==="note"&&selNode.noteId&&React.createElement("button",{
+        onClick:()=>onSelectNote?.(selNode.noteId),
+        style:{background:"rgba(138,198,242,0.1)",border:"1px solid rgba(138,198,242,0.3)",
+               color:"#a8d8f0",borderRadius:"4px",padding:"4px 10px",
+               fontSize:"10px",cursor:"pointer",width:"100%"}
+      },"→ open notitie")
+    ),
+
+    // ── Inline label-editor (bij dubbelklik in edit-modus) ────────────────────
+    editingId && React.createElement("div",{
+      style:{position:"absolute",inset:0,zIndex:50,
+             display:"flex",alignItems:"center",justifyContent:"center",
+             background:"rgba(0,0,0,0.3)"},
+      onClick:commitEdit,
+    },
+      React.createElement("div",{
+        onClick:e=>e.stopPropagation(),
+        style:{background:W.bg2,border:`2px solid rgba(138,198,242,0.5)`,
+               borderRadius:"8px",padding:"16px 20px",
+               display:"flex",flexDirection:"column",gap:"10px",
+               minWidth:"260px",boxShadow:"0 8px 32px rgba(0,0,0,0.7)"}
+      },
+        React.createElement("div",{style:{fontSize:"11px",color:"rgba(138,198,242,0.6)",
+          letterSpacing:"2px"}},"LABEL BEWERKEN"),
+        React.createElement("input",{
+          ref:editRef,
+          value:editLabel,
+          onChange:e=>setEditLabel(e.target.value),
+          onKeyDown:e=>{
+            if(e.key==="Enter"){ e.preventDefault(); commitEdit(); }
+            if(e.key==="Escape"){ setEditingId(null); }
+          },
+          style:{background:W.bg,border:`1px solid rgba(138,198,242,0.4)`,
+                 borderRadius:"5px",padding:"8px 12px",color:W.fg,
+                 fontSize:"14px",outline:"none"}
+        }),
+        React.createElement("div",{style:{display:"flex",gap:"8px"}},
+          React.createElement("button",{onClick:commitEdit,
+            style:{flex:1,background:"rgba(138,198,242,0.15)",
+                   border:"1px solid rgba(138,198,242,0.4)",
+                   color:"#a8d8f0",borderRadius:"5px",padding:"6px",
+                   fontSize:"12px",cursor:"pointer",fontWeight:"bold"}
+          },"✓ opslaan"),
+          React.createElement("button",{onClick:()=>setEditingId(null),
+            style:{background:"none",border:`1px solid ${W.splitBg}`,
+                   color:W.fgMuted,borderRadius:"5px",padding:"6px 12px",
+                   fontSize:"12px",cursor:"pointer"}
+          },"Esc")
+        )
+      )
+    ),
+
+    // ── Legenda onderin ────────────────────────────────────────────────────────
+    React.createElement("div",{
+      style:{position:"absolute",bottom:"14px",left:"50%",transform:"translateX(-50%)",
+             background:"rgba(28,28,28,0.85)",border:`1px solid ${W.splitBg}`,
+             borderRadius:"6px",padding:"5px 14px",fontSize:"10px",color:W.fgMuted,
+             display:"flex",gap:"14px",backdropFilter:"blur(8px)"}
+    },
+      React.createElement("span",null,"⊙ root"),
+      React.createElement("span",{style:{color:"#a8d8f0"}},"▬ tag"),
+      React.createElement("span",{style:{color:W.fgDim}},"□ notitie"),
+      React.createElement("span",null,"scroll = zoom"),
+      React.createElement("span",null,"sleep = pannen/verplaatsen"),
+      mode==="edit"&&React.createElement("span",{style:{color:W.yellow}},"✏ dubbelklik = bewerken")
+    )
+  );
+};
 
 
 // ── LLM Notebook ───────────────────────────────────────────────────────────────
