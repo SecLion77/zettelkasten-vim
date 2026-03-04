@@ -351,7 +351,7 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
     }
   }, [value]);
 
-  // Geef een object terug met focus() + setCursor(row,col)
+  // Geef een object terug met focus() + setCursor(row,col) + insertAtCursor(text)
   useEffect(() => {
     if (onEditorRef) onEditorRef({
       focus: () => inputRef.current?.focus(),
@@ -362,6 +362,30 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
         scrollToCursor(s);
         inputRef.current?.focus();
         draw();
+      },
+      insertAtCursor: (text) => {
+        const s = S.current;
+        // Zorg dat we in INSERT mode zijn
+        setMode("INSERT");
+        // Voeg elke karakter in (ondersteunt ook newlines via meerdere regels)
+        const parts = text.split("\n");
+        parts.forEach((part, i) => {
+          for (const ch of part) insertChar(s, ch);
+          if (i < parts.length - 1) {
+            // Newline: splits huidige regel
+            const {row, col} = s.cur;
+            const before = s.lines[row].slice(0, col);
+            const after  = s.lines[row].slice(col);
+            s.lines[row] = before;
+            s.lines.splice(row + 1, 0, after);
+            s.cur.row = row + 1;
+            s.cur.col = 0;
+          }
+        });
+        emit(s);
+        scrollToCursor(s);
+        draw();
+        inputRef.current?.focus();
       },
     });
   }, [onEditorRef]);
@@ -1611,7 +1635,7 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
   };
 
   // Alleen annotaties van de actief geopende PDF tonen
-  const fileHl = pdfFile ? highlights.filter(h=>h.file===pdfFile.name) : highlights;
+  const fileHl = pdfFile ? highlights.filter(h=>h.file===pdfFile.name) : [];
   const allAnnotTags=[...new Set(fileHl.flatMap(h=>h.tags||[]))];
   const panelHl = (filterTag ? fileHl.filter(h=>(h.tags||[]).includes(filterTag)) : fileHl)
     .sort((a,b)=>a.page-b.page);  // gesorteerd op pagina
@@ -1831,8 +1855,8 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
         )
       )
     ),
-    // Annotatiepaneel — knop om te openen (altijd zichtbaar)
-    React.createElement("button",{
+    // Annotatiepaneel — knop om te openen (alleen als PDF open is)
+    pdfFile && React.createElement("button",{
       onClick:()=>setShowAnnotPanel(p=>!p),
       title: showAnnotPanel ? "Annotaties verbergen" : "Annotaties tonen",
       style:{
@@ -1845,10 +1869,10 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
         padding:"8px 5px", zIndex:10, lineHeight:1,
         writingMode:"vertical-rl",
       }
-    }, showAnnotPanel ? "▶" : "◀ " + (highlights.length > 0 ? highlights.length : "")),
+    }, showAnnotPanel ? "▶" : "◀ " + (fileHl.length > 0 ? fileHl.length : "")),
 
     // Annotations panel
-    showAnnotPanel&&React.createElement("div",{style:{
+    pdfFile && showAnnotPanel&&React.createElement("div",{style:{
       width:"280px",flexShrink:0,background:W.bg2,
       borderLeft:`1px solid ${W.splitBg}`,
       display:"flex",flexDirection:"column",
@@ -2035,7 +2059,7 @@ const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote, setAiStatu
     setAiStatus?.("AI beschrijft: "+stem.slice(0,22)+"…");
     try {
       const model = llmModel || "llava";
-      const res   = await api.llmDescribeImage(fname, model==="llama3"||model==="mistral" ? "llava" : model);
+      const res   = await api.llmDescribeImage(fname, model||"llama3.2-vision");
       if (res?.description) {
         setDescs(p=>({...p, [fname]: res.description}));
         // Automatisch notitie aanmaken op de achtergrond
@@ -2927,11 +2951,11 @@ const MindMap = ({notes, allTags, onSelectNote}) => {
 //   ollama serve                (start de server op poort 11434)
 
 const SUGGESTED_MODELS = [
-  { id:"llama3",        label:"Llama 3 8B",      desc:"Meta · goed algemeen gebruik, Nederlands" },
-  { id:"mistral",       label:"Mistral 7B",       desc:"Mistral AI · snel, goed voor EU-talen" },
-  { id:"phi3:medium",   label:"Phi-3 Medium 14B", desc:"Microsoft · sterk in redeneren & analyse" },
-  { id:"gemma2",        label:"Gemma 2 9B",       desc:"Google · modern, goed voor lange context" },
-  { id:"deepseek-r1",   label:"DeepSeek-R1 7B",   desc:"DeepSeek · chain-of-thought redeneren" },
+  { id:"llama3.2-vision", label:"Llama 3.2 Vision 11B", desc:"Meta · tekst + afbeeldingen, aanbevolen" },
+  { id:"llama3",          label:"Llama 3 8B",            desc:"Meta · snel, goed algemeen gebruik" },
+  { id:"mistral",         label:"Mistral 7B",             desc:"Mistral AI · snel, goed voor EU-talen" },
+  { id:"phi3:medium",     label:"Phi-3 Medium 14B",      desc:"Microsoft · sterk in redeneren & analyse" },
+  { id:"gemma2",          label:"Gemma 2 9B",             desc:"Google · modern, goed voor lange context" },
 ];
 
 const LLMNotebook = ({notes, pdfNotes, serverPdfs, serverImages, allTags, onAddNote, llmModel, setLlmModel}) => {
@@ -2941,7 +2965,7 @@ const LLMNotebook = ({notes, pdfNotes, serverPdfs, serverImages, allTags, onAddN
   const [messages,      setMessages]     = useState([]);
   const [input,         setInput]        = useState("");
   const [streaming,     setStreaming]    = useState(false);
-  const [model,         setModel]        = useState("llama3");
+  const [model,         setModel]        = useState("llama3.2-vision");
   const [availModels,   setAvailModels]  = useState([]);
   const [ollamaStatus,  setOllamaStatus] = useState("onbekend"); // ok / fout / laden
   const [ollamaUrl,     setOllamaUrl]    = useState("http://localhost:11434");
@@ -3682,7 +3706,7 @@ const App = () => {
   const [pdfNotes,     setPdfNotes]    = useState([]);
   const [serverPdfs,   setServerPdfs]  = useState([]);
   const [serverImages, setServerImages]= useState([]);
-  const [llmModel,     setLlmModel]    = useState("llama3"); // gedeeld model state
+  const [llmModel,     setLlmModel]    = useState("llama3.2-vision"); // gedeeld model state
   const [tagFilter,    setTagFilter]   = useState(null);
   const [showSettings, setShowSettings]= useState(false);
   const [vaultPath,    setVaultPath]   = useState("…");
@@ -3693,6 +3717,8 @@ const App = () => {
   const [renderMode,    setRenderMode]  = useState("plain"); // plain | rich
   const [aiStatus,      setAiStatus]    = useState(null);  // null | string — AI bezig indicator
   const [showMediaMenu, setShowMediaMenu] = useState(false); // media koppelen dropdown
+  const [showNoteLink,  setShowNoteLink]  = useState(false); // notitie-link dropdown
+  const [noteLinkSearch, setNoteLinkSearch] = useState(""); // zoekterm in link-dropdown
 
   // Sluit media-dropdown bij klik buiten
   React.useEffect(()=>{
@@ -3701,6 +3727,14 @@ const App = () => {
     setTimeout(()=>document.addEventListener("click",h),0);
     return ()=>document.removeEventListener("click",h);
   },[showMediaMenu]);
+
+  // Sluit notitie-link dropdown bij klik buiten
+  React.useEffect(()=>{
+    if(!showNoteLink) return;
+    const h=()=>{ setShowNoteLink(false); setNoteLinkSearch(""); };
+    setTimeout(()=>document.addEventListener("click",h),0);
+    return ()=>document.removeEventListener("click",h);
+  },[showNoteLink]);
 
   const {w: winW} = useWindowSize();
   const isMobile  = winW < 768;
@@ -4134,6 +4168,83 @@ const App = () => {
              flexShrink:0,
              WebkitTapHighlightColor:"transparent"}
     }, b.label)),
+    // ── 🔗 Notitie-link dropdown ───────────────────────────────────────────
+    React.createElement("div",{style:{position:"relative",flexShrink:0},
+      onClick:e=>e.stopPropagation()},
+      React.createElement("button",{
+        onClick:()=>{ setShowNoteLink(v=>!v); setNoteLinkSearch(""); },
+        title:"Link naar een andere notitie invoegen",
+        style:{background:showNoteLink?"rgba(159,202,86,0.15)":"none",
+               border:`1px solid ${showNoteLink?"rgba(159,202,86,0.5)":W.splitBg}`,
+               borderRadius:"6px",padding:isMobile?"7px 12px":"4px 10px",
+               color:showNoteLink?W.comment:W.fgMuted,
+               fontSize:isMobile?"13px":"11px",cursor:"pointer",flexShrink:0}
+      },"🔗 link"),
+      showNoteLink && React.createElement("div",{
+        style:{position:"absolute",top:"calc(100% + 4px)",right:0,zIndex:210,
+               background:W.bg2,border:`1px solid ${W.splitBg}`,borderRadius:"7px",
+               width:"280px",maxHeight:"360px",display:"flex",flexDirection:"column",
+               boxShadow:"0 8px 32px rgba(0,0,0,0.7)"}
+      },
+        // Zoekbalk
+        React.createElement("div",{style:{padding:"8px 10px",borderBottom:`1px solid ${W.splitBg}`,flexShrink:0}},
+          React.createElement("input",{
+            autoFocus:true,
+            value:noteLinkSearch,
+            onChange:e=>setNoteLinkSearch(e.target.value),
+            placeholder:"Zoek notitie…",
+            style:{width:"100%",background:"rgba(255,255,255,0.06)",
+                   border:`1px solid ${W.splitBg}`,borderRadius:"5px",
+                   padding:"5px 9px",color:W.fg,fontSize:"12px",outline:"none",
+                   fontFamily:"inherit"}
+          })
+        ),
+        // Notitie-lijst gefilterd op zoekterm
+        React.createElement("div",{style:{overflowY:"auto",flex:1}},
+          (notes
+            .filter(n=> n.id !== selId && ( // huidige notitie uitsluiten
+              !noteLinkSearch ||
+              n.title.toLowerCase().includes(noteLinkSearch.toLowerCase()) ||
+              (n.tags||[]).some(t=>t.toLowerCase().includes(noteLinkSearch.toLowerCase()))
+            ))
+            .slice(0,40)
+          ).length === 0
+            ? React.createElement("div",{style:{padding:"20px",color:W.fgMuted,
+                fontSize:"11px",textAlign:"center"}},"Geen notities gevonden")
+            : (notes
+                .filter(n=> n.id !== selId && (
+                  !noteLinkSearch ||
+                  n.title.toLowerCase().includes(noteLinkSearch.toLowerCase()) ||
+                  (n.tags||[]).some(t=>t.toLowerCase().includes(noteLinkSearch.toLowerCase()))
+                ))
+                .slice(0,40)
+              ).map(n => React.createElement("div",{
+                key:n.id,
+                onClick:()=>{
+                  // Voeg [[notitie-titel]] in op cursor positie
+                  const link = "[["+n.title+"]]";
+                  if (contentRef.current?.insertAtCursor) {
+                    contentRef.current.insertAtCursor(link);
+                  } else {
+                    setEditContent(c=>c+link);
+                  }
+                  setShowNoteLink(false); setNoteLinkSearch("");
+                },
+                style:{padding:"8px 12px",cursor:"pointer",
+                       borderBottom:`1px solid rgba(255,255,255,0.03)`,
+                       display:"flex",flexDirection:"column",gap:"2px"}
+              },
+                React.createElement("span",{style:{
+                  fontSize:"12px",color:W.fg,
+                  overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},
+                  n.title),
+                (n.tags||[]).length>0 && React.createElement("span",{
+                  style:{fontSize:"9px",color:W.comment,letterSpacing:"0.5px"}},
+                  (n.tags||[]).map(t=>"#"+t).join("  "))
+              ))
+        )
+      )
+    ),
     // ── 📎 Media koppelen dropdown ─────────────────────────────────────────
     React.createElement("div",{style:{position:"relative",flexShrink:0}},
       React.createElement("button",{

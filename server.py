@@ -128,19 +128,95 @@ class VaultManager:
     def get_pdf_path(self, filename):
         p=self.pdf_dir/filename; return p if p.exists() else None
     def extract_pdf_text(self, filename, max_chars=12000):
+        """Extraheer tekst uit PDF — eerst puur stdlib, dan optionele packages."""
         p=self.get_pdf_path(filename)
         if not p: return ""
+
+        # ── Methode 1: pure stdlib (zlib + struct) ────────────────────────────
+        try:
+            text = self._extract_pdf_stdlib(p.read_bytes(), max_chars)
+            if len(text.strip()) > 100:
+                return text
+        except Exception: pass
+
+        # ── Methode 2: pypdf (optioneel) ──────────────────────────────────────
         try:
             import pypdf
             reader=pypdf.PdfReader(str(p))
             text="\n\n".join(page.extract_text() or "" for page in reader.pages[:30])
             if len(text.strip())>100: return text[:max_chars]
-        except: pass
+        except Exception: pass
+
+        # ── Methode 3: pdfminer (optioneel) ───────────────────────────────────
         try:
             from pdfminer.high_level import extract_text as pm
             return (pm(str(p),maxpages=20) or "")[:max_chars]
-        except: pass
+        except Exception: pass
         return ""
+
+    def _extract_pdf_stdlib(self, data: bytes, max_chars=12000) -> str:
+        """
+        Pure-Python PDF tekst extractie zonder externe packages.
+        Werkt voor de meeste tekst-PDF's (geen gescande/encrypted).
+        """
+        import struct, zlib, re as _re
+
+        text_parts = []
+
+        # Decompress streams
+        def decompress(stream_data):
+            try:    return zlib.decompress(stream_data)
+            except:
+                try: return zlib.decompress(stream_data, -15)   # raw deflate
+                except: return stream_data
+
+        # Zoek alle streams in het PDF
+        stream_re = _re.compile(rb'stream\r?\n(.*?)\r?\nendstream', _re.DOTALL)
+        filter_re = _re.compile(rb'/Filter\s*/FlateDecode')
+
+        # Split in objects
+        obj_re = _re.compile(rb'\d+ \d+ obj(.*?)endobj', _re.DOTALL)
+
+        for obj_match in obj_re.finditer(data):
+            obj_body = obj_match.group(1)
+            stream_match = stream_re.search(obj_body)
+            if not stream_match:
+                continue
+            stream_data = stream_match.group(1)
+            if filter_re.search(obj_body):
+                stream_data = decompress(stream_data)
+            # Extraheer tekst uit PDF content streams
+            # Zoek Tj, TJ, ' en " operators
+            try:
+                decoded = stream_data.decode('latin-1', errors='replace')
+            except:
+                continue
+            # BT ... ET blokken (text objects)
+            for bt_block in _re.findall(r'BT(.*?)ET', decoded, _re.DOTALL):
+                # Haal strings op uit Tj/TJ/'/"
+                for m in _re.finditer(r'\(([^)]*)\)\s*(?:Tj|\'|")', bt_block):
+                    s = m.group(1)
+                    # Decode PDF string escapes
+                    s = s.replace('\\n','\n').replace('\\r','\r').replace('\\t','\t')
+                    s = _re.sub(r'\\([0-7]{1,3})',
+                        lambda x: chr(int(x.group(1),8)), s)
+                    s = s.replace('\\(','(').replace('\\)',')')
+                    if s.strip(): text_parts.append(s)
+                # TJ arrays: [(str) num (str) ...]
+                for m in _re.finditer(r'\[(.*?)\]\s*TJ', bt_block, _re.DOTALL):
+                    for s in _re.findall(r'\(([^)]*)\)', m.group(1)):
+                        s = s.replace('\\n','\n').replace('\\t','\t')
+                        s = _re.sub(r'\\([0-7]{1,3})',
+                            lambda x: chr(int(x.group(1),8)), s)
+                        if s.strip(): text_parts.append(s)
+                text_parts.append('\n')
+
+        result = ' '.join(text_parts)
+        # Schoon op: meerdere spaties/newlines samenvoegen
+        import re as re2
+        result = re2.sub(r' {3,}', '  ', result)
+        result = re2.sub(r'\n{3,}', '\n\n', result)
+        return result[:max_chars]
 
     # Images
     def list_images(self):
@@ -319,7 +395,7 @@ class ZKHandler(BaseHTTPRequestHandler):
 
     def _llm_chat(self):
         body=self._body()
-        model=body.get("model","llama3")
+        model=body.get("model","llama3.2-vision")
         messages=body.get("messages",[])
         ctx_notes=body.get("context_notes",[])
         ctx_pdfs=body.get("context_pdfs",[])
@@ -377,24 +453,70 @@ class ZKHandler(BaseHTTPRequestHandler):
 
     def _llm_summarize_pdf(self):
         body=self._body()
-        fname=body.get("filename",""); model=body.get("model","llama3")
+        fname=body.get("filename",""); model=body.get("model","llama3.2-vision")
         if not fname: return self._send(400,{"error":"filename vereist"})
-        text=self.vault.extract_pdf_text(fname,10000)
-        if not text.strip():
-            return self._send(200,{"ok":False,"error":"Geen tekst extraheerbaar. Installeer pypdf: pip install pypdf","summary":""})
-        prompt=("Maak een uitgebreide Nederlandstalige samenvatting in Markdown. "
-                "Gebruik headers (##), bullets (-) en bold (**tekst**). "
-                "Structuur: 1) Kernpunten, 2) Hoofdonderwerpen, 3) Conclusies.\n\n"
-                "--- PDF ---\n"+text+"\n--- EINDE ---")
+
+        # Probeer eerst tekstextractie
+        text=self.extract_pdf_text(fname,10000)
+
+        # Als tekst beschikbaar: stuur als tekst-prompt
+        if text.strip():
+            prompt=("Maak een uitgebreide Nederlandstalige samenvatting in Markdown. "
+                    "Gebruik headers (##), bullets (-) en bold (**tekst**). "
+                    "Structuur: 1) Kernpunten, 2) Hoofdonderwerpen, 3) Conclusies.\n\n"
+                    "--- PDF ---\n"+text+"\n--- EINDE ---")
+            try:
+                r=self._ollama_post("/api/generate",{"model":model,"prompt":prompt,"stream":False},180)
+                return self._send(200,{"ok":True,"summary":r.get("response","").strip(),"filename":fname})
+            except Exception as e:
+                # Fallback: probeer zonder vision
+                try:
+                    r=self._ollama_post("/api/generate",{"model":"llama3.2-vision","prompt":prompt,"stream":False},180)
+                    return self._send(200,{"ok":True,"summary":r.get("response","").strip(),"filename":fname})
+                except Exception as e2:
+                    return self._send(200,{"ok":False,"error":str(e2),"summary":""})
+
+        # Geen tekst: probeer visuele samenvatting met eerste pagina als afbeelding
+        img_data = self._pdf_first_page_image(fname)
+        if img_data:
+            prompt=("Dit is de eerste pagina van een PDF. "
+                    "Maak een Nederlandstalige samenvatting in Markdown van wat je ziet. "
+                    "Gebruik headers (##) en bullets (-).")
+            try:
+                r=self._ollama_post("/api/generate",
+                    {"model":model,"prompt":prompt,"images":[img_data],"stream":False},120)
+                return self._send(200,{"ok":True,"summary":r.get("response","").strip(),
+                                       "filename":fname,"method":"vision"})
+            except Exception as e:
+                return self._send(200,{"ok":False,
+                    "error":"Geen tekst extraheerbaar en vision mislukt: "+str(e),"summary":""})
+
+        return self._send(200,{"ok":False,
+            "error":"Geen tekst extraheerbaar uit dit PDF (mogelijk gescand/beveiligd)","summary":""})
+
+    def _pdf_first_page_image(self, filename):
+        """Render eerste PDF-pagina naar base64 PNG via stdlib (zonder PIL)."""
         try:
-            r=self._ollama_post("/api/generate",{"model":model,"prompt":prompt,"stream":False},180)
-            return self._send(200,{"ok":True,"summary":r.get("response","").strip(),"filename":fname})
-        except Exception as e:
-            return self._send(200,{"ok":False,"error":str(e),"summary":""})
+            import subprocess, tempfile, os
+            pdf_path = self.get_pdf_path(filename)
+            if not pdf_path: return None
+            # Probeer pdftoppm (poppler, vaak aanwezig)
+            with tempfile.TemporaryDirectory() as td:
+                out = os.path.join(td, "page")
+                r = subprocess.run(
+                    ["pdftoppm","-r","120","-l","1","-png",str(pdf_path),out],
+                    capture_output=True, timeout=15)
+                if r.returncode == 0:
+                    imgs = sorted([f for f in os.listdir(td) if f.endswith(".png")])
+                    if imgs:
+                        import base64
+                        return base64.b64encode(open(os.path.join(td,imgs[0]),"rb").read()).decode()
+        except Exception: pass
+        return None
 
     def _llm_describe_image(self):
         body=self._body()
-        fname=body.get("filename",""); model=body.get("model","llava")
+        fname=body.get("filename",""); model=body.get("model","llama3.2-vision")
         if not fname: return self._send(400,{"error":"filename vereist"})
         img=self.vault.image_as_base64(fname)
         if not img: return self._send(404,{"error":"Afbeelding niet gevonden"})
@@ -404,12 +526,18 @@ class ZKHandler(BaseHTTPRequestHandler):
             r=self._ollama_post("/api/generate",{"model":model,"prompt":prompt,"images":[img["data"]],"stream":False},120)
             return self._send(200,{"ok":True,"description":r.get("response","").strip(),"filename":fname})
         except Exception as e:
-            return self._send(200,{"ok":True,"description":"Afbeelding: "+fname+" (llava niet beschikbaar — ollama pull llava)",
-                                   "filename":fname,"warning":str(e)})
+            # Fallback naar llava
+            try:
+                r=self._ollama_post("/api/generate",{"model":"llava","prompt":prompt,"images":[img["data"]],"stream":False},120)
+                return self._send(200,{"ok":True,"description":r.get("response","").strip(),"filename":fname})
+            except Exception as e2:
+                return self._send(200,{"ok":True,
+                    "description":"Afbeelding: "+fname+" (vision model niet beschikbaar — ollama pull llama3.2-vision)",
+                    "filename":fname,"warning":str(e2)})
 
     def _llm_mindmap(self):
         body=self._body()
-        model=body.get("model","llama3")
+        model=body.get("model","llama3.2-vision")
         ctx_notes=body.get("context_notes",[])
         ctx_pdfs=body.get("context_pdfs",[])
         parts=[]
@@ -464,7 +592,7 @@ def main():
   Lokaal  : http://localhost:{args.port}
   Netwerk : http://{local_ip}:{args.port}
   Logging : {"aan" if args.verbose else "uit  (--verbose)"}
-  LLM     : ollama serve  +  ollama pull llama3  +  ollama pull llava
+  LLM     : ollama serve  +  ollama pull llama3.2-vision
   Stop    : Ctrl+C
 """)
     if not args.no_browser:
