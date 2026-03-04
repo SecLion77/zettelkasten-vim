@@ -105,6 +105,14 @@
 <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>
+  // Stel workerSrc direct in zodat de component hem altijd klaar vindt
+  if(window.pdfjsLib){
+    // Gebruik dezelfde CDN voor de worker — of fake worker als CDN niet beschikbaar
+    pdfjsLib.GlobalWorkerOptions.workerSrc =
+      "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+  }
+</script>
 <script src="app.js"></script>
 </body>
 </html>

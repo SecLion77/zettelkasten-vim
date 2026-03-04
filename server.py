@@ -155,68 +155,113 @@ class VaultManager:
         return ""
 
     def _extract_pdf_stdlib(self, data: bytes, max_chars=12000) -> str:
-        """
-        Pure-Python PDF tekst extractie zonder externe packages.
-        Werkt voor de meeste tekst-PDF's (geen gescande/encrypted).
-        """
-        import struct, zlib, re as _re
+        """Verbeterde pure-Python PDF tekst extractie — geen externe packages nodig.
+        Ondersteunt FlateDecode streams, Tj/TJ operatoren, ToUnicode CMap, UTF-16BE."""
+        import zlib, re as _re
 
-        text_parts = []
-
-        # Decompress streams
-        def decompress(stream_data):
-            try:    return zlib.decompress(stream_data)
-            except:
-                try: return zlib.decompress(stream_data, -15)   # raw deflate
-                except: return stream_data
-
-        # Zoek alle streams in het PDF
-        stream_re = _re.compile(rb'stream\r?\n(.*?)\r?\nendstream', _re.DOTALL)
-        filter_re = _re.compile(rb'/Filter\s*/FlateDecode')
-
-        # Split in objects
-        obj_re = _re.compile(rb'\d+ \d+ obj(.*?)endobj', _re.DOTALL)
-
-        for obj_match in obj_re.finditer(data):
-            obj_body = obj_match.group(1)
-            stream_match = stream_re.search(obj_body)
-            if not stream_match:
-                continue
-            stream_data = stream_match.group(1)
-            if filter_re.search(obj_body):
-                stream_data = decompress(stream_data)
-            # Extraheer tekst uit PDF content streams
-            # Zoek Tj, TJ, ' en " operators
+        def decode_str(raw):
+            buf, i = [], 0
+            while i < len(raw):
+                if raw[i] == chr(92) and i+1 < len(raw):
+                    c = raw[i+1]
+                    if c.isdigit():
+                        j = i+1
+                        while j < i+4 and j < len(raw) and raw[j].isdigit(): j += 1
+                        buf.append(chr(int(raw[i+1:j], 8) & 0xFF)); i = j; continue
+                    buf.append({'n':'\n','r':'\r','t':'\t','b':'\x08','f':'\x0c',
+                                '(':')',')':")",'\\\\':chr(92)}.get(c, c))
+                    i += 2
+                else:
+                    buf.append(raw[i]); i += 1
+            s = ''.join(buf)
+            if len(s) >= 2 and s[0] == chr(0xFE) and s[1] == chr(0xFF):
+                try: return s[2:].encode('latin-1').decode('utf-16-be', errors='replace')
+                except: pass
             try:
-                decoded = stream_data.decode('latin-1', errors='replace')
-            except:
-                continue
-            # BT ... ET blokken (text objects)
-            for bt_block in _re.findall(r'BT(.*?)ET', decoded, _re.DOTALL):
-                # Haal strings op uit Tj/TJ/'/"
-                for m in _re.finditer(r'\(([^)]*)\)\s*(?:Tj|\'|")', bt_block):
-                    s = m.group(1)
-                    # Decode PDF string escapes
-                    s = s.replace('\\n','\n').replace('\\r','\r').replace('\\t','\t')
-                    s = _re.sub(r'\\([0-7]{1,3})',
-                        lambda x: chr(int(x.group(1),8)), s)
-                    s = s.replace('\\(','(').replace('\\)',')')
-                    if s.strip(): text_parts.append(s)
-                # TJ arrays: [(str) num (str) ...]
-                for m in _re.finditer(r'\[(.*?)\]\s*TJ', bt_block, _re.DOTALL):
-                    for s in _re.findall(r'\(([^)]*)\)', m.group(1)):
-                        s = s.replace('\\n','\n').replace('\\t','\t')
-                        s = _re.sub(r'\\([0-7]{1,3})',
-                            lambda x: chr(int(x.group(1),8)), s)
-                        if s.strip(): text_parts.append(s)
-                text_parts.append('\n')
+                b = s.encode('latin-1')
+                try: return b.decode('utf-8')
+                except: return b.decode('latin-1', errors='replace')
+            except: return s
 
-        result = ' '.join(text_parts)
-        # Schoon op: meerdere spaties/newlines samenvoegen
-        import re as re2
-        result = re2.sub(r' {3,}', '  ', result)
-        result = re2.sub(r'\n{3,}', '\n\n', result)
-        return result[:max_chars]
+        def inflate(raw):
+            for w in (15, -15, 47):
+                try: return zlib.decompress(raw, w)
+                except: pass
+            return raw
+
+        def parse_cmap(txt):
+            m = {}
+            for blk in _re.findall(r'beginbfchar(.*?)endbfchar', txt, _re.DOTALL):
+                for x in _re.finditer(r'<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>', blk):
+                    try: m[int(x.group(1),16)] = chr(int(x.group(2),16))
+                    except: pass
+            for blk in _re.findall(r'beginbfrange(.*?)endbfrange', txt, _re.DOTALL):
+                for x in _re.finditer(r'<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>', blk):
+                    try:
+                        s,e,u = int(x.group(1),16),int(x.group(2),16),int(x.group(3),16)
+                        for o in range(e-s+1): m[s+o] = chr(u+o)
+                    except: pass
+            return m
+
+        def apply_cmap(s, cm):
+            if not cm: return s
+            out, i = [], 0
+            while i < len(s):
+                if i+1 < len(s):
+                    c2 = (ord(s[i]) << 8) | ord(s[i+1])
+                    if c2 in cm: out.append(cm[c2]); i += 2; continue
+                c = ord(s[i])
+                out.append(cm.get(c, s[i] if (32 <= c < 127 or c > 160) else ''))
+                i += 1
+            return ''.join(out)
+
+        obj_re    = _re.compile(rb'(\d+)\s+\d+\s+obj\s*(.*?)\s*endobj', _re.DOTALL)
+        stream_re = _re.compile(rb'stream\r?\n(.*?)\r?\nendstream', _re.DOTALL)
+        objs = list(obj_re.finditer(data))
+
+        # Pass 1 — CMap objecten verzamelen
+        cmaps = {}
+        for m in objs:
+            ob = m.group(2); sm = stream_re.search(ob)
+            if not sm: continue
+            raw = sm.group(1)
+            if b'FlateDecode' in ob[:sm.start()]: raw = inflate(raw)
+            try: txt = raw.decode('latin-1', errors='replace')
+            except: continue
+            if 'beginbfchar' in txt or 'beginbfrange' in txt:
+                cmaps[int(m.group(1))] = parse_cmap(txt)
+        cmap0 = next(iter(cmaps.values())) if cmaps else {}
+
+        # Pass 2 — tekst extraheren
+        parts = []
+        for m in objs:
+            ob = m.group(2); sm = stream_re.search(ob)
+            if not sm: continue
+            raw = sm.group(1)
+            if b'FlateDecode' in ob[:sm.start()]: raw = inflate(raw)
+            try: dec = raw.decode('latin-1', errors='replace')
+            except: continue
+            for bt in _re.findall(r'BT(.*?)ET', dec, _re.DOTALL):
+                bp = []
+                for tj in _re.finditer(r'\(([^)]*(?:\\.[^)]*)*)\)\s*(?:Tj|\'|")', bt):
+                    s = apply_cmap(decode_str(tj.group(1)), cmap0)
+                    if s.strip(): bp.append(s)
+                for tj in _re.finditer(r'\[(.*?)\]\s*TJ', bt, _re.DOTALL):
+                    seg = []
+                    for p in _re.finditer(r'\(([^)]*(?:\\.[^)]*)*)\)', tj.group(1)):
+                        s = apply_cmap(decode_str(p.group(1)), cmap0)
+                        if s.strip(): seg.append(s)
+                        nums = _re.findall(r'(-?\d+\.?\d*)', tj.group(1)[p.end():p.end()+8])
+                        if nums and float(nums[0]) < -100: seg.append(' ')
+                    bp.append(''.join(seg))
+                if bp: parts.append(' '.join(bp))
+            parts.append('\n')
+            if sum(len(x) for x in parts) > max_chars * 2: break
+
+        result = '\n'.join(parts)
+        result = _re.sub(r'[ \t]{3,}', '  ', result)
+        result = _re.sub(r'\n{4,}', '\n\n\n', result)
+        return result.strip()[:max_chars]
 
     # Images
     def list_images(self):

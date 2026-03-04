@@ -1428,22 +1428,36 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
   const pinchRef    = useRef({active:false, dist0:0, scale0:1.4});
 
   useEffect(()=>{
-    if(!window.pdfjsLib){
-      const s=document.createElement("script");
-      s.src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
-      s.onload=()=>{
-        window.pdfjsLib.GlobalWorkerOptions.workerSrc=
-          "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
-        if(!document.getElementById("pdfjsCss")){
-          const l=document.createElement("link");
-          l.id="pdfjsCss"; l.rel="stylesheet";
-          l.href="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf_viewer.min.css";
-          document.head.appendChild(l);
-        }
+    // PDF.js en workerSrc worden al ingesteld in index.html
+    // Hier alleen wachten tot de library beschikbaar is
+    const check = () => {
+      if(window.pdfjsLib && window.pdfjsLib.GlobalWorkerOptions?.workerSrc){
         setPdfjsReady(true);
-      };
-      document.head.appendChild(s);
-    } else { setPdfjsReady(true); }
+      } else if(window.pdfjsLib) {
+        // Worker nog niet gezet — stel alsnog in
+        window.pdfjsLib.GlobalWorkerOptions.workerSrc =
+          "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+        setPdfjsReady(true);
+      } else {
+        // Library nog niet geladen — laad hem dynamisch
+        const s=document.createElement("script");
+        s.src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
+        s.onload=()=>{
+          window.pdfjsLib.GlobalWorkerOptions.workerSrc=
+            "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+          if(!document.getElementById("pdfjsCss")){
+            const l=document.createElement("link");
+            l.id="pdfjsCss"; l.rel="stylesheet";
+            l.href="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf_viewer.min.css";
+            document.head.appendChild(l);
+          }
+          setPdfjsReady(true);
+        };
+        document.head.appendChild(s);
+      }
+    };
+    // Kleine vertraging zodat index.html scripts zeker klaar zijn
+    setTimeout(check, 50);
   },[]);
 
   const renderPage=useCallback(async(doc,num,sc)=>{
@@ -1473,10 +1487,19 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
   const loadPdf=async(arrayBuffer,name)=>{
     setIsLoading(true);
     try{
+      if(!window.pdfjsLib) throw new Error("PDF.js nog niet geladen — herlaad de pagina");
+      // Zorg dat workerSrc altijd gezet is
+      if(!window.pdfjsLib.GlobalWorkerOptions.workerSrc){
+        window.pdfjsLib.GlobalWorkerOptions.workerSrc=
+          "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+      }
       const doc=await window.pdfjsLib.getDocument({data:arrayBuffer}).promise;
       setPdfDoc(doc); setNumPages(doc.numPages); setPageNum(1);
       setPdfFile({name});
-    }catch(err){console.error(err);}
+    }catch(err){
+      console.error("loadPdf:",err);
+      setSummarizeErr("PDF laden mislukt: "+err.message);
+    }
     setIsLoading(false);
   };
 
@@ -3036,7 +3059,7 @@ const LLMNotebook = ({notes, pdfNotes, serverPdfs, serverImages, allTags, onAddN
 
   // ── Alle beschikbare PDF's (met annotaties) ───────────────────────────────
   const pdfsWithAnnots = useMemo(() => {
-    const annotFiles = [...new Set(pdfNotes.map(p => p.file).filter(Boolean))];
+    // Alle PDFs tonen in de context-selector, ook die zonder annotaties
     return (serverPdfs||[]).map(p => ({
       ...p,
       annotCount: pdfNotes.filter(a => a.file === p.name).length,
@@ -3167,14 +3190,18 @@ const LLMNotebook = ({notes, pdfNotes, serverPdfs, serverImages, allTags, onAddN
 
   // ── Mindmap genereren op basis van context ────────────────────────────────
   const generateMindmap = useCallback(async () => {
-    if (!ctxNotes.length && !ctxPdfs.length) return;
+    const hasContext = ctxNotes.length || ctxPdfs.length;
+    if (!hasContext) {
+      setMessages(p=>[...p,{role:"assistant",
+        content:"⚠ Selecteer eerst notities of PDF's in het contextpaneel (links) om een mindmap te genereren."}]);
+      return;
+    }
     setMmPending(true);
     try {
       const res = await api.llmMindmap({
         model, context_notes: ctxNotes, context_pdfs: ctxPdfs
       });
       if (res?.ok && res.mindmap) {
-        // Voeg mindmap als assistent-bericht toe in chat
         const mm = res.mindmap;
         let md = "## 🗺 Mindmap: " + (mm.root||"Overzicht") + "\n\n";
         (mm.branches||[]).forEach(b=>{
@@ -3184,9 +3211,13 @@ const LLMNotebook = ({notes, pdfNotes, serverPdfs, serverImages, allTags, onAddN
         });
         setMessages(p=>[...p,{role:"assistant",content:md}]);
       } else {
-        setMessages(p=>[...p,{role:"assistant",content:"⚠ Mindmap genereren mislukt: "+(res?.error||"onbekend")}]);
+        setMessages(p=>[...p,{role:"assistant",
+          content:"⚠ Mindmap genereren mislukt: "+(res?.error||"geen JSON response van model")+
+          (res?.raw ? "\n\nRaw: "+res.raw.slice(0,200) : "")}]);
       }
-    } catch(e){ setMessages(p=>[...p,{role:"assistant",content:"⚠ "+e.message}]); }
+    } catch(e){
+      setMessages(p=>[...p,{role:"assistant",content:"⚠ "+e.message}]);
+    }
     setMmPending(false);
   }, [model, ctxNotes, ctxPdfs]);
 
@@ -3374,14 +3405,14 @@ const LLMNotebook = ({notes, pdfNotes, serverPdfs, serverImages, allTags, onAddN
           })
         ),
 
-        // PDF's sectie
+        // PDF's sectie — alle PDFs tonen, ook zonder annotaties
         pdfsWithAnnots.length > 0 && React.createElement(React.Fragment, null,
           React.createElement("div", {
             style:{padding:"8px 10px 4px",fontSize:"9px",color:"rgba(229,120,109,0.6)",
                    letterSpacing:"2px",borderBottom:`1px solid ${W.splitBg}`,
                    display:"flex",alignItems:"center",gap:"6px",background:W.bg}
           },
-            React.createElement("span",null,"PDF ANNOTATIES"),
+            React.createElement("span",null,"PDF'S"),
             React.createElement("span",{style:{background:W.orange,color:W.bg,borderRadius:"8px",
               padding:"0 5px",fontSize:"9px"}},ctxPdfs.length+"/"+pdfsWithAnnots.length)
           ),
@@ -3407,7 +3438,9 @@ const LLMNotebook = ({notes, pdfNotes, serverPdfs, serverImages, allTags, onAddN
                 React.createElement("div",{style:{fontSize:"11px",color:sel?W.fg:W.fgDim,
                   overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}, "📄 "+p.name),
                 React.createElement("div",{style:{fontSize:"9px",color:W.fgMuted,marginTop:"2px"}},
-                  p.annotCount," annotatie"+(p.annotCount!==1?"s":""))
+                  p.annotCount > 0
+                    ? p.annotCount+" annotatie"+(p.annotCount!==1?"s":"")
+                    : "geen annotaties — tekst via AI")
               )
             );
           })
