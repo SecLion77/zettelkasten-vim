@@ -1391,6 +1391,8 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
   const [quickTags,  setQuickTags]  = useState([]);
   const [showLibrary,   setShowLibrary]   = useState(false);
   const [showAnnotPanel,setShowAnnotPanel]= useState(true);   // wegklapbaar
+  const [summarizing,   setSummarizing]   = useState(false);  // AI samenvatten bezig
+  const [summarizeErr,  setSummarizeErr]  = useState(null);   // foutmelding samenvatten
 
   const canvasRef   = useRef(null);
   const textLayerRef= useRef(null);
@@ -1455,17 +1457,32 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
   };
 
   const onFileInput=async(e)=>{
-    const file=e.target.files[0]; if(!file||!pdfjsReady)return;
+    const file=e.target.files[0]; if(!file||!pdfjsReady) return;
     let savedName=file.name;
+    setSummarizeErr(null);
     try{
       const res=await api.uploadPdf(file);
       if(res?.name) savedName=res.name;
       onRefreshPdfs?.();
-      // Auto-samenvatting in achtergrond
-      if(onAutoSummarize) onAutoSummarize(savedName);
-    }catch(err){console.error("upload:",err);}
-    const ab=await file.arrayBuffer();
-    await loadPdf(ab,file.name);
+    }catch(err){ console.error("upload:",err); }
+
+    // PDF in browser laden (arrayBuffer vóór async samenvatten, anders is file al verbruikt)
+    try{
+      const ab=await file.arrayBuffer();
+      await loadPdf(ab,file.name);
+    }catch(err){ console.error("loadPdf:",err); }
+
+    // Samenvatting starten NA het laden — fire and forget met indicator
+    if(onAutoSummarize){
+      setSummarizing(true);
+      try{
+        await onAutoSummarize(savedName);
+      }catch(err){
+        setSummarizeErr(err?.message||"Samenvatten mislukt");
+      }finally{
+        setSummarizing(false);
+      }
+    }
   };
 
   const openFromServer=async(name)=>{
@@ -1608,6 +1625,26 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
         React.createElement("button",{onClick:()=>setShowLibrary(!showLibrary),style:{background:showLibrary?W.comment:"none",color:showLibrary?W.bg:W.fgMuted,border:`1px solid ${showLibrary?W.comment:W.splitBg}`,borderRadius:"4px",padding:"4px 10px",fontSize:"11px",cursor:"pointer"}},`📚 bibliotheek (${serverPdfs?.length||0})`),
         React.createElement("input",{ref:fileRef,type:"file",accept:".pdf",style:{display:"none"},onChange:onFileInput}),
         !pdfjsReady&&React.createElement("span",{style:{color:W.orange,fontSize:"10px"}},"pdf.js laden…"),
+        // AI samenvatten indicator
+        summarizing && React.createElement("div",{
+          style:{display:"flex",alignItems:"center",gap:"5px",
+                 background:"rgba(138,198,242,0.08)",
+                 border:"1px solid rgba(138,198,242,0.25)",
+                 borderRadius:"10px",padding:"2px 10px",
+                 color:"#a8d8f0",fontSize:"10px",
+                 animation:"ai-pulse 1.4s ease-in-out infinite"}
+        },
+          React.createElement("span",{style:{
+            display:"inline-block",width:"6px",height:"6px",borderRadius:"50%",
+            background:"#a8d8f0",animation:"ai-dot 1.4s ease-in-out infinite"}}),
+          "Samenvatten…"
+        ),
+        // Foutmelding samenvatting
+        summarizeErr && React.createElement("span",{
+          style:{color:W.orange,fontSize:"10px",cursor:"pointer"},
+          title:summarizeErr,
+          onClick:()=>setSummarizeErr(null)
+        },"⚠ samenvatten mislukt ×"),
         pdfDoc&&React.createElement(React.Fragment,null,
           React.createElement("span",{style:{color:W.fgMuted}},"│"),
           React.createElement("button",{onClick:()=>setPageNum(p=>Math.max(1,p-1)),style:{background:"none",border:"none",color:W.fg,cursor:"pointer",fontSize:"16px",padding:"0 3px"}},"◀"),
@@ -1620,6 +1657,23 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
           React.createElement("span",{style:{color:W.fgMuted}},"│"),
           ...HCOLORS.map(c=>React.createElement("button",{key:c.id,onClick:()=>setActiveColor(c),title:c.label,style:{width:"18px",height:"18px",borderRadius:"4px",background:c.bg,border:`2px solid ${activeColor.id===c.id?c.border:"transparent"}`,cursor:"pointer",padding:0,boxShadow:activeColor.id===c.id?`0 0 6px ${c.border}`:"none"}})),
           React.createElement("span",{style:{color:W.fgMuted,fontSize:"10px",marginLeft:"4px",maxWidth:"160px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},pdfFile?.name),
+          pdfFile && onAutoSummarize && React.createElement("button",{
+            title:"Maak nu een samenvatting van deze PDF",
+            disabled:summarizing,
+            onClick:async()=>{
+              setSummarizeErr(null);
+              setSummarizing(true);
+              try{ await onAutoSummarize(pdfFile.name); }
+              catch(err){ setSummarizeErr(err?.message||"Samenvatten mislukt"); }
+              finally{ setSummarizing(false); }
+            },
+            style:{background:"rgba(138,198,242,0.08)",
+                   border:"1px solid rgba(138,198,242,0.25)",
+                   color:summarizing?"#666":"#a8d8f0",
+                   borderRadius:"4px",padding:"3px 9px",
+                   fontSize:"10px",cursor:summarizing?"not-allowed":"pointer",
+                   marginLeft:"6px",flexShrink:0,opacity:summarizing?0.5:1}
+          }, summarizing ? "⏳…" : "🧠 samenvatten"),
           pdfFile&&React.createElement("button",{
             title:"Verwijder deze PDF + annotaties",
             onClick:async()=>{
@@ -4371,22 +4425,28 @@ const App = () => {
           },
           onAutoSummarize:async(fname)=>{
             const stem=fname.replace(/\.pdf$/i,"");
-            setAiStatus("PDF samenvatten: "+stem.slice(0,22)+"…");
+            setAiStatus("🧠 Samenvatten: "+stem.slice(0,20)+"…");
             try{
               const res=await api.llmSummarizePdf(fname,llmModel);
               if(res?.ok && res.summary){
-                const id=genId();
                 const note={
-                  id, title:"Samenvatting — "+stem,
+                  id:genId(),
+                  title:"Samenvatting — "+stem,
                   content:"*Automatisch gegenereerd door Notebook LLM*\n\n"+res.summary,
                   tags:["samenvatting","pdf"],
-                  created:new Date().toISOString(), modified:new Date().toISOString()
+                  created:new Date().toISOString(),
+                  modified:new Date().toISOString()
                 };
                 const saved=await api.post("/notes",note);
                 setNotes(p=>[saved,...p]);
+              } else if(res && !res.ok){
+                // Gooi de fout zodat PDFViewer hem kan tonen
+                throw new Error(res.error||"Samenvatten mislukt");
               }
-            }catch(err){console.error("auto-summarize:",err);}
-            finally{ setAiStatus(null); }
+            } finally {
+              setAiStatus(null);
+            }
+            // Geen catch hier — laat de fout propageren naar PDFViewer
           }})
       )
       : tab==="images" ? React.createElement("div",{style:{flex:1,overflow:"hidden"}},
