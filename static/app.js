@@ -101,8 +101,32 @@ const extractTags  = (c="")=>[...new Set([...c.matchAll(/#(\w+)/g)].map(m=>m[1])
 // ── Enhanced Markdown renderer ─────────────────────────────────────────────────
 const renderMd = (text, notes=[]) => {
   if (!text) return "";
+
+  // Extraheer media-embeds EERST als placeholders (vóór HTML-escaping)
+  const mediaBlocks = [];
   let h = text
-    .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+    .replace(/!\[\[img:([^\]]+)\]\]/g, (_, name) => {
+      const i = mediaBlocks.length;
+      const safe = encodeURIComponent(name);
+      mediaBlocks.push(
+        `<div style="margin:12px 0"><img src="/api/image/${safe}" ` +
+        `alt="${name.replace(/"/g,"&quot;")}" ` +
+        `style="max-width:100%;border-radius:6px;border:1px solid #3a4046" /></div>`
+      );
+      return `%%MEDIA${i}%%`;
+    })
+    .replace(/\[\[pdf:([^\]]+)\]\]/g, (_, name) => {
+      const i = mediaBlocks.length;
+      const safe = encodeURIComponent(name);
+      mediaBlocks.push(
+        `<a href="/api/pdf/${safe}" target="_blank" ` +
+        `style="color:#8ac6f2;text-decoration:underline">📄 ${name}</a>`
+      );
+      return `%%MEDIA${i}%%`;
+    });
+
+  // Nu HTML-escapen (raakt placeholders niet)
+  h = h.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 
   // Code blocks first (prevent interference)
   const codeBlocks = [];
@@ -111,14 +135,6 @@ const renderMd = (text, notes=[]) => {
     codeBlocks.push(`<pre><code class="lang-${lang}">${code}</code></pre>`);
     return `%%CODE${i}%%`;
   });
-
-  // Inline media — ![[img:naam]] → <img> en [[pdf:naam]] → link
-  h = h.replace(/!\[\[img:([^\]]+)\]\]/g, (_,name)=>
-    `<div style="margin:12px 0"><img src="/api/image/${encodeURIComponent(name)}" `+
-    `alt="${name}" style="max-width:100%;border-radius:6px;border:1px solid #3a4046" /></div>`);
-  h = h.replace(/\[\[pdf:([^\]]+)\]\]/g, (_,name)=>
-    `<a href="/api/pdf/${encodeURIComponent(name)}" target="_blank" `+
-    `style="color:#8ac6f2;text-decoration:underline">📄 ${name}</a>`);
 
   // Tables
   h = h.replace(/(\|.+\|\n)+/g, tableStr => {
@@ -167,6 +183,7 @@ const renderMd = (text, notes=[]) => {
 
   // Restore code blocks
   codeBlocks.forEach((blk,i) => { h=h.replace(`%%CODE${i}%%`,blk); });
+  mediaBlocks.forEach((blk,i) => { h=h.replace(`%%MEDIA${i}%%`,blk); });
 
   // Paragraphs
   return h.split(/\n\n+/).map(b=>{
@@ -1890,7 +1907,7 @@ const useWindowSize = () => {
 // Tab voor afbeeldingen: upload, AI-beschrijving, notitie aanmaken.
 // Gebruikt llava (multimodaal) voor beschrijvingen — ollama pull llava
 
-const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote}) => {
+const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote, setAiStatus}) => {
   const { useState, useRef, useCallback } = React;
 
   const [busy,        setBusy]       = useState(null);  // filename die bezig is
@@ -1903,28 +1920,30 @@ const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote}) => {
     for (const f of Array.from(files)) {
       if (!f.type.startsWith("image/")) continue;
       setBusy(f.name);
+      setAiStatus?.("Uploaden: "+f.name.slice(0,24)+"…");
       try {
         const res = await api.uploadImage(f);
         if (res?.name) {
           await onRefresh();
-          // Automatisch beschrijving genereren
+          // Automatisch beschrijving + notitie in achtergrond
           describeImage(res.name);
         }
-      } catch(e) { console.error("upload:", e); }
+      } catch(e) { console.error("upload:", e); setAiStatus?.(null); }
       setBusy(null);
     }
   }, [onRefresh]);
 
   const describeImage = useCallback(async (fname) => {
     setBusy(fname);
+    const stem = fname.replace(/\.[^.]+$/,"");
+    setAiStatus?.("AI beschrijft: "+stem.slice(0,22)+"…");
     try {
       const model = llmModel || "llava";
       const res   = await api.llmDescribeImage(fname, model==="llama3"||model==="mistral" ? "llava" : model);
       if (res?.description) {
         setDescs(p=>({...p, [fname]: res.description}));
-        // Automatisch notitie aanmaken
+        // Automatisch notitie aanmaken op de achtergrond
         if (onAddNote) {
-          const stem = fname.replace(/\.[^.]+$/,"");
           await onAddNote({
             id:      genId(),
             title:   "Afbeelding — " + stem,
@@ -1933,9 +1952,15 @@ const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote}) => {
             created: new Date().toISOString(), modified: new Date().toISOString(),
           });
         }
+      } else {
+        setDescs(p=>({...p, [fname]: "⚠ Beschrijving niet beschikbaar (ollama pull llava)"}));
       }
-    } catch(e) { setDescs(p=>({...p, [fname]: "⚠ Beschrijving niet beschikbaar (ollama pull llava)"})); }
-    setBusy(null);
+    } catch(e) {
+      setDescs(p=>({...p, [fname]: "⚠ Beschrijving niet beschikbaar (ollama pull llava)"}));
+    } finally {
+      setBusy(null);
+      setAiStatus?.(null);
+    }
   }, [llmModel, onAddNote]);
 
   const deleteImg = useCallback(async (fname) => {
@@ -3556,6 +3581,7 @@ const App = () => {
   const [error,        setError]       = useState(null);
   const [sidebarOpen,  setSidebarOpen] = useState(false); // mobile/tablet drawer
   const [renderMode,    setRenderMode]  = useState("plain"); // plain | rich
+  const [aiStatus,      setAiStatus]    = useState(null);  // null | string — AI bezig indicator
   const [showMediaMenu, setShowMediaMenu] = useState(false); // media koppelen dropdown
 
   // Sluit media-dropdown bij klik buiten
@@ -3575,6 +3601,18 @@ const App = () => {
   const showSidebar  = isDesktop || sidebarOpen;
   const sidebarW     = isMobile ? Math.min(winW - 40, 320) : 240;
   const showMeta     = isDesktop && !goyoMode;
+
+  // ── CSS animaties voor AI indicator ──────────────────────────────────────
+  React.useEffect(()=>{
+    if(document.getElementById("zk-ai-css")) return;
+    const s=document.createElement("style");
+    s.id="zk-ai-css";
+    s.textContent=`
+      @keyframes ai-pulse { 0%,100%{opacity:1} 50%{opacity:0.45} }
+      @keyframes ai-dot    { 0%,100%{transform:scale(1);opacity:1} 50%{transform:scale(1.6);opacity:0.7} }
+    `;
+    document.head.appendChild(s);
+  },[]);
 
   // ── Data laden ────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -3834,6 +3872,20 @@ const App = () => {
       style:{padding:"0 10px",fontSize:"10px",color:W.fgMuted,
              display:"flex",gap:"10px",alignItems:"center"}
     },
+      // AI-status indicator
+      aiStatus && React.createElement("div", {
+        style:{display:"flex",alignItems:"center",gap:"6px",
+               background:"rgba(138,198,242,0.08)",
+               border:"1px solid rgba(138,198,242,0.25)",
+               borderRadius:"12px",padding:"3px 10px",
+               color:"#a8d8f0",fontSize:"10px",animation:"ai-pulse 1.4s ease-in-out infinite"}
+      },
+        React.createElement("span",{style:{
+          display:"inline-block",width:"7px",height:"7px",
+          borderRadius:"50%",background:"#a8d8f0",
+          animation:"ai-dot 1.4s ease-in-out infinite"}}),
+        aiStatus
+      ),
       React.createElement("span", null, notes.length, " zettels"),
       React.createElement("span", null, allTags.length, " tags"),
       React.createElement("span", {style:{color:W.splitBg}}, "│"),
@@ -3871,6 +3923,13 @@ const App = () => {
       style:{flex:1,fontWeight:"bold",fontSize:"13px",
              letterSpacing:"2px",color:W.statusFg}
     }, "ZETTELKASTEN"),
+    aiStatus && React.createElement("div",{
+      style:{fontSize:"10px",color:"#a8d8f0",
+             background:"rgba(138,198,242,0.1)",
+             border:"1px solid rgba(138,198,242,0.2)",
+             borderRadius:"10px",padding:"2px 8px",
+             animation:"ai-pulse 1.4s ease-in-out infinite"}
+    },"⏳ ",aiStatus),
     React.createElement("button", {
       onClick:()=>setShowSettings(true),
       style:{background:"none",border:"none",color:W.fgMuted,
@@ -4241,11 +4300,12 @@ const App = () => {
         React.createElement(PDFViewer,{pdfNotes,setPdfNotes,allTags,serverPdfs,
           onRefreshPdfs:refreshPdfs,
           onAutoSummarize:async(fname)=>{
+            const stem=fname.replace(/\.pdf$/i,"");
+            setAiStatus("PDF samenvatten: "+stem.slice(0,22)+"…");
             try{
               const res=await api.llmSummarizePdf(fname,llmModel);
               if(res?.ok && res.summary){
                 const id=genId();
-                const stem=fname.replace(/\.pdf$/i,"");
                 const note={
                   id, title:"Samenvatting — "+stem,
                   content:"*Automatisch gegenereerd door Notebook LLM*\n\n"+res.summary,
@@ -4253,17 +4313,19 @@ const App = () => {
                   created:new Date().toISOString(), modified:new Date().toISOString()
                 };
                 const saved=await api.post("/notes",note);
-                setNotes(p=>[saved,...p]); setSelId(id); setTab("notes");
+                setNotes(p=>[saved,...p]);
               }
             }catch(err){console.error("auto-summarize:",err);}
+            finally{ setAiStatus(null); }
           }})
       )
       : tab==="images" ? React.createElement("div",{style:{flex:1,overflow:"hidden"}},
         React.createElement(ImagesGallery,{
           serverImages, onRefresh:refreshImages, llmModel,
+          setAiStatus,
           onAddNote:async(note)=>{
             const saved=await api.post("/notes",note);
-            setNotes(p=>[saved,...p]); setSelId(saved.id); setTab("notes");
+            setNotes(p=>[saved,...p]);
           }
         })
       )
