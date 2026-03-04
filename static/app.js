@@ -3736,11 +3736,7 @@ const LLMNotebook = ({notes, pdfNotes, serverPdfs, serverImages, allTags, onAddN
     setSavingNote(true);
     try {
       const assistantMsgs = messages.filter(m=>m.role==="assistant"&&m.content);
-      const content = assistantMsgs.map(m=>m.content).join("
-
----
-
-");
+      const content = assistantMsgs.map(m=>m.content).join("\n\n---\n\n");
       const date    = new Date().toLocaleDateString("nl-NL");
       const ctxLabel= ctxNotes.length||ctxPdfs.length
         ? " (" + [...ctxNotes.slice(0,2), ...ctxPdfs.slice(0,2)].join(", ") + ")"
@@ -3748,11 +3744,7 @@ const LLMNotebook = ({notes, pdfNotes, serverPdfs, serverImages, allTags, onAddN
       const note = {
         id: genId(),
         title: "Analyse " + date + ctxLabel,
-        content: "# Notebook LLM Analyse
-
-*" + date + "*
-
-" + content,
+        content: "# Notebook LLM Analyse\n\n*" + date + "*\n\n" + content,
         tags: ["analyse","llm"],
         created: new Date().toISOString(), modified: new Date().toISOString(),
       };
@@ -3772,16 +3764,11 @@ const LLMNotebook = ({notes, pdfNotes, serverPdfs, serverImages, allTags, onAddN
       if (res?.ok && res.mindmap) {
         // Voeg mindmap als assistent-bericht toe in chat
         const mm = res.mindmap;
-        let md = "## 🗺 Mindmap: " + (mm.root||"Overzicht") + "
-
-";
+        let md = "## 🗺 Mindmap: " + (mm.root||"Overzicht") + "\n\n";
         (mm.branches||[]).forEach(b=>{
-          md += "**" + b.label + "**
-";
-          (b.children||[]).forEach(c=>{ md += "  - " + c + "
-"; });
-          md += "
-";
+          md += "**" + b.label + "**\n";
+          (b.children||[]).forEach(c=>{ md += "  - " + c + "\n"; });
+          md += "\n";
         });
         setMessages(p=>[...p,{role:"assistant",content:md}]);
       } else {
