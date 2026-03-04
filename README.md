@@ -1,14 +1,15 @@
 # 🗃️ Zettelkasten VIM
 
-> Zelfstandige Python desktop app voor kennisbeheer. Notities als Markdown op schijf, PDF bibliotheek met annotaties, Obsidian-stijl kennisgraaf, canvas VIM-editor, en een lokale AI notebook via Ollama — volledig offline, geen cloud.
+> Zelfstandige Python desktop app voor kennisbeheer. Notities als Markdown op schijf, PDF bibliotheek met annotaties, afbeeldingenbeheer, Obsidian-stijl kennisgraaf, canvas VIM-editor, mindmap generator, en een lokale AI notebook via Ollama — volledig offline, geen cloud, geen pip-packages vereist.
 
 ---
 
 ## 🚀 Installatie & Starten
 
 ### Vereisten
-- **Python 3.8+** — geen pip packages, alleen stdlib
+- **Python 3.8+** — geen pip-packages nodig, puur stdlib
 - Moderne browser (Chrome, Firefox, Safari, of iPad Safari)
+- **Ollama** (optioneel) — voor AI-functies: samenvatting, beschrijving, chat, mindmap
 
 ### Starten
 
@@ -28,7 +29,7 @@ python3 server.py --port 8080
 python3 server.py --host 0.0.0.0
 # → het opstartbericht toont het netwerk-IP, bijv. http://192.168.1.42:7842
 
-# Verbose logging (toont HTTP requests in terminal)
+# Verbose logging
 python3 server.py --verbose
 
 # Combineren
@@ -50,6 +51,8 @@ De browser opent automatisch op **http://localhost:7842**
 │   └── artikel.pdf
 ├── annotations/
 │   └── artikel_pdf.json       ← annotaties per PDF als JSON
+├── images/
+│   └── foto.png
 └── config.json
 ```
 
@@ -61,7 +64,7 @@ De browser opent automatisch op **http://localhost:7842**
 
 ## ⌨️ VIM Editor
 
-De editor is volledig canvas-gebaseerd — Escape werkt altijd, geen browser-interferentie.
+Canvas-gebaseerde editor — Escape werkt altijd, geen browser-interferentie.
 
 ### Modes
 | Mode    | Activeer   | Beschrijving           |
@@ -88,46 +91,57 @@ De editor is volledig canvas-gebaseerd — Escape werkt altijd, geen browser-int
 | `dd`       | Verwijder regel                |
 | `yy` / `p` | Kopieer / plak regel           |
 | `x`        | Verwijder karakter             |
-| `u`        | Undo                           |
-| `Ctrl+r`   | Redo                           |
-| `J`        | Voeg volgende regel samen      |
+| `u` / `Ctrl+r` | Undo / Redo               |
 
 ### Ex-commando's (`:`)
-| Commando          | Actie                        |
-|-------------------|------------------------------|
-| `:w`              | Opslaan                      |
-| `:wq`             | Opslaan en sluiten           |
-| `:q!`             | Sluiten zonder opslaan       |
-| `:tag rust async` | Alle tags vervangen          |
-| `:tag+ nieuw`     | Tag toevoegen                |
-| `:tag- oud`       | Tag verwijderen              |
-| `:tags`           | Toon huidige tags            |
-| `:goyo`           | Toggle focusmodus            |
-| `:spell`          | Spellcheck: off → en → nl    |
+| Commando          | Actie                     |
+|-------------------|---------------------------|
+| `:w` / `:wq`      | Opslaan / opslaan+sluiten |
+| `:q!`             | Sluiten zonder opslaan    |
+| `:tag rust async` | Tags vervangen            |
+| `:tag+ nieuw`     | Tag toevoegen             |
+| `:tag- oud`       | Tag verwijderen           |
+| `:goyo`           | Toggle focusmodus         |
+| `:spell`          | Spellcheck: off → en → nl |
 
 ### Snippets (`Ctrl+J` of `Tab` in INSERT)
-| Trigger | Expandeert naar          |
-|---------|--------------------------|
-| `h1`    | `# Titel`                |
-| `h2`    | `## Sectie`              |
-| `link`  | `[[notitie]]`            |
-| `code`  | Codeblok                 |
-| `table` | Markdowntabel            |
-| `todo`  | `- [ ] taak`             |
-| `date`  | Huidige datum            |
-| `bold`  | `**vetgedrukt**`         |
+| Trigger | Expandeert naar  |
+|---------|------------------|
+| `h1`    | `# Titel`        |
+| `h2`    | `## Sectie`      |
+| `link`  | `[[notitie]]`    |
+| `code`  | Codeblok         |
+| `table` | Markdowntabel    |
+| `todo`  | `- [ ] taak`     |
+| `date`  | Huidige datum    |
+| `bold`  | `**vetgedrukt**` |
 
-### Nieuwe notitie — flow
-1. Klik **+ nieuw zettel** → titelinput krijgt focus
-2. Typ de titel → druk **Enter**
-3. Cursor staat direct op **regel 3**, klaar om te schrijven
+---
 
-De content bij een nieuwe notitie:
+## 🔗 Notitie Links & Media
+
+### Links invoegen via 🔗 link knop
+De editor heeft een **🔗 link** knop in de toolbar voor het snel koppelen van notities:
+
+1. Open een notitie in de editor
+2. Klik **🔗 link** → dropdown opent met zoekbalk (autofocus)
+3. Typ een zoekterm — lijst filtert live op titel én tags
+4. Klik op een notitie → `[[Notitie Titel]]` wordt ingevoegd
+
+### Media koppelen via 📎 koppelen knop
+1. Klik **📎 koppelen** → dropdown met alle PDFs en afbeeldingen
+2. Klik een item → syntax wordt ingevoegd:
+   - PDF: `> 📄 **PDF:** [[pdf:bestand.pdf]]`
+   - Afbeelding: `![[img:foto.png]]`
+
+### Syntax overzicht
+```markdown
+[[Andere Notitie]]        ← bidirectionele notitie-link
+[[pdf:rapport.pdf]]       ← klikbare PDF-link
+![[img:foto.png]]         ← ingesloten afbeelding
 ```
-*maandag 03-03-2025*     ← regel 1: datum (automatisch)
-                         ← regel 2: leeg
-█                        ← regel 3: cursor hier
-```
+
+Backlinks worden automatisch getoond onderaan elke notitie.
 
 ---
 
@@ -135,85 +149,130 @@ De content bij een nieuwe notitie:
 
 Force-directed graaf in Obsidian-stijl.
 
-| Actie           | Effect                          |
-|-----------------|---------------------------------|
-| Klik node       | Opent de notitie                |
-| Sleep node      | Herpositioneer                  |
-| Hover           | Tooltip met titel en tags       |
-| Tag klikken     | Filtert graaf op die tag        |
-| "lokaal" knop   | Toont alleen directe buren      |
-| "orphans" knop  | Notities zonder verbindingen    |
+| Actie          | Effect                       |
+|----------------|------------------------------|
+| Klik node      | Opent de notitie             |
+| Sleep node     | Herpositioneer               |
+| Hover          | Tooltip met titel en tags    |
+| Tag klikken    | Filtert graaf op die tag     |
+| "lokaal" knop  | Toont alleen directe buren   |
+| "orphans" knop | Notities zonder verbindingen |
 
-Node-grootte is gebaseerd op aantal verbindingen. Kleur per tag-groep.
+Node-grootte = aantal verbindingen. Kleur per tag-groep.
 
 ---
 
 ## 📄 PDF Viewer
 
 ### PDF's laden
-1. **Nieuw:** klik `:open PDF` → bestand wordt opgeslagen in `vault/pdfs/`
+1. **Nieuw:** klik `:open PDF` → opgeslagen in `vault/pdfs/`
 2. **Bibliotheek:** klik `📚 bibliotheek` → kies eerder geopend bestand
+
+### Automatische samenvatting
+Bij elke upload start automatisch een AI-samenvatting op de achtergrond:
+- Pulserend **"Samenvatten…"** icoontje in de PDF-toolbar
+- Globale AI-indicator in de menubalk toont de voortgang
+- Samenvatting wordt opgeslagen als notitie met tags `#samenvatting #pdf`
+- **Handmatig:** klik **🧠 samenvatten** naast de bestandsnaam (ook voor bestaande PDFs)
 
 ### Annoteren
 - **Desktop:** selecteer tekst → popup verschijnt automatisch
 - **iPad:** selecteer tekst met handvaatjes → tik **✏ Annoteren**
-- Kies kleur, voeg notitie en tags toe → Enter of **✓ Opslaan**
+- Kies kleur, voeg notitie en tags toe → **✓ Opslaan**
+- Het annotatiepaneel toont **alleen annotaties van de geopende PDF** — is geen PDF open, dan is het paneel leeg
+
+### PDF verwijderen
+Via de 🗑 knop in de bibliotheeklijst of in de toolbar:
+- Verwijdert het PDF-bestand
+- Verwijdert alle annotaties van die PDF
+- Verwijdert gekoppelde samenvatting-notities automatisch
 
 ### Schalen
-- **Desktop:** `−` en `+` knoppen in de toolbar
-- **iPad:** pinch-to-zoom (twee vingers uiteen/samen)
+- Desktop: `−` / `+` knoppen in toolbar
+- iPad: pinch-to-zoom
 
-### Highlights
-Opgeslagen annotaties zijn zichtbaar als gekleurde markeringen in de PDF-tekst. Klik op een markering om de annotatie te bewerken. Het annotatiepaneel toont alleen de annotaties van de **huidig geopende PDF**.
+---
+
+## 🖼️ Afbeeldingen
+
+### Uploaden & automatische beschrijving
+1. Open **🖼 Plaatjes** tab
+2. Sleep een afbeelding of klik **+ upload**
+3. `llama3.2-vision` genereert automatisch een beschrijving
+4. Een notitie wordt aangemaakt met `![[img:naam]]` en de beschrijving
+
+### Afbeelding verwijderen
+Klik 🗑 op een afbeeldingskaart:
+- Toont een bevestiging met de lijst van gekoppelde notities die mee worden verwijderd
+- Verwijdert de afbeelding én alle gekoppelde notities
+
+---
+
+## 🗺️ Mindmap
+
+Genereer een visuele mindmap vanuit notities én/of PDFs:
+
+1. Open **🧠 Notebook** tab
+2. Selecteer notities en/of PDFs in het contextpaneel links
+3. Klik **🗺 mindmap**
+4. Bekijk de visuele weergave in het **🗺 Mindmap** tab
+
+**Alle PDFs zijn selecteerbaar** — ook zonder annotaties. De server extraheert dan automatisch de tekst. Subheader toont: *"geen annotaties — tekst via AI"*.
+
+Layout-opties: radiaal of boom | zoom/pan | klik node om notitie te openen.
 
 ---
 
 ## 🧠 Notebook LLM
 
-Stel vragen over je notities en PDF-annotaties via een lokale AI. Volledig offline — je data verlaat je machine nooit.
+Stel vragen over notities, PDFs en afbeeldingen via een lokale AI. Volledig offline.
 
 ### Ollama installeren
 
 ```bash
-# 1. Installeer Ollama (macOS / Linux)
+# macOS / Linux
 curl -fsSL https://ollama.com/install.sh | sh
 
-# Windows: download installer op https://ollama.com/download
+# Windows: https://ollama.com/download
 
-# 2. Start de Ollama server
 ollama serve
+ollama pull llama3.2-vision    # aanbevolen standaardmodel
 ```
 
-### Model downloaden
+### Modellen
 
-| Commando                  | Model               | Grootte | Aanbevolen voor              |
-|---------------------------|---------------------|---------|------------------------------|
-| `ollama pull llama3`      | Meta Llama 3 8B     | ~5 GB   | Algemeen, goed Nederlands    |
-| `ollama pull mistral`     | Mistral 7B          | ~4 GB   | Snel, goed voor EU-talen     |
-| `ollama pull phi3:medium` | Microsoft Phi-3 14B | ~9 GB   | Analyse & redeneren          |
-| `ollama pull gemma2`      | Google Gemma 2 9B   | ~6 GB   | Lange context                |
-| `ollama pull deepseek-r1` | DeepSeek-R1 7B      | ~5 GB   | Chain-of-thought redeneren   |
+| Model                    | Commando                         | Grootte | Gebruik                      |
+|--------------------------|----------------------------------|---------|------------------------------|
+| **Llama 3.2 Vision 11B** | `ollama pull llama3.2-vision`    | ~8 GB   | **Standaard** — tekst + beeld |
+| Llama 3 8B               | `ollama pull llama3`             | ~5 GB   | Snel, goed Nederlands        |
+| Mistral 7B               | `ollama pull mistral`            | ~4 GB   | Snel, EU-talen               |
+| Phi-3 Medium 14B         | `ollama pull phi3:medium`        | ~9 GB   | Analyse & redeneren          |
+| Gemma 2 9B               | `ollama pull gemma2`             | ~6 GB   | Lange context                |
 
-**Aanbeveling:** begin met `llama3` (stabiel, goed Nederlands) of `mistral` (sneller op oudere hardware).
+`llama3.2-vision` is het standaardmodel voor alle AI-taken: PDF samenvatten, afbeelding beschrijven, chat en mindmap. Voor gescande PDFs zonder tekst wordt automatisch de eerste pagina visueel geanalyseerd.
 
-### Gebruik
+### AI-indicator in menubalk
 
-1. Open het **🧠 Notebook** tab
-2. Selecteer in het linkerpaneel welke **notities** en **PDF-annotaties** als context meegestuurd worden — filter op tag
-3. Stel een vraag — het model antwoordt op basis van jouw geselecteerde kennis
+Wanneer een AI-taak actief is verschijnt rechts in de menubalk een pulserend blauw bolletje:
 
-De geselecteerde context wordt als systeem-prompt meegestuurd. Antwoorden streamen in real-time.
+```
+● Samenvatten: rapport.pdf…
+● AI beschrijft: foto.png…
+```
 
-**Voorbeeldvragen:**
+### Context selecteren (linkerpaneel)
+
+- **Notities** — vink aan, filter op tag
+- **PDFs** — alle PDFs selecteerbaar, ook zonder annotaties
+- **Afbeeldingen** — voor visuele analyse
+
+### Voorbeeldvragen
 - *"Geef een overzicht van mijn notities over [onderwerp]"*
 - *"Welke verbanden zie je tussen deze notities?"*
-- *"Maak een samenvatting van de gemarkeerde PDF-passages"*
+- *"Maak een samenvatting van de PDF-passages"*
 - *"Welke thema's komen het meest voor?"*
-- *"Stel verdiepende vragen op basis van dit materiaal"*
 
-### Ollama URL aanpassen
-
-Standaard verwacht de server Ollama op `http://localhost:11434`. Aanpassen via omgevingsvariabele:
+### Ollama op ander apparaat
 
 ```bash
 OLLAMA_URL=http://192.168.1.10:11434 python3 server.py
@@ -223,27 +282,16 @@ OLLAMA_URL=http://192.168.1.10:11434 python3 server.py
 
 ## 📱 iPad / Mobiel
 
-De app werkt volledig op iPad (Safari).
-
-| Schermgrootte | Layout                                  |
-|---------------|-----------------------------------------|
-| > 1200px      | Volledige 3-kolom layout               |
-| 768–1200px    | Sidebar via ☰ toggle                   |
-| < 768px       | Bottom navigation, sidebar als drawer  |
+| Schermgrootte | Layout                                 |
+|---------------|----------------------------------------|
+| > 1200px      | Volledige 3-kolom layout              |
+| 768–1200px    | Sidebar via ☰ toggle                  |
+| < 768px       | Bottom navigation, sidebar als drawer |
 
 - **Tekst selecteren in PDF:** sleep handvaatjes → tik ✏ Annoteren
 - **Zoomen in PDF:** pinch-to-zoom
-- **Navigeren:** bottom nav bar (📝 / 🕸 / 📄 / 🧠)
-- **Netwerktoegang:** start server met `--host 0.0.0.0`, open het getoonde netwerk-IP in Safari
-
----
-
-## 🔗 Zettelkasten Links
-
-```markdown
-Gebruik [[ID]] of [[Titel]] voor bidirectionele links.
-Backlinks worden automatisch getoond onderaan elke notitie.
-```
+- **Navigeren:** bottom nav bar (📝 / 🕸 / 📄 / 🖼 / 🗺 / 🧠)
+- **Netwerktoegang:** start met `--host 0.0.0.0`, open het getoonde IP in Safari
 
 ---
 
@@ -251,12 +299,26 @@ Backlinks worden automatisch getoond onderaan elke notitie.
 
 ```
 zettelkasten-python-app/
-├── server.py          ← Python backend (geen externe dependencies)
+├── server.py          ← Python backend, puur stdlib (~648 regels)
 ├── README.md
 └── static/
-    ├── index.html     ← HTML shell + CSS
-    └── app.js         ← React frontend (canvas VIM, graaf, PDF, LLM)
+    ├── index.html     ← HTML shell + PDF.js initialisatie
+    └── app.js         ← React frontend (~4636 regels)
 ```
+
+---
+
+## 🔧 Technische details
+
+### PDF tekst extractie — geen pip nodig
+Pure Python stdlib implementatie (`zlib` + `re`) decompresteert FlateDecode streams en parseert `BT...ET` tekstblokken. Werkt voor de meeste tekst-PDFs zonder externe packages. Fallback-volgorde:
+1. Pure stdlib extractie
+2. `pypdf` (als geïnstalleerd)
+3. `pdfminer` (als geïnstalleerd)
+4. Visuele analyse via `llama3.2-vision` + `pdftoppm` (voor gescande PDFs)
+
+### PDF.js initialisatie
+De `GlobalWorkerOptions.workerSrc` wordt direct na het laden in `index.html` ingesteld, zodat er geen race-condition ontstaat en PDFs altijd correct laden zonder "Load failed" fout.
 
 ---
 
@@ -265,5 +327,6 @@ zettelkasten-python-app/
 - **Meerdere vaults:** start meerdere servers op verschillende poorten
 - **Git backup:** de vault map is gewone tekst — perfect voor git
 - **Obsidian-compatibel:** notities zijn standaard Markdown
-- **Privacy:** de Notebook LLM draait volledig lokaal, geen data naar buiten
+- **Privacy:** alle AI draait lokaal via Ollama, geen data naar buiten
 - **Zoeken:** `/zoekterm` in de sidebar, of `/` in NORMAL mode in de editor
+- **Samenvatting opnieuw:** klik 🧠 samenvatten in de PDF-toolbar
