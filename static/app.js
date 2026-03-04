@@ -58,6 +58,33 @@ const api = {
     const r=await fetch(API+"/pdf/"+encodeURIComponent(name));
     return r.arrayBuffer();
   },
+  async uploadImage(file) {
+    const fd=new FormData(); fd.append("file",file,file.name);
+    const r=await fetch(API+"/images",{method:"POST",body:fd});
+    return r.json();
+  },
+  async deleteImage(name) {
+    const r=await fetch(API+"/images/"+encodeURIComponent(name),{method:"DELETE"});
+    return r.json();
+  },
+  async llmSummarizePdf(filename,model) {
+    const r=await fetch(API+"/llm/summarize-pdf",{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({filename,model})});
+    return r.json();
+  },
+  async llmDescribeImage(filename,model) {
+    const r=await fetch(API+"/llm/describe-image",{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({filename,model})});
+    return r.json();
+  },
+  async llmMindmap(payload) {
+    const r=await fetch(API+"/llm/mindmap",{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify(payload)});
+    return r.json();
+  },
 };
 
 // ── Utils ──────────────────────────────────────────────────────────────────────
@@ -84,6 +111,14 @@ const renderMd = (text, notes=[]) => {
     codeBlocks.push(`<pre><code class="lang-${lang}">${code}</code></pre>`);
     return `%%CODE${i}%%`;
   });
+
+  // Inline media — ![[img:naam]] → <img> en [[pdf:naam]] → link
+  h = h.replace(/!\[\[img:([^\]]+)\]\]/g, (_,name)=>
+    `<div style="margin:12px 0"><img src="/api/image/${encodeURIComponent(name)}" `+
+    `alt="${name}" style="max-width:100%;border-radius:6px;border:1px solid #3a4046" /></div>`);
+  h = h.replace(/\[\[pdf:([^\]]+)\]\]/g, (_,name)=>
+    `<a href="/api/pdf/${encodeURIComponent(name)}" target="_blank" `+
+    `style="color:#8ac6f2;text-decoration:underline">📄 ${name}</a>`);
 
   // Tables
   h = h.replace(/(\|.+\|\n)+/g, tableStr => {
@@ -1317,7 +1352,7 @@ const Graph = ({notes, pdfNotes, onSelect, selectedId, localMode=false}) => {
 
 
 // ── PDF Viewer ─────────────────────────────────────────────────────────────────
-const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs}) => {
+const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, onAutoSummarize}) => {
   const [pdfDoc,     setPdfDoc]     = useState(null);
   const [pdfFile,    setPdfFile]    = useState(null);
   const [pageNum,    setPageNum]    = useState(1);
@@ -1400,8 +1435,14 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs}) 
 
   const onFileInput=async(e)=>{
     const file=e.target.files[0]; if(!file||!pdfjsReady)return;
-    // Upload to server
-    try{ await api.uploadPdf(file); onRefreshPdfs?.(); }catch{}
+    let savedName=file.name;
+    try{
+      const res=await api.uploadPdf(file);
+      if(res?.name) savedName=res.name;
+      onRefreshPdfs?.();
+      // Auto-samenvatting in achtergrond
+      if(onAutoSummarize) onAutoSummarize(savedName);
+    }catch(err){console.error("upload:",err);}
     const ab=await file.arrayBuffer();
     await loadPdf(ab,file.name);
   };
@@ -1858,6 +1899,8 @@ const App = () => {
   const [search,       setSearch]      = useState("");
   const [pdfNotes,     setPdfNotes]    = useState([]);
   const [serverPdfs,   setServerPdfs]  = useState([]);
+  const [serverImages, setServerImages]= useState([]);
+  const [llmModel,     setLlmModel]    = useState("llama3"); // gedeeld model state
   const [tagFilter,    setTagFilter]   = useState(null);
   const [showSettings, setShowSettings]= useState(false);
   const [vaultPath,    setVaultPath]   = useState("…");
@@ -1880,11 +1923,11 @@ const App = () => {
   useEffect(() => {
     const load = async () => {
       try {
-        const [ns,as,ps,cfg] = await Promise.all([
+        const [ns,as,ps,imgs,cfg] = await Promise.all([
           api.get("/notes"), api.get("/annotations"),
-          api.get("/pdfs"),  api.get("/config"),
+          api.get("/pdfs"),  api.get("/images"), api.get("/config"),
         ]);
-        setNotes(ns); setPdfNotes(as); setServerPdfs(ps);
+        setNotes(ns); setPdfNotes(as); setServerPdfs(ps); setServerImages(imgs||[]);
         setVaultPath(cfg.vault_path || "…");
         if (ns.length > 0) setSelId(ns[0].id);
         setLoaded(true);
@@ -1895,7 +1938,8 @@ const App = () => {
     load();
   }, []);
 
-  const refreshPdfs = async () => { setServerPdfs(await api.get("/pdfs")); };
+  const refreshPdfs   = async () => { setServerPdfs(await api.get("/pdfs")); };
+  const refreshImages = async () => { setServerImages(await api.get("/images")||[]); };
 
   // ── Note helpers ──────────────────────────────────────────────────────────
   const selNote    = notes.find(n => n.id === selId);
@@ -2090,6 +2134,7 @@ const App = () => {
     {id:"notes",   icon:"📝", label:"Notities"},
     {id:"graph",   icon:"🕸",  label:"Graaf"},
     {id:"pdf",     icon:"📄", label:"PDF"},
+    {id:"images",  icon:"🖼",  label:"Plaatjes"},
     {id:"mindmap", icon:"🗺",  label:"Mindmap"},
     {id:"llm",     icon:"🧠", label:"Notebook"},
   ];
@@ -2262,7 +2307,76 @@ const App = () => {
              background: b.bg || (b.active?"rgba(159,202,86,0.15)":"none"),
              flexShrink:0,
              WebkitTapHighlightColor:"transparent"}
-    }, b.label))
+    }, b.label)),
+    // ── 📎 Media koppelen dropdown ─────────────────────────────────────────
+    React.createElement("div",{style:{position:"relative",flexShrink:0}},
+      React.createElement("button",{
+        onClick:()=>setShowMediaMenu(v=>!v),
+        title:"PDF of afbeelding koppelen in notitie",
+        style:{background:showMediaMenu?"rgba(138,198,242,0.15)":"none",
+               border:`1px solid ${showMediaMenu?"rgba(138,198,242,0.4)":W.splitBg}`,
+               borderRadius:"6px",padding:isMobile?"7px 12px":"4px 10px",
+               color:showMediaMenu?W.blue:W.fgMuted,
+               fontSize:isMobile?"13px":"11px",cursor:"pointer",flexShrink:0}
+      },"📎 koppelen"),
+      showMediaMenu && React.createElement("div",{
+        style:{position:"absolute",top:"calc(100% + 4px)",right:0,zIndex:200,
+               background:W.bg2,border:`1px solid ${W.splitBg}`,borderRadius:"7px",
+               minWidth:"240px",maxHeight:"320px",overflowY:"auto",
+               boxShadow:"0 8px 32px rgba(0,0,0,0.6)"}
+      },
+        // Sectie PDFs
+        (serverPdfs||[]).length>0 && React.createElement(React.Fragment,null,
+          React.createElement("div",{style:{padding:"6px 12px 4px",fontSize:"9px",
+            color:"rgba(229,120,109,0.6)",letterSpacing:"2px",
+            borderBottom:`1px solid ${W.splitBg}`}},"PDF'S"),
+          (serverPdfs||[]).map(p=>React.createElement("div",{
+            key:p.name,
+            onClick:()=>{
+              const link = "\n\n> 📄 **PDF:** [[pdf:"+p.name+"]]\n";
+              setEditContent(c=>c+link);
+              setShowMediaMenu(false);
+            },
+            style:{padding:"8px 14px",cursor:"pointer",fontSize:"12px",
+                   color:W.fgDim,borderBottom:`1px solid rgba(255,255,255,0.03)`,
+                   display:"flex",alignItems:"center",gap:"8px"}
+          },
+            React.createElement("span",{style:{fontSize:"14px"}},"📄"),
+            React.createElement("span",{style:{overflow:"hidden",textOverflow:"ellipsis",
+              whiteSpace:"nowrap",flex:1}},p.name)
+          ))
+        ),
+        // Sectie afbeeldingen
+        (serverImages||[]).length>0 && React.createElement(React.Fragment,null,
+          React.createElement("div",{style:{padding:"6px 12px 4px",fontSize:"9px",
+            color:"rgba(138,198,242,0.6)",letterSpacing:"2px",
+            borderBottom:`1px solid ${W.splitBg}`}},"AFBEELDINGEN"),
+          (serverImages||[]).map(img=>React.createElement("div",{
+            key:img.name,
+            onClick:()=>{
+              const md = "\n\n![[img:"+img.name+"]]\n";
+              setEditContent(c=>c+md);
+              setShowMediaMenu(false);
+            },
+            style:{padding:"8px 14px",cursor:"pointer",fontSize:"12px",
+                   color:W.fgDim,borderBottom:`1px solid rgba(255,255,255,0.03)`,
+                   display:"flex",alignItems:"center",gap:"8px"}
+          },
+            React.createElement("span",{style:{fontSize:"14px"}},"🖼"),
+            React.createElement("span",{style:{overflow:"hidden",textOverflow:"ellipsis",
+              whiteSpace:"nowrap",flex:1}},img.name)
+          ))
+        ),
+        !(serverPdfs||[]).length && !(serverImages||[]).length &&
+          React.createElement("div",{style:{padding:"16px 14px",color:W.fgMuted,
+            fontSize:"12px",textAlign:"center"}},"Geen media in vault"),
+        // Sluit dropdown bij klik buiten
+        React.createElement("div",{
+          style:{display:"none"},
+          onClick:()=>setShowMediaMenu(false)
+        })
+      )
+    )
   );
 
   // ── Preview toolbar ───────────────────────────────────────────────────────
@@ -2283,6 +2397,17 @@ const App = () => {
       }
     })),
     React.createElement("div", {style:{flex:1}}),
+    React.createElement("button", {
+      onClick:()=>setRenderMode(v=>v==="rich"?"plain":"rich"),
+      title:"Wisselen tussen plain en rijke markdown weergave",
+      style:{background:renderMode==="rich"?"rgba(138,198,242,0.12)":"none",
+             color:renderMode==="rich"?W.blue:W.fgMuted,
+             border:`1px solid ${renderMode==="rich"?"rgba(138,198,242,0.35)":W.splitBg}`,
+             borderRadius:"6px",
+             padding: isMobile ? "8px 14px" : "5px 10px",
+             fontSize: isMobile ? "13px" : "11px",
+             cursor:"pointer", WebkitTapHighlightColor:"transparent"}
+    }, renderMode==="rich" ? "📄 plain" : "🎨 render"),
     React.createElement("button", {
       onClick:openEdit,
       style:{background:"none",color:W.blue,
@@ -2385,9 +2510,16 @@ const App = () => {
               },
                 previewToolbar,
                 React.createElement("div", {
-                  className:"mdv",
-                  style:{fontSize: isMobile ? "15px" : "13px",
-                         lineHeight: isMobile ? "1.9" : "1.85"},
+                  className: renderMode==="rich" ? "mdv mdv-rich" : "mdv",
+                  style:{
+                    fontSize:   renderMode==="rich" ? (isMobile?"17px":"15px") : (isMobile?"15px":"13px"),
+                    lineHeight: renderMode==="rich" ? "2.0" : (isMobile?"1.9":"1.85"),
+                    maxWidth:   renderMode==="rich" ? "720px" : "none",
+                    margin:     renderMode==="rich" ? "0 auto" : "0",
+                    fontFamily: renderMode==="rich"
+                      ? "'Georgia','Times New Roman',serif"
+                      : "inherit",
+                  },
                   dangerouslySetInnerHTML:{__html:renderMd(selNote.content,notes)},
                   onClick:handleLink
                 }),
@@ -2449,14 +2581,47 @@ const App = () => {
           selectedId:selId})
       )
       : tab==="pdf" ? React.createElement("div",{style:{flex:1,overflow:"hidden"}},
-        React.createElement(PDFViewer,{pdfNotes,setPdfNotes,allTags,serverPdfs,onRefreshPdfs:refreshPdfs})
+        React.createElement(PDFViewer,{pdfNotes,setPdfNotes,allTags,serverPdfs,
+          onRefreshPdfs:refreshPdfs,
+          onAutoSummarize:async(fname)=>{
+            try{
+              const res=await api.llmSummarizePdf(fname,llmModel);
+              if(res?.ok && res.summary){
+                const id=genId();
+                const stem=fname.replace(/\.pdf$/i,"");
+                const note={
+                  id, title:"Samenvatting — "+stem,
+                  content:"*Automatisch gegenereerd door Notebook LLM*\n\n"+res.summary,
+                  tags:["samenvatting","pdf"],
+                  created:new Date().toISOString(), modified:new Date().toISOString()
+                };
+                const saved=await api.post("/notes",note);
+                setNotes(p=>[saved,...p]); setSelId(id); setTab("notes");
+              }
+            }catch(err){console.error("auto-summarize:",err);}
+          }})
+      )
+      : tab==="images" ? React.createElement("div",{style:{flex:1,overflow:"hidden"}},
+        React.createElement(ImagesGallery,{
+          serverImages, onRefresh:refreshImages, llmModel,
+          onAddNote:async(note)=>{
+            const saved=await api.post("/notes",note);
+            setNotes(p=>[saved,...p]); setSelId(saved.id); setTab("notes");
+          }
+        })
       )
       : tab==="mindmap" ? React.createElement("div",{style:{flex:1,overflow:"hidden"}},
         React.createElement(MindMap,{notes,allTags,
           onSelectNote:id=>{ setSelId(id); setTab("notes"); }})
       )
       : tab==="llm" ? React.createElement("div",{style:{flex:1,overflow:"hidden"}},
-        React.createElement(LLMNotebook,{notes,pdfNotes,serverPdfs,allTags})
+        React.createElement(LLMNotebook,{notes,pdfNotes,serverPdfs,serverImages,allTags,
+          llmModel,setLlmModel,
+          onAddNote:async(note)=>{
+            const saved=await api.post("/notes",note);
+            setNotes(p=>[saved,...p]); setSelId(saved.id); setTab("notes");
+          }
+        })
       )
       : notesContent
     ),
@@ -2467,6 +2632,253 @@ const App = () => {
 
 
 
+
+
+
+// ── ImagesGallery ───────────────────────────────────────────────────────────────
+// Tab voor afbeeldingen: upload, AI-beschrijving, notitie aanmaken.
+// Gebruikt llava (multimodaal) voor beschrijvingen — ollama pull llava
+
+const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote}) => {
+  const { useState, useRef, useCallback } = React;
+
+  const [busy,        setBusy]       = useState(null);  // filename die bezig is
+  const [descriptions,setDescs]      = useState({});    // fname → beschrijving
+  const [lightbox,    setLightbox]   = useState(null);  // fname of null
+  const [dragOver,    setDragOver]   = useState(false);
+  const fileRef = useRef(null);
+
+  const upload = useCallback(async (files) => {
+    for (const f of Array.from(files)) {
+      if (!f.type.startsWith("image/")) continue;
+      setBusy(f.name);
+      try {
+        const res = await api.uploadImage(f);
+        if (res?.name) {
+          await onRefresh();
+          // Automatisch beschrijving genereren
+          describeImage(res.name);
+        }
+      } catch(e) { console.error("upload:", e); }
+      setBusy(null);
+    }
+  }, [onRefresh]);
+
+  const describeImage = useCallback(async (fname) => {
+    setBusy(fname);
+    try {
+      const model = llmModel || "llava";
+      const res   = await api.llmDescribeImage(fname, model==="llama3"||model==="mistral" ? "llava" : model);
+      if (res?.description) {
+        setDescs(p=>({...p, [fname]: res.description}));
+        // Automatisch notitie aanmaken
+        if (onAddNote) {
+          const stem = fname.replace(/\.[^.]+$/,"");
+          await onAddNote({
+            id:      genId(),
+            title:   "Afbeelding — " + stem,
+            content: "*Automatisch gegenereerd*\n\n![[img:"+fname+"]]\n\n## Beschrijving\n\n"+res.description,
+            tags:    ["afbeelding","media"],
+            created: new Date().toISOString(), modified: new Date().toISOString(),
+          });
+        }
+      }
+    } catch(e) { setDescs(p=>({...p, [fname]: "⚠ Beschrijving niet beschikbaar (ollama pull llava)"})); }
+    setBusy(null);
+  }, [llmModel, onAddNote]);
+
+  const deleteImg = useCallback(async (fname) => {
+    if (!confirm("Verwijder "+fname+"?")) return;
+    await api.deleteImage(fname);
+    await onRefresh();
+  }, [onRefresh]);
+
+  const onDrop = (e) => {
+    e.preventDefault(); setDragOver(false);
+    upload(e.dataTransfer.files);
+  };
+
+  const imgs = serverImages || [];
+
+  return React.createElement("div", {
+    style:{display:"flex",flexDirection:"column",height:"100%",overflow:"hidden"}
+  },
+    // ── Toolbar ─────────────────────────────────────────────────────────────
+    React.createElement("div",{
+      style:{background:W.statusBg,borderBottom:`1px solid ${W.splitBg}`,
+             padding:"8px 14px",display:"flex",alignItems:"center",
+             gap:"10px",flexShrink:0,flexWrap:"wrap"}
+    },
+      React.createElement("span",{style:{fontSize:"11px",color:W.statusFg,
+        letterSpacing:"2px",fontWeight:"bold"}},"AFBEELDINGEN"),
+      React.createElement("span",{style:{background:W.blue,color:W.bg,
+        borderRadius:"10px",padding:"0 7px",fontSize:"10px"}}, imgs.length),
+      React.createElement("div",{style:{flex:1}}),
+      React.createElement("span",{style:{fontSize:"10px",color:W.fgMuted}},
+        "llava vereist voor AI beschrijvingen"),
+      React.createElement("button",{
+        onClick:()=>fileRef.current?.click(),
+        style:{background:W.blue,color:W.bg,border:"none",borderRadius:"6px",
+               padding:"6px 14px",fontSize:"11px",cursor:"pointer",fontWeight:"bold"}
+      },"+ upload plaatje"),
+      React.createElement("input",{
+        ref:fileRef, type:"file", multiple:true,
+        accept:"image/*", style:{display:"none"},
+        onChange:e=>{ upload(e.target.files); e.target.value=""; }
+      })
+    ),
+
+    // ── Drop zone + galerij ──────────────────────────────────────────────────
+    React.createElement("div",{
+      style:{flex:1,overflowY:"auto",padding:"16px",
+             background: dragOver?"rgba(138,198,242,0.05)":W.bg,
+             WebkitOverflowScrolling:"touch"},
+      onDragOver: e=>{ e.preventDefault(); setDragOver(true); },
+      onDragLeave: ()=>setDragOver(false),
+      onDrop,
+    },
+
+      // Lege staat met drop-zone uitnodiging
+      imgs.length===0 && React.createElement("div",{
+        style:{display:"flex",flexDirection:"column",alignItems:"center",
+               justifyContent:"center",height:"60%",gap:"14px",color:W.fgMuted,
+               border:`2px dashed ${dragOver?"rgba(138,198,242,0.5)":W.splitBg}`,
+               borderRadius:"12px",margin:"20px",padding:"40px",transition:"all 0.2s"}
+      },
+        React.createElement("div",{style:{fontSize:"48px"}},"🖼"),
+        React.createElement("div",{style:{fontSize:"15px",color:W.fgDim}},"Nog geen afbeeldingen"),
+        React.createElement("div",{style:{fontSize:"12px",textAlign:"center",lineHeight:"1.7"}},
+          "Sleep afbeeldingen hierheen of klik '+ upload plaatje'.\n",
+          React.createElement("br"),
+          "De lokale AI (llava) maakt automatisch een beschrijving\nen een notitie aan."
+        ),
+        React.createElement("button",{
+          onClick:()=>fileRef.current?.click(),
+          style:{marginTop:"8px",background:"rgba(138,198,242,0.1)",
+                 border:"1px solid rgba(138,198,242,0.3)",color:"#a8d8f0",
+                 borderRadius:"8px",padding:"10px 24px",fontSize:"13px",cursor:"pointer"}
+        },"+ afbeelding kiezen")
+      ),
+
+      // Galerij grid
+      imgs.length>0 && React.createElement("div",{
+        style:{display:"grid",
+               gridTemplateColumns:"repeat(auto-fill,minmax(240px,1fr))",
+               gap:"14px"}
+      },
+        imgs.map(img => {
+          const desc  = descriptions[img.name];
+          const isBusy= busy===img.name;
+          return React.createElement("div",{
+            key:img.name,
+            style:{background:W.bg2,border:`1px solid ${W.splitBg}`,
+                   borderRadius:"8px",overflow:"hidden",
+                   display:"flex",flexDirection:"column",
+                   boxShadow:isBusy?"0 0 0 2px rgba(138,198,242,0.4)":"none",
+                   transition:"box-shadow 0.2s"}
+          },
+            // Thumbnail
+            React.createElement("div",{
+              style:{position:"relative",paddingTop:"60%",background:W.bg,cursor:"pointer"},
+              onClick:()=>setLightbox(img.name)
+            },
+              React.createElement("img",{
+                src:"/api/image/"+encodeURIComponent(img.name),
+                alt:img.name,
+                loading:"lazy",
+                style:{position:"absolute",inset:0,width:"100%",height:"100%",
+                       objectFit:"cover"}
+              }),
+              isBusy && React.createElement("div",{
+                style:{position:"absolute",inset:0,background:"rgba(0,0,0,0.5)",
+                       display:"flex",alignItems:"center",justifyContent:"center",
+                       color:"#a8d8f0",fontSize:"12px",gap:"6px"}
+              },"⏳ AI verwerkt…")
+            ),
+            // Info
+            React.createElement("div",{style:{padding:"10px 12px",flex:1,
+              display:"flex",flexDirection:"column",gap:"6px"}},
+              React.createElement("div",{style:{fontSize:"11px",color:W.fg,
+                fontWeight:"bold",overflow:"hidden",textOverflow:"ellipsis",
+                whiteSpace:"nowrap",flex:0}}, img.name),
+              // Beschrijving
+              desc
+                ? React.createElement("div",{style:{fontSize:"11px",color:W.fgDim,
+                    lineHeight:"1.55",flex:1}}, desc)
+                : React.createElement("button",{
+                    onClick:()=>describeImage(img.name),
+                    disabled:!!busy,
+                    style:{background:"rgba(138,198,242,0.07)",
+                           border:"1px solid rgba(138,198,242,0.2)",color:"#a8d8f0",
+                           borderRadius:"4px",padding:"4px 10px",fontSize:"10px",
+                           cursor:busy?"not-allowed":"pointer",textAlign:"left",
+                           opacity:busy?0.5:1}
+                  },"🧠 AI beschrijving genereren"),
+              // Acties
+              React.createElement("div",{style:{display:"flex",gap:"5px",marginTop:"4px"}},
+                React.createElement("button",{
+                  onClick:()=>setLightbox(img.name),
+                  style:{flex:1,background:"none",border:`1px solid ${W.splitBg}`,
+                         color:W.fgMuted,borderRadius:"4px",padding:"4px",
+                         fontSize:"10px",cursor:"pointer"}
+                },"🔍 bekijken"),
+                desc && onAddNote && React.createElement("button",{
+                  onClick:async()=>{
+                    const stem=img.name.replace(/\.[^.]+$/,"");
+                    await onAddNote({
+                      id:genId(),title:"Afbeelding — "+stem,
+                      content:"*Automatisch gegenereerd*\n\n![[img:"+img.name+"]]\n\n## Beschrijving\n\n"+desc,
+                      tags:["afbeelding","media"],
+                      created:new Date().toISOString(),modified:new Date().toISOString()
+                    });
+                  },
+                  style:{flex:1,background:"rgba(138,198,242,0.08)",
+                         border:"1px solid rgba(138,198,242,0.2)",color:"#a8d8f0",
+                         borderRadius:"4px",padding:"4px",fontSize:"10px",cursor:"pointer"}
+                },"📝 notitie"),
+                React.createElement("button",{
+                  onClick:()=>deleteImg(img.name),
+                  style:{background:"rgba(229,120,109,0.08)",
+                         border:"1px solid rgba(229,120,109,0.2)",color:W.orange,
+                         borderRadius:"4px",padding:"4px 8px",fontSize:"10px",cursor:"pointer"}
+                },"🗑")
+              )
+            )
+          );
+        })
+      )
+    ),
+
+    // ── Lightbox ─────────────────────────────────────────────────────────────
+    lightbox && React.createElement("div",{
+      onClick:()=>setLightbox(null),
+      style:{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:1000,
+             display:"flex",alignItems:"center",justifyContent:"center",
+             cursor:"zoom-out"}
+    },
+      React.createElement("img",{
+        src:"/api/image/"+encodeURIComponent(lightbox),
+        alt:lightbox,
+        onClick:e=>e.stopPropagation(),
+        style:{maxWidth:"92vw",maxHeight:"88vh",objectFit:"contain",
+               borderRadius:"8px",boxShadow:"0 16px 64px rgba(0,0,0,0.8)"}
+      }),
+      React.createElement("button",{
+        onClick:()=>setLightbox(null),
+        style:{position:"absolute",top:"16px",right:"20px",background:"rgba(0,0,0,0.5)",
+               border:"1px solid rgba(255,255,255,0.2)",color:"white",
+               borderRadius:"50%",width:"36px",height:"36px",fontSize:"18px",
+               cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}
+      },"×"),
+      React.createElement("div",{
+        style:{position:"absolute",bottom:"16px",left:"50%",
+               transform:"translateX(-50%)",color:"rgba(255,255,255,0.7)",
+               fontSize:"12px",background:"rgba(0,0,0,0.5)",padding:"4px 12px",
+               borderRadius:"12px"}
+      }, lightbox)
+    )
+  );
+};
 
 
 // ── Mindmap ────────────────────────────────────────────────────────────────────
@@ -3134,7 +3546,7 @@ const SUGGESTED_MODELS = [
   { id:"deepseek-r1",   label:"DeepSeek-R1 7B",   desc:"DeepSeek · chain-of-thought redeneren" },
 ];
 
-const LLMNotebook = ({notes, pdfNotes, serverPdfs, allTags}) => {
+const LLMNotebook = ({notes, pdfNotes, serverPdfs, serverImages, allTags, onAddNote, llmModel, setLlmModel}) => {
   const { useState, useEffect, useRef, useCallback, useMemo } = React;
 
   // ── State ─────────────────────────────────────────────────────────────────
@@ -3145,17 +3557,24 @@ const LLMNotebook = ({notes, pdfNotes, serverPdfs, allTags}) => {
   const [availModels,   setAvailModels]  = useState([]);
   const [ollamaStatus,  setOllamaStatus] = useState("onbekend"); // ok / fout / laden
   const [ollamaUrl,     setOllamaUrl]    = useState("http://localhost:11434");
-  const [ctxNotes,      setCtxNotes]     = useState([]);   // geselecteerde note IDs
-  const [ctxPdfs,       setCtxPdfs]      = useState([]);   // geselecteerde PDF namen
+  const [ctxNotes,      setCtxNotes]     = useState([]);
+  const [ctxPdfs,       setCtxPdfs]      = useState([]);
+  const [ctxImages,     setCtxImages]    = useState([]);
   const [showContext,   setShowContext]  = useState(true);
   const [showInstall,   setShowInstall]  = useState(false);
   const [tagFilter,     setTagFilter]    = useState(null);
+  const [savingNote,    setSavingNote]   = useState(false);
+  const [mmPending,     setMmPending]    = useState(false);   // mindmap genereren
 
   const chatEndRef  = useRef(null);
   const inputRef    = useRef(null);
   const abortRef    = useRef(null);  // AbortController voor streaming
 
   // ── Ollama status check ───────────────────────────────────────────────────
+  // Sync model met parent (gedeeld llmModel)
+  useEffect(()=>{ if(llmModel) setModel(llmModel); },[llmModel]);
+  useEffect(()=>{ if(setLlmModel && model) setLlmModel(model); },[model]);
+
   const checkOllama = useCallback(async () => {
     setOllamaStatus("laden");
     try {
@@ -3165,7 +3584,6 @@ const LLMNotebook = ({notes, pdfNotes, serverPdfs, allTags}) => {
       if (d.ok && d.models.length > 0) {
         setAvailModels(d.models);
         setOllamaStatus("ok");
-        // Selecteer eerste beschikbare model als huidig model niet beschikbaar is
         if (!d.models.includes(model)) setModel(d.models[0]);
       } else if (d.ok) {
         setAvailModels([]);
@@ -3189,12 +3607,14 @@ const LLMNotebook = ({notes, pdfNotes, serverPdfs, allTags}) => {
   const contextSummary = useMemo(() => {
     const nCount = ctxNotes.length;
     const pCount = ctxPdfs.length;
-    if (!nCount && !pCount) return null;
+    const iCount = ctxImages.length;
+    if (!nCount && !pCount && !iCount) return null;
     const parts = [];
-    if (nCount) parts.push(`${nCount} notitie${nCount>1?"s":""}`);
-    if (pCount) parts.push(`${pCount} PDF${pCount>1?"'s":""}`);
+    if (nCount) parts.push(nCount+" notitie"+(nCount>1?"s":""));
+    if (pCount) parts.push(pCount+" PDF"+(pCount>1?"'s":""));
+    if (iCount) parts.push(iCount+" afb.");
     return parts.join(" + ");
-  }, [ctxNotes, ctxPdfs]);
+  }, [ctxNotes, ctxPdfs, ctxImages]);
 
   // ── Gefilterde notities voor context-selector ─────────────────────────────
   const filteredNotes = useMemo(() => {
@@ -3234,8 +3654,9 @@ const LLMNotebook = ({notes, pdfNotes, serverPdfs, allTags}) => {
       const body = JSON.stringify({
         model,
         messages: history.map(m => ({ role: m.role, content: m.content })),
-        context_notes: ctxNotes,
-        context_pdfs:  ctxPdfs,
+        context_notes:  ctxNotes,
+        context_pdfs:   ctxPdfs,
+        context_images: ctxImages,
       });
 
       const resp = await fetch("/api/llm/chat", {
@@ -3307,10 +3728,68 @@ const LLMNotebook = ({notes, pdfNotes, serverPdfs, allTags}) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
   };
 
-  const clearChat = () => {
-    setMessages([]);
-    setInput("");
-  };
+  const clearChat = () => { setMessages([]); setInput(""); };
+
+  // ── Analyse → nieuwe notitie ─────────────────────────────────────────────
+  const saveAnalysisAsNote = useCallback(async () => {
+    if (!messages.length || !onAddNote) return;
+    setSavingNote(true);
+    try {
+      const assistantMsgs = messages.filter(m=>m.role==="assistant"&&m.content);
+      const content = assistantMsgs.map(m=>m.content).join("
+
+---
+
+");
+      const date    = new Date().toLocaleDateString("nl-NL");
+      const ctxLabel= ctxNotes.length||ctxPdfs.length
+        ? " (" + [...ctxNotes.slice(0,2), ...ctxPdfs.slice(0,2)].join(", ") + ")"
+        : "";
+      const note = {
+        id: genId(),
+        title: "Analyse " + date + ctxLabel,
+        content: "# Notebook LLM Analyse
+
+*" + date + "*
+
+" + content,
+        tags: ["analyse","llm"],
+        created: new Date().toISOString(), modified: new Date().toISOString(),
+      };
+      await onAddNote(note);
+    } catch(e){ console.error(e); }
+    setSavingNote(false);
+  }, [messages, ctxNotes, ctxPdfs, onAddNote]);
+
+  // ── Mindmap genereren op basis van context ────────────────────────────────
+  const generateMindmap = useCallback(async () => {
+    if (!ctxNotes.length && !ctxPdfs.length) return;
+    setMmPending(true);
+    try {
+      const res = await api.llmMindmap({
+        model, context_notes: ctxNotes, context_pdfs: ctxPdfs
+      });
+      if (res?.ok && res.mindmap) {
+        // Voeg mindmap als assistent-bericht toe in chat
+        const mm = res.mindmap;
+        let md = "## 🗺 Mindmap: " + (mm.root||"Overzicht") + "
+
+";
+        (mm.branches||[]).forEach(b=>{
+          md += "**" + b.label + "**
+";
+          (b.children||[]).forEach(c=>{ md += "  - " + c + "
+"; });
+          md += "
+";
+        });
+        setMessages(p=>[...p,{role:"assistant",content:md}]);
+      } else {
+        setMessages(p=>[...p,{role:"assistant",content:"⚠ Mindmap genereren mislukt: "+(res?.error||"onbekend")}]);
+      }
+    } catch(e){ setMessages(p=>[...p,{role:"assistant",content:"⚠ "+e.message}]); }
+    setMmPending(false);
+  }, [model, ctxNotes, ctxPdfs]);
 
   // ── Render markdown in chat (eenvoudig) ───────────────────────────────────
   const renderMsg = (content) => {
@@ -3456,6 +3935,46 @@ const LLMNotebook = ({notes, pdfNotes, serverPdfs, allTags}) => {
           );
         }),
 
+        // Afbeeldingen sectie
+        (serverImages||[]).length > 0 && React.createElement(React.Fragment, null,
+          React.createElement("div", {
+            style:{padding:"8px 10px 4px",fontSize:"9px",
+                   color:"rgba(229,193,120,0.6)",
+                   letterSpacing:"2px",borderBottom:`1px solid ${W.splitBg}`,
+                   display:"flex",alignItems:"center",gap:"6px",background:W.bg}
+          },
+            React.createElement("span",null,"AFBEELDINGEN"),
+            React.createElement("span",{style:{background:W.yellow,color:W.bg,borderRadius:"8px",
+              padding:"0 5px",fontSize:"9px"}},ctxImages.length+"/"+(serverImages||[]).length)
+          ),
+          (serverImages||[]).map(img => {
+            const sel = ctxImages.includes(img.name);
+            return React.createElement("div", {
+              key:img.name,
+              onClick:()=>setCtxImages(p=>sel?p.filter(x=>x!==img.name):[...p,img.name]),
+              style:{
+                padding:"7px 12px",borderBottom:`1px solid rgba(255,255,255,0.03)`,
+                cursor:"pointer",display:"flex",alignItems:"center",gap:"8px",
+                background:sel?"rgba(229,193,120,0.07)":"transparent",
+                borderLeft:`3px solid ${sel?"rgba(229,193,120,0.5)":"transparent"}`,
+              }
+            },
+              React.createElement("div", {
+                style:{width:"14px",height:"14px",borderRadius:"3px",flexShrink:0,
+                       background:sel?"rgba(229,193,120,0.25)":"transparent",
+                       border:`1.5px solid ${sel?"rgba(229,193,120,0.6)":"rgba(255,255,255,0.15)"}`,
+                       display:"flex",alignItems:"center",justifyContent:"center"}
+              }, sel&&React.createElement("span",{style:{fontSize:"9px",color:W.yellow,lineHeight:1}},"✓")),
+              React.createElement("img",{src:img.url,alt:img.name,
+                style:{width:"28px",height:"28px",objectFit:"cover",borderRadius:"3px",
+                       flexShrink:0,background:W.lineNrBg}}),
+              React.createElement("div",{style:{minWidth:0,fontSize:"11px",
+                color:sel?W.fg:W.fgDim,overflow:"hidden",
+                textOverflow:"ellipsis",whiteSpace:"nowrap"}},img.name)
+            );
+          })
+        ),
+
         // PDF's sectie
         pdfsWithAnnots.length > 0 && React.createElement(React.Fragment, null,
           React.createElement("div", {
@@ -3562,6 +4081,24 @@ const LLMNotebook = ({notes, pdfNotes, serverPdfs, allTags}) => {
           style:{background:"none",border:`1px solid ${W.orange}`,color:W.orange,
                  borderRadius:"4px",padding:"3px 8px",fontSize:"10px",cursor:"pointer"}
         },"? installatie"),
+
+        // Mindmap knop
+        (ctxNotes.length>0||ctxPdfs.length>0) && React.createElement("button", {
+          onClick:generateMindmap, disabled:mmPending,
+          style:{background:"rgba(138,198,242,0.08)",
+                 border:"1px solid rgba(138,198,242,0.25)",
+                 color:mmPending?W.fgMuted:"#a8d8f0",
+                 borderRadius:"4px",padding:"3px 10px",fontSize:"10px",cursor:"pointer"}
+        }, mmPending?"🗺 genereren…":"🗺 mindmap"),
+
+        // Analyse → notitie
+        messages.length>0 && onAddNote && React.createElement("button", {
+          onClick:saveAnalysisAsNote, disabled:savingNote,
+          style:{background:"rgba(159,202,86,0.08)",
+                 border:"1px solid rgba(159,202,86,0.25)",
+                 color:savingNote?W.fgMuted:W.comment,
+                 borderRadius:"4px",padding:"3px 10px",fontSize:"10px",cursor:"pointer"}
+        }, savingNote?"💾 opslaan…":"💾 → notitie"),
 
         // Clear
         messages.length > 0 && React.createElement("button", {
