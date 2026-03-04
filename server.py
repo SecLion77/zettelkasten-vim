@@ -502,7 +502,7 @@ class ZKHandler(BaseHTTPRequestHandler):
         if not fname: return self._send(400,{"error":"filename vereist"})
 
         # Probeer eerst tekstextractie
-        text=self.extract_pdf_text(fname,10000)
+        text=self.vault.extract_pdf_text(fname,10000)
 
         # Als tekst beschikbaar: stuur als tekst-prompt
         if text.strip():
