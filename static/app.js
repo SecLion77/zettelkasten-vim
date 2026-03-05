@@ -4622,6 +4622,7 @@ const App = () => {
   const [showSettings, setShowSettings]= useState(false);
   const [vaultPath,    setVaultPath]   = useState("…");
   const [goyoMode,     setGoyoMode]    = useState(false);
+  const [showMetaPanel,setShowMetaPanel]= useState(false); // meta-paneel rechts, standaard ingeklapt
   const [loaded,       setLoaded]      = useState(false);
   const [error,        setError]       = useState(null);
   const [sidebarOpen,  setSidebarOpen] = useState(false);
@@ -4647,7 +4648,7 @@ const App = () => {
   // Op desktop sidebar altijd open; tablet/mobile via toggle
   const showSidebar  = isDesktop || sidebarOpen;
   const sidebarW     = isMobile ? Math.min(winW - 40, 320) : 240;
-  const showMeta     = isDesktop && !goyoMode;
+  const showMeta     = isDesktop && !goyoMode && showMetaPanel;
 
   // ── CSS animaties voor AI indicator ──────────────────────────────────────
   React.useEffect(()=>{
@@ -4689,47 +4690,19 @@ const App = () => {
     ...notes.flatMap(n => n.tags||[]),
     ...pdfNotes.flatMap(p => p.tags||[])
   ])], [notes, pdfNotes]);
-  const sidebarTags = useMemo(() => {
-    // Tags uit notities + pdf-annotaties + img-annotaties afhankelijk van typeFilter
-    const fromNotes  = notes.flatMap(n => n.tags||[]);
-    const fromPdfs   = pdfNotes.flatMap(p => p.tags||[]);
-    const fromImages = imgNotes.flatMap(i => i.tags||[]);
-    if (typeFilter==="pdf")    return [...new Set(fromPdfs)];
-    if (typeFilter==="images") return [...new Set(fromImages)];
-    if (typeFilter==="notes")  return [...new Set(fromNotes)];
-    return [...new Set([...fromNotes,...fromPdfs,...fromImages])];
-  }, [notes, pdfNotes, imgNotes, typeFilter]);
+  const sidebarTags = useMemo(() =>
+    [...new Set(notes.flatMap(n => n.tags||[]))],
+  [notes]);
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
-    // Notities
-    const matchedNotes = notes.filter(n =>
+    return notes.filter(n =>
       (!q || n.title?.toLowerCase().includes(q)
           || n.content?.toLowerCase().includes(q)
-          || (n.tags||[]).some(t=>t.includes(q)))
+          || (n.tags||[]).some(t => t.includes(q)))
       && (!tagFilter || (n.tags||[]).includes(tagFilter))
-    ).map(n => ({...n, _type:"note"}));
-    // PDF-annotaties
-    const matchedPdfs = pdfNotes.filter(p =>
-      (!q || p.text?.toLowerCase().includes(q)
-          || p.note?.toLowerCase().includes(q)
-          || p.file?.toLowerCase().includes(q)
-          || (p.tags||[]).some(t=>t.includes(q)))
-      && (!tagFilter || (p.tags||[]).includes(tagFilter))
-    ).map(p => ({...p, _type:"pdf", title:"📄 "+p.file+" — "+(p.text||"").slice(0,30)}));
-    // Afbeelding-annotaties
-    const matchedImgs = imgNotes.filter(i =>
-      (!q || i.file?.toLowerCase().includes(q)
-          || i.note?.toLowerCase().includes(q)
-          || (i.tags||[]).some(t=>t.includes(q)))
-      && (!tagFilter || (i.tags||[]).includes(tagFilter))
-    ).map(i => ({...i, _type:"image", title:"🖼 "+i.file+" — "+(i.note||"").slice(0,30)}));
-
-    if (typeFilter==="notes")  return matchedNotes;
-    if (typeFilter==="pdf")    return matchedPdfs;
-    if (typeFilter==="images") return matchedImgs;
-    return [...matchedNotes, ...matchedPdfs, ...matchedImgs];
-  }, [notes, pdfNotes, imgNotes, search, tagFilter, typeFilter]);
+    );
+  }, [notes, search, tagFilter]);
 
   const titleRef   = useRef(null);
   const contentRef = useRef(null);
@@ -4840,11 +4813,12 @@ const App = () => {
         }, "×")
       ),
       // Zoekbalk + nieuw zettel
-      React.createElement("div",{style:{display:"flex",gap:"5px",marginBottom:"6px"}},
+      React.createElement("div",{style:{display:"flex",gap:"5px"}},
         React.createElement("input", {
           value:search, onChange:e=>setSearch(e.target.value),
           placeholder:"🔍 zoeken…",
-          style:{flex:1,background:W.bg,border:`1px solid ${search?W.blue:W.splitBg}`,
+          style:{flex:1,background:W.bg,
+                 border:`1px solid ${search?W.blue:W.splitBg}`,
                  borderRadius:"6px",padding:"6px 9px",color:W.fg,
                  fontSize:"12px",outline:"none",
                  WebkitAppearance:"none",transition:"border-color 0.15s"}
@@ -4853,21 +4827,9 @@ const App = () => {
           onClick:newNote,
           title:"Nieuw zettel",
           style:{background:W.blue,color:W.bg,border:"none",
-                 borderRadius:"6px",padding:"6px 10px",fontSize:"14px",
-                 cursor:"pointer",fontWeight:"bold",flexShrink:0}
+                 borderRadius:"6px",padding:"6px 11px",fontSize:"15px",
+                 cursor:"pointer",fontWeight:"bold",flexShrink:0,lineHeight:1}
         }, "+")
-      ),
-      // Type-filter tabs: Alles / Notities / PDF / Plaatjes
-      React.createElement("div",{style:{display:"flex",gap:"3px"}},
-        [["all","Alles"],["notes","📝"],["pdf","📄"],["images","🖼"]].map(([id,lbl])=>
-          React.createElement("button",{
-            key:id, onClick:()=>{ setTypeFilter(id); setTagFilter(null); },
-            style:{flex:1,background:typeFilter===id?"rgba(138,198,242,0.18)":"none",
-                   border:`1px solid ${typeFilter===id?"rgba(138,198,242,0.5)":W.splitBg}`,
-                   borderRadius:"4px",color:typeFilter===id?W.blue:W.fgMuted,
-                   fontSize:"10px",padding:"3px 2px",cursor:"pointer",letterSpacing:"0.3px"}
-          }, lbl)
-        )
       )
     ),
     // Tag-filter chips
@@ -4887,58 +4849,52 @@ const App = () => {
     ),
     // Actieve filter badge
     (tagFilter||search) && React.createElement("div",{style:{
-      padding:"4px 8px",borderBottom:`1px solid ${W.splitBg}`,
-      background:"rgba(159,202,86,0.05)",flexShrink:0,
+      padding:"3px 8px",borderBottom:`1px solid ${W.splitBg}`,
+      background:"rgba(159,202,86,0.04)",flexShrink:0,
       display:"flex",gap:"5px",alignItems:"center",flexWrap:"wrap"
     }},
-      search && React.createElement("span",{style:{fontSize:"9px",color:W.fgMuted}},
-        `${filtered.length} resultaten`),
+      React.createElement("span",{style:{fontSize:"9px",color:W.fgMuted}},
+        filtered.length+" resultaten"),
       tagFilter && React.createElement("button",{
         onClick:()=>setTagFilter(null),
         style:{fontSize:"9px",background:"rgba(159,202,86,0.15)",color:W.comment,
                border:"1px solid rgba(159,202,86,0.3)",borderRadius:"3px",
                padding:"1px 6px",cursor:"pointer"}
       },"#",tagFilter," ×"),
-      (search||tagFilter) && React.createElement("button",{
+      React.createElement("button",{
         onClick:()=>{ setSearch(""); setTagFilter(null); },
         style:{fontSize:"9px",background:"none",color:W.fgMuted,
                border:"none",cursor:"pointer",marginLeft:"auto",padding:"1px 4px"}
-      },"wis alles")
+      },"× wis")
     ),
-    // Lijst
+    // Notities-lijst
     React.createElement("div", {style:{flex:1,overflowY:"auto",WebkitOverflowScrolling:"touch"}},
-      filtered.length===0 ? React.createElement("div",{style:{
-        padding:"24px 12px",color:W.fgMuted,fontSize:"11px",textAlign:"center",lineHeight:"1.8"
-      }},
-        search||tagFilter ? "Geen resultaten gevonden" :
-        typeFilter==="pdf" ? "Geen PDF-annotaties" :
-        typeFilter==="images" ? "Geen afbeelding-annotaties" :
-        "Nog geen notities"
-      ) :
-      filtered.map(n => {
-        const sel = n.id === selId && n._type==="note";
-        const isNote = !n._type || n._type==="note";
-        return React.createElement("div", {
-          key:(n._type||"note")+"-"+n.id,
-          onClick:()=>{ if(isNote) selectNote(n.id); },
-          style:{padding:"9px 12px",borderBottom:`1px solid ${W.splitBg}`,
-                 cursor:isNote?"pointer":"default",
-                 background:sel?W.visualBg:"transparent",
-                 borderLeft:`3px solid ${sel?W.yellow:n._type==="pdf"?W.orange:n._type==="image"?"#9fcf56":"transparent"}`,
-                 minHeight:"46px"}
-        },
-          React.createElement("div", {
-            style:{fontSize:"12px",color:sel?W.statusFg:W.fg,
-                   lineHeight:"1.35",marginBottom:"3px",fontWeight:sel?"bold":"normal",
-                   overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}
-          }, n.title || n.file || "–"),
-          n.tags?.length > 0 && React.createElement("div", {
-            style:{display:"flex",flexWrap:"wrap",gap:"3px",marginTop:"2px"}
-          }, (n.tags||[]).slice(0,3).map(t =>
-            React.createElement(TagPill, {key:t,tag:t,small:true})
-          ))
-        );
-      })
+      filtered.length===0
+        ? React.createElement("div",{style:{padding:"24px 12px",color:W.fgMuted,
+            fontSize:"11px",textAlign:"center",lineHeight:"1.8"}},
+            search||tagFilter ? "Geen resultaten" : "Nog geen notities")
+        : filtered.map(n => {
+            const sel = n.id === selId;
+            return React.createElement("div", {
+              key:n.id,
+              onClick:()=>selectNote(n.id),
+              style:{padding:"9px 12px",borderBottom:`1px solid ${W.splitBg}`,
+                     cursor:"pointer",background:sel?W.visualBg:"transparent",
+                     borderLeft:`3px solid ${sel?W.yellow:"transparent"}`,
+                     minHeight:"46px"}
+            },
+              React.createElement("div", {
+                style:{fontSize:"12px",color:sel?W.statusFg:W.fg,
+                       lineHeight:"1.35",marginBottom:"3px",fontWeight:sel?"bold":"normal",
+                       overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}
+              }, n.title || "–"),
+              n.tags?.length > 0 && React.createElement("div", {
+                style:{display:"flex",flexWrap:"wrap",gap:"3px",marginTop:"2px"}
+              }, (n.tags||[]).slice(0,3).map(t =>
+                React.createElement(TagPill, {key:t,tag:t,small:true})
+              ))
+            );
+          })
     )
   );
 
@@ -4975,23 +4931,34 @@ const App = () => {
              padding:"0 14px",height:"100%",
              fontSize:"16px",cursor:"pointer"}
     }, "☰"),
-    // Tabs
-    tabs.map(({id,label}) => React.createElement("button", {
+    // Tabs met icoon + label
+    tabs.map(({id, icon, label}) => React.createElement("button", {
       key:id, onClick:()=>setTab(id),
-      style:{background:tab===id?W.bg:"transparent",
-             color:tab===id?W.statusFg:W.fgMuted,
-             border:"none",borderRight:`1px solid ${W.splitBg}`,
-             padding:"0 18px",height:"100%",fontSize:"12px",
-             cursor:"pointer",letterSpacing:"1px",
-             borderBottom:tab===id?`2px solid ${W.yellow}`:"2px solid transparent"}
-    }, label)),
+      style:{
+        background: tab===id ? "rgba(255,255,255,0.07)" : "transparent",
+        color: tab===id ? W.statusFg : W.fgMuted,
+        border: "none",
+        borderBottom: tab===id ? `2px solid ${W.yellow}` : "2px solid transparent",
+        borderRight: `1px solid ${W.splitBg}`,
+        padding: "0 16px",
+        height: "100%",
+        fontSize: "11px",
+        cursor: "pointer",
+        letterSpacing: "0.5px",
+        display: "flex", alignItems: "center", gap: "5px",
+        flexShrink: 0,
+        transition: "color 0.12s, background 0.12s",
+      }
+    },
+      React.createElement("span", {style:{fontSize:"14px", lineHeight:1}}, icon),
+      React.createElement("span", null, label)
+    )),
     React.createElement("div", {style:{flex:1}}),
     // Stats
     React.createElement("div", {
       style:{padding:"0 10px",fontSize:"10px",color:W.fgMuted,
              display:"flex",gap:"10px",alignItems:"center"}
     },
-      // AI-status indicator
       aiStatus && React.createElement("div", {
         style:{display:"flex",alignItems:"center",gap:"6px",
                background:"rgba(138,198,242,0.08)",
@@ -5006,33 +4973,57 @@ const App = () => {
         aiStatus
       ),
       React.createElement("span", null, notes.length, " zettels"),
-      React.createElement("span", null, allTags.length, " tags"),
       React.createElement("span", {style:{color:W.splitBg}}, "│"),
       React.createElement("span", {
-        style:{color:W.fgDim,maxWidth:"180px",overflow:"hidden",
+        style:{color:W.fgDim,maxWidth:"160px",overflow:"hidden",
                textOverflow:"ellipsis",whiteSpace:"nowrap",
                fontSize:"9px",cursor:"pointer"},
         onClick:()=>setShowSettings(true),
         title:vaultPath
       }, "📁 ", vaultPath.split("/").slice(-2).join("/"))
     ),
+    // Split-scherm knop
     React.createElement("button", {
       onClick:()=>setSplitMode(p=>!p),
       title: splitMode ? "Split-scherm sluiten" : "Split-scherm openen",
-      style:{background:splitMode?"rgba(138,198,242,0.15)":"none",
-             border:`1px solid ${splitMode?"rgba(138,198,242,0.4)":W.splitBg}`,
-             borderRadius:"4px",padding:"4px 10px",
-             color:splitMode?W.blue:W.fgMuted,
-             fontSize:"11px",cursor:"pointer",margin:"0 4px",
-             letterSpacing:"1px"}
-    }, splitMode ? "⊟ split" : "⊞ split"),
+      style:{
+        background: splitMode
+          ? "linear-gradient(135deg,rgba(138,198,242,0.25),rgba(138,198,242,0.12))"
+          : "rgba(255,255,255,0.04)",
+        border: `1px solid ${splitMode ? "rgba(138,198,242,0.55)" : W.splitBg}`,
+        borderRadius: "6px",
+        padding: "5px 13px",
+        color: splitMode ? W.blue : W.fgMuted,
+        fontSize: "11px", cursor: "pointer",
+        margin: "0 4px 0 8px",
+        display: "flex", alignItems: "center", gap: "5px",
+        letterSpacing: "0.4px",
+        boxShadow: splitMode ? "0 0 8px rgba(138,198,242,0.2)" : "none",
+        transition: "all 0.15s",
+      }
+    },
+      React.createElement("span",{style:{fontSize:"13px"}}, splitMode ? "⊟" : "⊞"),
+      "split"
+    ),
+    // Instellingen knop
     React.createElement("button", {
       onClick:()=>setShowSettings(true),
-      style:{background:"none",border:`1px solid ${W.splitBg}`,
-             borderRadius:"4px",padding:"4px 12px",color:W.fgMuted,
-             fontSize:"11px",cursor:"pointer",margin:"0 10px",
-             letterSpacing:"1px"}
-    }, "⚙ instellingen")
+      style:{
+        background: "rgba(255,255,255,0.04)",
+        border: `1px solid ${W.splitBg}`,
+        borderRadius: "6px",
+        padding: "5px 13px",
+        color: W.fgMuted,
+        fontSize: "11px", cursor: "pointer",
+        margin: "0 10px 0 0",
+        display: "flex", alignItems: "center", gap: "5px",
+        letterSpacing: "0.4px",
+        transition: "all 0.15s",
+      }
+    },
+      React.createElement("span",{style:{fontSize:"13px"}},"⚙"),
+      "instellingen"
+    )
   );
 
   // ── Mobile top bar ────────────────────────────────────────────────────────
@@ -5338,41 +5329,59 @@ const App = () => {
   );
 
   // ── Meta panel ────────────────────────────────────────────────────────────
-  const metaPanel = showMeta && React.createElement("div", {
-    className:"meta-panel",
-    style:{width:"180px",flexShrink:0,background:W.bg2,
-           borderLeft:`1px solid ${W.splitBg}`,
-           padding:"14px 12px",fontSize:"11px",overflowY:"auto"}
-  },
-    React.createElement("div",{style:{color:W.fgMuted,fontSize:"9px",marginBottom:"4px",letterSpacing:"1px"}},"ID"),
-    React.createElement("div",{style:{color:W.comment,wordBreak:"break-all",marginBottom:"14px",fontSize:"10px"}},selNote.id),
-    React.createElement("div",{style:{color:W.fgMuted,fontSize:"9px",marginBottom:"6px",letterSpacing:"1px"}},"TAGS"),
-    React.createElement("div",{style:{display:"flex",flexWrap:"wrap",gap:"4px",marginBottom:"10px"}},
-      ...(selNote.tags||[]).map(t => React.createElement(TagPill,{key:t,tag:t,
-        onRemove:async t=>{
-          const updated={...selNote,tags:(selNote.tags||[]).filter(x=>x!==t)};
-          const saved=await api.put("/notes/"+selId,updated);
-          setNotes(prev=>prev.map(n=>n.id===selId?saved:n));
-        }})),
-      !(selNote.tags||[]).length && React.createElement("span",{style:{fontSize:"10px",color:W.splitBg}},"geen")
-    ),
-    React.createElement("div",{style:{fontSize:"9px",color:W.splitBg,lineHeight:"2",marginBottom:"14px",padding:"6px 8px",background:"rgba(0,0,0,0.2)",borderRadius:"3px"}},
-      [":tag naam1 naam2",":tag+ naam",":tag- naam",":goyo focus",":spell en/nl","Ctrl+J snippet"].map((t,i)=>
-        React.createElement("div",{key:i,style:{color:W.fgMuted}},t))
-    ),
-    extractLinks(selNote.content).length>0 && React.createElement(React.Fragment,null,
-      React.createElement("div",{style:{color:W.fgMuted,fontSize:"9px",marginBottom:"6px",letterSpacing:"1px"}},"LINKS →"),
-      extractLinks(selNote.content).map(id=>{
-        const n=notes.find(x=>x.id===id);
-        return React.createElement("div",{key:id,onClick:()=>n&&setSelId(n.id),
-          style:{fontSize:"10px",color:n?W.keyword:W.fgMuted,cursor:n?"pointer":"default",
-                 padding:"3px 0",borderBottom:`1px solid ${W.splitBg}`,marginBottom:"2px"}
-        },"→ ",n?n.title:id);
-      })
-    ),
-    React.createElement("div",{style:{marginTop:"14px",color:W.fgMuted,fontSize:"9px",letterSpacing:"1px",marginBottom:"4px"}},"GEWIJZIGD"),
-    React.createElement("div",{style:{fontSize:"10px",color:W.fgDim}},
-      selNote.modified?new Date(selNote.modified).toLocaleString("nl-NL"):"—")
+  const metaPanel = isDesktop && !goyoMode && React.createElement(React.Fragment, null,
+    // Smalle toggle-strip aan de rechterkant — altijd zichtbaar
+    React.createElement("button", {
+      onClick:()=>setShowMetaPanel(p=>!p),
+      title: showMetaPanel ? "Info verbergen" : "Info tonen",
+      style:{
+        width:"18px", flexShrink:0, background:W.bg2,
+        borderLeft:`1px solid ${W.splitBg}`,
+        border:"none", cursor:"pointer", color:W.fgMuted,
+        fontSize:"10px", padding:0, display:"flex",
+        alignItems:"center", justifyContent:"center",
+        writingMode:"vertical-rl",
+        letterSpacing:"1px",
+      }
+    }, showMetaPanel ? "▶" : "◀"),
+
+    // Paneel inhoud — alleen als open
+    showMetaPanel && React.createElement("div", {
+      className:"meta-panel",
+      style:{width:"178px",flexShrink:0,background:W.bg2,
+             borderLeft:`1px solid ${W.splitBg}`,
+             padding:"14px 12px",fontSize:"11px",overflowY:"auto"}
+    },
+      React.createElement("div",{style:{color:W.fgMuted,fontSize:"9px",marginBottom:"4px",letterSpacing:"1px"}},"ID"),
+      React.createElement("div",{style:{color:W.comment,wordBreak:"break-all",marginBottom:"14px",fontSize:"10px"}},selNote.id),
+      React.createElement("div",{style:{color:W.fgMuted,fontSize:"9px",marginBottom:"6px",letterSpacing:"1px"}},"TAGS"),
+      React.createElement("div",{style:{display:"flex",flexWrap:"wrap",gap:"4px",marginBottom:"10px"}},
+        ...(selNote.tags||[]).map(t => React.createElement(TagPill,{key:t,tag:t,
+          onRemove:async t=>{
+            const updated={...selNote,tags:(selNote.tags||[]).filter(x=>x!==t)};
+            const saved=await api.put("/notes/"+selId,updated);
+            setNotes(prev=>prev.map(n=>n.id===selId?saved:n));
+          }})),
+        !(selNote.tags||[]).length && React.createElement("span",{style:{fontSize:"10px",color:W.splitBg}},"geen")
+      ),
+      React.createElement("div",{style:{fontSize:"9px",color:W.splitBg,lineHeight:"2",marginBottom:"14px",padding:"6px 8px",background:"rgba(0,0,0,0.2)",borderRadius:"3px"}},
+        [":tag naam1 naam2",":tag+ naam",":tag- naam",":goyo focus",":spell en/nl","Ctrl+J snippet"].map((t,i)=>
+          React.createElement("div",{key:i,style:{color:W.fgMuted}},t))
+      ),
+      extractLinks(selNote.content).length>0 && React.createElement(React.Fragment,null,
+        React.createElement("div",{style:{color:W.fgMuted,fontSize:"9px",marginBottom:"6px",letterSpacing:"1px"}},"LINKS →"),
+        extractLinks(selNote.content).map(id=>{
+          const n=notes.find(x=>x.id===id);
+          return React.createElement("div",{key:id,onClick:()=>n&&setSelId(n.id),
+            style:{fontSize:"10px",color:n?W.keyword:W.fgMuted,cursor:n?"pointer":"default",
+                   padding:"3px 0",borderBottom:`1px solid ${W.splitBg}`,marginBottom:"2px"}
+          },"→ ",n?n.title:id);
+        })
+      ),
+      React.createElement("div",{style:{marginTop:"14px",color:W.fgMuted,fontSize:"9px",letterSpacing:"1px",marginBottom:"4px"}},"GEWIJZIGD"),
+      React.createElement("div",{style:{fontSize:"10px",color:W.fgDim}},
+        selNote.modified?new Date(selNote.modified).toLocaleString("nl-NL"):"—")
+    )
   );
 
   // ── Notes tab content ─────────────────────────────────────────────────────
