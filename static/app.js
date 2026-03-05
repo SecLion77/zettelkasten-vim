@@ -3061,7 +3061,7 @@ const MM_NODE_H  = 32;
 const MM_RADIUS  = 200;  // afstand root→tag
 const MM_LEAF_R  = 140;  // afstand tag→notitie
 
-const MindMap = ({notes, allTags, onSelectNote, aiMindmap}) => {
+const MindMap = ({notes, allTags, onSelectNote, aiMindmap, onAddNote}) => {
   const { useState, useEffect, useRef, useCallback, useMemo } = React;
 
   // ── Node state ────────────────────────────────────────────────────────────
@@ -3684,6 +3684,88 @@ const MindMap = ({notes, allTags, onSelectNote, aiMindmap}) => {
 
   const selNode = nodes.find(n=>n.id===selId);
 
+  // ── Mindmap → Markdown boomstructuur ──────────────────────────────────────
+  // Bouwt een hiërarchische markdown-string uit de huidige nodes+edges.
+  const nodesToMarkdown = useCallback(() => {
+    const ns = nodes;
+    if (!ns.length) return "";
+
+    // Bouw parent→children map
+    const childrenOf = {};
+    ns.forEach(n => { childrenOf[n.id] = []; });
+    edges.forEach(e => {
+      if (childrenOf[e.from] !== undefined) childrenOf[e.from].push(e.to);
+    });
+
+    const root = ns.find(n => n.type === "root" || n.id === "root");
+    if (!root) return "";
+
+    const title = root.fullLabel || root.label;
+    const lines = [`# ${title}`, ""];
+
+    // Recursief de boom afdrukken
+    const walk = (nodeId, depth) => {
+      const children = (childrenOf[nodeId] || [])
+        .map(cid => ns.find(n => n.id === cid))
+        .filter(Boolean)
+        .sort((a, b) => (a.y || 0) - (b.y || 0));  // volgorde top→bottom
+
+      children.forEach(child => {
+        const label = child.fullLabel || child.label;
+        if (depth === 1) {
+          // Hoofd-takken als ## sectie
+          lines.push(`## ${label}`);
+          lines.push("");
+        } else if (depth === 2) {
+          lines.push(`### ${label}`);
+          lines.push("");
+        } else {
+          // Dieper: geneste bullet
+          const indent = "  ".repeat(depth - 3);
+          lines.push(`${indent}- **${label}**`);
+        }
+        walk(child.id, depth + 1);
+      });
+    };
+
+    walk(root.id, 1);
+
+    // Voeg footer toe
+    const modeLabel = aiMode ? "AI-mindmap" : "Vault-mindmap";
+    lines.push("");
+    lines.push("---");
+    lines.push(`*Gegenereerd vanuit ${modeLabel} op ${new Date().toLocaleDateString("nl-NL")}*`);
+
+    return lines.join("\n");
+  }, [nodes, edges, aiMode]);
+
+  const [saving, setSaving] = useState(false);
+  const [saveMsg, setSaveMsg] = useState("");
+
+  const saveAsNote = useCallback(async () => {
+    if (!onAddNote || saving) return;
+    setSaving(true);
+    const root = nodes.find(n => n.type==="root" || n.id==="root");
+    const md = nodesToMarkdown();
+    const title = "Mindmap — " + (root?.fullLabel || root?.label || "overzicht");
+    try {
+      await onAddNote({
+        id:       genId(),
+        title,
+        content:  md,
+        tags:     ["mindmap", aiMode ? "ai" : "vault"],
+        created:  new Date().toISOString(),
+        modified: new Date().toISOString(),
+      });
+      setSaveMsg("✓ Opgeslagen als notitie");
+      setTimeout(() => setSaveMsg(""), 2500);
+    } catch(e) {
+      setSaveMsg("⚠ Fout bij opslaan");
+      setTimeout(() => setSaveMsg(""), 2500);
+    }
+    setSaving(false);
+  }, [nodes, edges, aiMode, onAddNote, nodesToMarkdown, saving]);
+
   // ── Render ────────────────────────────────────────────────────────────────
   return React.createElement("div", {
     style:{position:"relative",width:"100%",height:"100%",overflow:"hidden"}
@@ -3733,7 +3815,39 @@ const MindMap = ({notes, allTags, onSelectNote, aiMindmap}) => {
         `${aiMindmap.branches?.length||0} takken · `,
         `${aiMindmap.branches?.reduce((a,b)=>(a+(b.children?.length||0)),0)||0} subtopics`
       ),
-      // Modus (bekijk/bewerk) — beschikbaar in beide modi
+
+      // ── Opslaan als notitie ──────────────────────────────────────────────
+      onAddNote && nodes.length > 1 && React.createElement("div",{
+        style:{borderTop:`1px solid ${W.splitBg}`,paddingTop:"7px"}
+      },
+        React.createElement("button",{
+          onClick: saveAsNote,
+          disabled: saving,
+          style:{
+            width:"100%", padding:"6px 10px",
+            background: saving
+              ? "rgba(159,202,86,0.08)"
+              : "linear-gradient(135deg,rgba(159,202,86,0.22),rgba(159,202,86,0.12))",
+            border:`1px solid rgba(159,202,86,${saving?0.15:0.45})`,
+            borderRadius:"5px", color:saving?W.fgMuted:W.comment,
+            fontSize:"11px", fontWeight:"600", cursor:saving?"default":"pointer",
+            display:"flex", alignItems:"center", justifyContent:"center", gap:"5px",
+            transition:"all 0.15s",
+          }
+        },
+          saving
+            ? React.createElement(React.Fragment,null,
+                React.createElement("span",{style:{fontSize:"12px"}},"⏳"),
+                "Opslaan…")
+            : React.createElement(React.Fragment,null,
+                React.createElement("span",{style:{fontSize:"12px"}},"💾"),
+                "Opslaan als notitie")
+        ),
+        saveMsg && React.createElement("div",{style:{
+          marginTop:"5px", fontSize:"10px", textAlign:"center",
+          color: saveMsg.startsWith("✓") ? W.comment : W.orange,
+        }}, saveMsg)
+      ),
       React.createElement("div",{style:{display:"flex",gap:"5px",alignItems:"center"}},
         React.createElement("span",{style:{fontSize:"9px",color:"rgba(138,198,242,0.5)",
           letterSpacing:"2px",flex:1}},"MODUS"),
@@ -5654,7 +5768,8 @@ const App = () => {
               onAddNote:async(note)=>{ const saved=await api.post("/notes",note); setNotes(p=>[saved,...p]); setSelId(saved.id); setTab("notes"); }}));
           if(t==="mindmap") return React.createElement("div",{style:{flex:1,overflow:"hidden"}},
             React.createElement(MindMap,{notes,allTags,aiMindmap,
-              onSelectNote:id=>{ setSelId(id); setTab("notes"); }}));
+              onSelectNote:id=>{ setSelId(id); setTab("notes"); },
+              onAddNote:async(note)=>{ const saved=await api.post("/notes",note); setNotes(p=>[saved,...p]); setSelId(saved.id); setTab("notes"); }}));
           if(t==="llm") return React.createElement("div",{style:{flex:1,overflow:"hidden"}},
             React.createElement(LLMNotebook,{notes,pdfNotes,serverPdfs,serverImages,allTags,llmModel,setLlmModel,
               onMindmapReady:(mm)=>{ setAiMindmap(mm); setTab("mindmap"); },
