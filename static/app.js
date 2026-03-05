@@ -3649,7 +3649,7 @@ const MindMap = ({notes, allTags, onSelectNote, aiMindmap, onAddNote}) => {
     const newEdges = [];
 
     // Root node
-    const root = {id:"root", label:"Zettelkasten", type:"root",
+    const root = {id:"root", label:"Zettelkasten", fullLabel:"Zettelkasten", type:"root",
                   x:cx, y:cy, fixed:true};
     newNodes.push(root);
 
@@ -3661,7 +3661,7 @@ const MindMap = ({notes, allTags, onSelectNote, aiMindmap, onAddNote}) => {
         const tx = cx + MM_RADIUS * Math.cos(angle);
         const ty = cy + MM_RADIUS * Math.sin(angle);
         const tagNode = {
-          id: "tag-"+tag, label:"#"+tag, type:"tag",
+          id: "tag-"+tag, label:"#"+tag, fullLabel:tag, type:"tag",
           x: tx, y: ty, color: tagColorMap[tag]||W.comment,
           parentId:"root"
         };
@@ -3739,7 +3739,7 @@ const MindMap = ({notes, allTags, onSelectNote, aiMindmap, onAddNote}) => {
 
       visibleTags.forEach((tag, ti) => {
         const ty = tStartY + ti * tGap;
-        const tagNode = {id:"tag-"+tag, label:"#"+tag, type:"tag",
+        const tagNode = {id:"tag-"+tag, label:"#"+tag, fullLabel:tag, type:"tag",
                          x:tagX, y:ty, color:tagColorMap[tag]||W.comment, parentId:"root"};
         newNodes.push(tagNode);
         newEdges.push({from:"root", to:"tag-"+tag});
@@ -3783,6 +3783,7 @@ const MindMap = ({notes, allTags, onSelectNote, aiMindmap, onAddNote}) => {
     const branches = aiMindmap.branches || [];
 
     newNodes.push({id:"root", label: aiMindmap.root||"Overzicht",
+                   fullLabel: aiMindmap.root||"Overzicht",
                    type:"root", x:cx, y:cy, fixed:true});
 
     const BRANCH_R  = Math.min(220, CW*0.28);
@@ -3811,7 +3812,7 @@ const MindMap = ({notes, allTags, onSelectNote, aiMindmap, onAddNote}) => {
         const bx = LEVEL1_X;
         const by = bStartY + bi * bGap;
         const bId = "branch-"+bi;
-        newNodes.push({id:bId, label:b.label, type:"branch",
+        newNodes.push({id:bId, label:b.label, fullLabel:b.label, type:"branch",
                        x:bx, y:by, color, parentId:"root", important:b.importance==="high"});
         newEdges.push({from:"root", to:bId, weight: b.importance==="high"?3:1.5});
 
@@ -3825,7 +3826,7 @@ const MindMap = ({notes, allTags, onSelectNote, aiMindmap, onAddNote}) => {
           const sx = LEVEL2_X;
           const sy = cStartY + ci * cGap;
           const sId = "sub-"+bi+"-"+ci;
-          newNodes.push({id:sId, label:cLabel, type:"sub", x:sx, y:sy, color, parentId:bId});
+          newNodes.push({id:sId, label:cLabel, fullLabel:cLabel, type:"sub", x:sx, y:sy, color, parentId:bId});
           newEdges.push({from:bId, to:sId});
 
           const dGap = Math.min(50, cGap / Math.max(cDetails.length, 1));
@@ -3849,7 +3850,7 @@ const MindMap = ({notes, allTags, onSelectNote, aiMindmap, onAddNote}) => {
         const by = cy + BRANCH_R * Math.sin(angle);
         const color = b.color || PALETTE[bi % PALETTE.length];
         const bId = "branch-"+bi;
-        newNodes.push({id:bId, label:b.label, type:"branch",
+        newNodes.push({id:bId, label:b.label, fullLabel:b.label, type:"branch",
                        x:bx, y:by, color, parentId:"root", important:b.importance==="high"});
         newEdges.push({from:"root", to:bId, weight: b.importance==="high"?3:1.5});
 
@@ -3862,7 +3863,7 @@ const MindMap = ({notes, allTags, onSelectNote, aiMindmap, onAddNote}) => {
           const sx = bx + SUB_R * Math.cos(cAngle);
           const sy = by + SUB_R * Math.sin(cAngle);
           const sId = "sub-"+bi+"-"+ci;
-          newNodes.push({id:sId, label:cLabel, type:"sub", x:sx, y:sy, color, parentId:bId});
+          newNodes.push({id:sId, label:cLabel, fullLabel:cLabel, type:"sub", x:sx, y:sy, color, parentId:bId});
           newEdges.push({from:bId, to:sId});
 
           cDetails.slice(0,3).forEach((d, di) => {
@@ -4275,6 +4276,49 @@ const MindMap = ({notes, allTags, onSelectNote, aiMindmap, onAddNote}) => {
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState("");
 
+  // ── Mindmap nodes → Mermaid syntax ────────────────────────────────────────
+  const nodesToMermaid = useCallback(() => {
+    const ns = nodes;
+    if (!ns.length) return "mindmap\n  root((Mindmap))";
+
+    const childrenOf = {};
+    ns.forEach(n => { childrenOf[n.id] = []; });
+    edges.forEach(e => {
+      if (childrenOf[e.from] !== undefined) childrenOf[e.from].push(e.to);
+    });
+
+    const root = ns.find(n => n.type === "root" || n.id === "root");
+    if (!root) return "mindmap\n  root((Mindmap))";
+
+    const lines = ["mindmap"];
+
+    const walk = (nodeId, depth) => {
+      const node = ns.find(n => n.id === nodeId);
+      if (!node) return;
+      const indent = "  ".repeat(depth);
+      // fullLabel heeft altijd de onafgekapte tekst
+      const label = (node.fullLabel || node.label || "")
+        .replace(/…$/, "")   // strip visuele truncatie
+        .trim();
+
+      if (depth === 1) {
+        lines.push(`${indent}root((${label}))`);
+      } else {
+        lines.push(`${indent}${label}`);
+      }
+
+      const children = (childrenOf[nodeId] || [])
+        .map(cid => ns.find(n => n.id === cid))
+        .filter(Boolean)
+        .sort((a, b) => (a.y || 0) - (b.y || 0));
+
+      children.forEach(child => walk(child.id, depth + 1));
+    };
+
+    walk(root.id, 1);
+    return lines.join("\n");
+  }, [nodes, edges]);
+
   const saveAsNote = useCallback(async () => {
     if (!onAddNote || saving) return;
     setSaving(true);
@@ -4351,7 +4395,7 @@ const MindMap = ({notes, allTags, onSelectNote, aiMindmap, onAddNote}) => {
         ].map(opt =>
           React.createElement("button",{key:opt.id,
             onClick:()=>{
-              if (opt.id==="mermaid") { setMmView("mermaid"); setEditMermaid(null); }
+              if (opt.id==="mermaid") { setMmView("mermaid"); setEditMermaid(nodesToMermaid()); }
               else { setAiMode(opt.id==="ai"); }
             },
             style:{
