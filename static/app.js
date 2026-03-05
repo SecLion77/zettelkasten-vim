@@ -4608,41 +4608,36 @@ const App = () => {
   const [editContent,  setEditContent] = useState("");
   const [editTags,     setEditTags]    = useState([]);
   const [tab,          setTab]         = useState("notes");
+  const [splitMode,    setSplitMode]   = useState(false);   // split screen aan/uit
+  const [splitTab,     setSplitTab]    = useState("pdf");   // tab in rechter helft
   const [search,       setSearch]      = useState("");
+  const [typeFilter,   setTypeFilter]  = useState("all");   // all|notes|pdf|images
   const [pdfNotes,     setPdfNotes]    = useState([]);
   const [imgNotes,     setImgNotes]    = useState([]);
   const [serverPdfs,   setServerPdfs]  = useState([]);
   const [serverImages, setServerImages]= useState([]);
-  const [llmModel,     setLlmModel]    = useState("llama3.2-vision"); // gedeeld model state
-  const [aiMindmap,    setAiMindmap]   = useState(null);  // AI-gegenereerde mindmap data
+  const [llmModel,     setLlmModel]    = useState("llama3.2-vision");
+  const [aiMindmap,    setAiMindmap]   = useState(null);
   const [tagFilter,    setTagFilter]   = useState(null);
   const [showSettings, setShowSettings]= useState(false);
   const [vaultPath,    setVaultPath]   = useState("…");
   const [goyoMode,     setGoyoMode]    = useState(false);
   const [loaded,       setLoaded]      = useState(false);
   const [error,        setError]       = useState(null);
-  const [sidebarOpen,  setSidebarOpen] = useState(false); // mobile/tablet drawer
-  const [renderMode,    setRenderMode]  = useState("plain"); // plain | rich
-  const [aiStatus,      setAiStatus]    = useState(null);  // null | string — AI bezig indicator
-  const [showMediaMenu, setShowMediaMenu] = useState(false); // media koppelen dropdown
-  const [showNoteLink,  setShowNoteLink]  = useState(false); // notitie-link dropdown
-  const [noteLinkSearch, setNoteLinkSearch] = useState(""); // zoekterm in link-dropdown
+  const [sidebarOpen,  setSidebarOpen] = useState(false);
+  const [renderMode,    setRenderMode]  = useState("plain");
+  const [aiStatus,      setAiStatus]    = useState(null);
+  const [showLinkMenu,  setShowLinkMenu] = useState(false);  // gecombineerde link-dropdown
+  const [linkSearch,    setLinkSearch]   = useState("");     // zoekterm in link-dropdown
+  const [linkTypeFilter,setLinkTypeFilter]= useState("all"); // all|notes|pdf|images
 
-  // Sluit media-dropdown bij klik buiten
+  // Sluit link-dropdown bij klik buiten
   React.useEffect(()=>{
-    if(!showMediaMenu) return;
-    const h=()=>setShowMediaMenu(false);
+    if(!showLinkMenu) return;
+    const h=()=>{ setShowLinkMenu(false); setLinkSearch(""); };
     setTimeout(()=>document.addEventListener("click",h),0);
     return ()=>document.removeEventListener("click",h);
-  },[showMediaMenu]);
-
-  // Sluit notitie-link dropdown bij klik buiten
-  React.useEffect(()=>{
-    if(!showNoteLink) return;
-    const h=()=>{ setShowNoteLink(false); setNoteLinkSearch(""); };
-    setTimeout(()=>document.addEventListener("click",h),0);
-    return ()=>document.removeEventListener("click",h);
-  },[showNoteLink]);
+  },[showLinkMenu]);
 
   const {w: winW} = useWindowSize();
   const isMobile  = winW < 768;
@@ -4694,15 +4689,47 @@ const App = () => {
     ...notes.flatMap(n => n.tags||[]),
     ...pdfNotes.flatMap(p => p.tags||[])
   ])], [notes, pdfNotes]);
-  const sidebarTags = useMemo(() => [...new Set(notes.flatMap(n => n.tags||[]))], [notes]);
-  const filtered    = useMemo(() => {
-    const base = search
-      ? notes.filter(n => n.title?.toLowerCase().includes(search.toLowerCase())
-          || n.content?.toLowerCase().includes(search.toLowerCase())
-          || n.tags?.some(t => t.includes(search.toLowerCase())))
-      : notes;
-    return tagFilter ? base.filter(n => (n.tags||[]).includes(tagFilter)) : base;
-  }, [notes, search, tagFilter]);
+  const sidebarTags = useMemo(() => {
+    // Tags uit notities + pdf-annotaties + img-annotaties afhankelijk van typeFilter
+    const fromNotes  = notes.flatMap(n => n.tags||[]);
+    const fromPdfs   = pdfNotes.flatMap(p => p.tags||[]);
+    const fromImages = imgNotes.flatMap(i => i.tags||[]);
+    if (typeFilter==="pdf")    return [...new Set(fromPdfs)];
+    if (typeFilter==="images") return [...new Set(fromImages)];
+    if (typeFilter==="notes")  return [...new Set(fromNotes)];
+    return [...new Set([...fromNotes,...fromPdfs,...fromImages])];
+  }, [notes, pdfNotes, imgNotes, typeFilter]);
+
+  const filtered = useMemo(() => {
+    const q = search.toLowerCase();
+    // Notities
+    const matchedNotes = notes.filter(n =>
+      (!q || n.title?.toLowerCase().includes(q)
+          || n.content?.toLowerCase().includes(q)
+          || (n.tags||[]).some(t=>t.includes(q)))
+      && (!tagFilter || (n.tags||[]).includes(tagFilter))
+    ).map(n => ({...n, _type:"note"}));
+    // PDF-annotaties
+    const matchedPdfs = pdfNotes.filter(p =>
+      (!q || p.text?.toLowerCase().includes(q)
+          || p.note?.toLowerCase().includes(q)
+          || p.file?.toLowerCase().includes(q)
+          || (p.tags||[]).some(t=>t.includes(q)))
+      && (!tagFilter || (p.tags||[]).includes(tagFilter))
+    ).map(p => ({...p, _type:"pdf", title:"📄 "+p.file+" — "+(p.text||"").slice(0,30)}));
+    // Afbeelding-annotaties
+    const matchedImgs = imgNotes.filter(i =>
+      (!q || i.file?.toLowerCase().includes(q)
+          || i.note?.toLowerCase().includes(q)
+          || (i.tags||[]).some(t=>t.includes(q)))
+      && (!tagFilter || (i.tags||[]).includes(tagFilter))
+    ).map(i => ({...i, _type:"image", title:"🖼 "+i.file+" — "+(i.note||"").slice(0,30)}));
+
+    if (typeFilter==="notes")  return matchedNotes;
+    if (typeFilter==="pdf")    return matchedPdfs;
+    if (typeFilter==="images") return matchedImgs;
+    return [...matchedNotes, ...matchedPdfs, ...matchedImgs];
+  }, [notes, pdfNotes, imgNotes, search, tagFilter, typeFilter]);
 
   const titleRef   = useRef(null);
   const contentRef = useRef(null);
@@ -4797,78 +4824,117 @@ const App = () => {
   },
     // Header
     React.createElement("div", {
-      style:{padding:"10px 10px 8px",background:W.statusBg,
+      style:{padding:"8px 10px 6px",background:W.statusBg,
              borderBottom:`1px solid ${W.splitBg}`,flexShrink:0}
     },
-      // Sluit-knop op mobile/tablet
       !isDesktop && React.createElement("div", {
         style:{display:"flex",justifyContent:"space-between",
-               alignItems:"center",marginBottom:"8px"}
+               alignItems:"center",marginBottom:"6px"}
       },
-        React.createElement("span", {
-          style:{fontSize:"11px",fontWeight:"bold",
-                 letterSpacing:"2px",color:W.statusFg}
-        }, "NOTITIES"),
+        React.createElement("span", {style:{fontSize:"11px",fontWeight:"bold",
+          letterSpacing:"2px",color:W.statusFg}}, "NOTITIES"),
         React.createElement("button", {
-          onClick: () => setSidebarOpen(false),
+          onClick:()=>setSidebarOpen(false),
           style:{background:"none",border:"none",color:W.fgMuted,
                  fontSize:"18px",cursor:"pointer",padding:"0 4px",lineHeight:1}
         }, "×")
       ),
-      React.createElement("button", {
-        onClick: newNote,
-        style:{background:W.blue,color:W.bg,border:"none",
-               borderRadius:"6px",padding:"8px",fontSize:"12px",
-               cursor:"pointer",fontWeight:"bold",letterSpacing:"1px",
-               width:"100%",marginBottom:"6px"}
-      }, "+ nieuw zettel"),
-      React.createElement("input", {
-        value:search, onChange:e=>setSearch(e.target.value),
-        placeholder:"/zoeken…",
-        style:{background:W.bg,border:`1px solid ${W.splitBg}`,
-               borderRadius:"6px",padding:"7px 10px",color:W.fg,
-               fontSize:"13px",outline:"none",width:"100%",
-               WebkitAppearance:"none"} // iOS styling reset
-      })
+      // Zoekbalk + nieuw zettel
+      React.createElement("div",{style:{display:"flex",gap:"5px",marginBottom:"6px"}},
+        React.createElement("input", {
+          value:search, onChange:e=>setSearch(e.target.value),
+          placeholder:"🔍 zoeken…",
+          style:{flex:1,background:W.bg,border:`1px solid ${search?W.blue:W.splitBg}`,
+                 borderRadius:"6px",padding:"6px 9px",color:W.fg,
+                 fontSize:"12px",outline:"none",
+                 WebkitAppearance:"none",transition:"border-color 0.15s"}
+        }),
+        React.createElement("button", {
+          onClick:newNote,
+          title:"Nieuw zettel",
+          style:{background:W.blue,color:W.bg,border:"none",
+                 borderRadius:"6px",padding:"6px 10px",fontSize:"14px",
+                 cursor:"pointer",fontWeight:"bold",flexShrink:0}
+        }, "+")
+      ),
+      // Type-filter tabs: Alles / Notities / PDF / Plaatjes
+      React.createElement("div",{style:{display:"flex",gap:"3px"}},
+        [["all","Alles"],["notes","📝"],["pdf","📄"],["images","🖼"]].map(([id,lbl])=>
+          React.createElement("button",{
+            key:id, onClick:()=>{ setTypeFilter(id); setTagFilter(null); },
+            style:{flex:1,background:typeFilter===id?"rgba(138,198,242,0.18)":"none",
+                   border:`1px solid ${typeFilter===id?"rgba(138,198,242,0.5)":W.splitBg}`,
+                   borderRadius:"4px",color:typeFilter===id?W.blue:W.fgMuted,
+                   fontSize:"10px",padding:"3px 2px",cursor:"pointer",letterSpacing:"0.3px"}
+          }, lbl)
+        )
+      )
     ),
-    // Tags filter
+    // Tag-filter chips
     sidebarTags.length > 0 && React.createElement("div", {
-      style:{padding:"6px 8px",borderBottom:`1px solid ${W.splitBg}`,
-             display:"flex",gap:"4px",flexWrap:"wrap",
-             background:"rgba(0,0,0,0.1)",flexShrink:0}
+      style:{padding:"5px 8px",borderBottom:`1px solid ${W.splitBg}`,
+             display:"flex",gap:"3px",flexWrap:"wrap",
+             background:"rgba(0,0,0,0.1)",flexShrink:0,maxHeight:"72px",overflowY:"auto"}
     },
       sidebarTags.map(t => React.createElement("span", {
         key:t, onClick:()=>setTagFilter(tagFilter===t?null:t),
-        style:{fontSize:"10px",padding:"2px 6px",borderRadius:"4px",
+        style:{fontSize:"9px",padding:"2px 6px",borderRadius:"4px",
                cursor:"pointer",userSelect:"none",
                background:tagFilter===t?"rgba(159,202,86,0.3)":"rgba(159,202,86,0.08)",
                color:W.comment,
                border:`1px solid rgba(159,202,86,${tagFilter===t?0.5:0.15})`}
       }, "#", t))
     ),
+    // Actieve filter badge
+    (tagFilter||search) && React.createElement("div",{style:{
+      padding:"4px 8px",borderBottom:`1px solid ${W.splitBg}`,
+      background:"rgba(159,202,86,0.05)",flexShrink:0,
+      display:"flex",gap:"5px",alignItems:"center",flexWrap:"wrap"
+    }},
+      search && React.createElement("span",{style:{fontSize:"9px",color:W.fgMuted}},
+        `${filtered.length} resultaten`),
+      tagFilter && React.createElement("button",{
+        onClick:()=>setTagFilter(null),
+        style:{fontSize:"9px",background:"rgba(159,202,86,0.15)",color:W.comment,
+               border:"1px solid rgba(159,202,86,0.3)",borderRadius:"3px",
+               padding:"1px 6px",cursor:"pointer"}
+      },"#",tagFilter," ×"),
+      (search||tagFilter) && React.createElement("button",{
+        onClick:()=>{ setSearch(""); setTagFilter(null); },
+        style:{fontSize:"9px",background:"none",color:W.fgMuted,
+               border:"none",cursor:"pointer",marginLeft:"auto",padding:"1px 4px"}
+      },"wis alles")
+    ),
     // Lijst
     React.createElement("div", {style:{flex:1,overflowY:"auto",WebkitOverflowScrolling:"touch"}},
+      filtered.length===0 ? React.createElement("div",{style:{
+        padding:"24px 12px",color:W.fgMuted,fontSize:"11px",textAlign:"center",lineHeight:"1.8"
+      }},
+        search||tagFilter ? "Geen resultaten gevonden" :
+        typeFilter==="pdf" ? "Geen PDF-annotaties" :
+        typeFilter==="images" ? "Geen afbeelding-annotaties" :
+        "Nog geen notities"
+      ) :
       filtered.map(n => {
-        const sel = n.id === selId;
+        const sel = n.id === selId && n._type==="note";
+        const isNote = !n._type || n._type==="note";
         return React.createElement("div", {
-          key: n.id,
-          onClick: () => selectNote(n.id),
-          style:{padding:"10px 12px",borderBottom:`1px solid ${W.splitBg}`,
-                 cursor:"pointer",background:sel?W.visualBg:"transparent",
-                 borderLeft:`3px solid ${sel?W.yellow:"transparent"}`,
-                 // grotere tap-targets op touch
-                 minHeight:"52px"}
+          key:(n._type||"note")+"-"+n.id,
+          onClick:()=>{ if(isNote) selectNote(n.id); },
+          style:{padding:"9px 12px",borderBottom:`1px solid ${W.splitBg}`,
+                 cursor:isNote?"pointer":"default",
+                 background:sel?W.visualBg:"transparent",
+                 borderLeft:`3px solid ${sel?W.yellow:n._type==="pdf"?W.orange:n._type==="image"?"#9fcf56":"transparent"}`,
+                 minHeight:"46px"}
         },
           React.createElement("div", {
-            style:{fontSize:"13px",color:sel?W.statusFg:W.fg,
-                   lineHeight:"1.35",marginBottom:"3px",fontWeight:sel?"bold":"normal"}
-          }, n.title),
-          React.createElement("div", {
-            style:{fontSize:"10px",color:W.fgMuted,marginBottom:"4px"}
-          }, n.id?.substring(0,12)),
+            style:{fontSize:"12px",color:sel?W.statusFg:W.fg,
+                   lineHeight:"1.35",marginBottom:"3px",fontWeight:sel?"bold":"normal",
+                   overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}
+          }, n.title || n.file || "–"),
           n.tags?.length > 0 && React.createElement("div", {
-            style:{display:"flex",flexWrap:"wrap",gap:"3px"}
-          }, n.tags.slice(0,3).map(t =>
+            style:{display:"flex",flexWrap:"wrap",gap:"3px",marginTop:"2px"}
+          }, (n.tags||[]).slice(0,3).map(t =>
             React.createElement(TagPill, {key:t,tag:t,small:true})
           ))
         );
@@ -4950,6 +5016,16 @@ const App = () => {
         title:vaultPath
       }, "📁 ", vaultPath.split("/").slice(-2).join("/"))
     ),
+    React.createElement("button", {
+      onClick:()=>setSplitMode(p=>!p),
+      title: splitMode ? "Split-scherm sluiten" : "Split-scherm openen",
+      style:{background:splitMode?"rgba(138,198,242,0.15)":"none",
+             border:`1px solid ${splitMode?"rgba(138,198,242,0.4)":W.splitBg}`,
+             borderRadius:"4px",padding:"4px 10px",
+             color:splitMode?W.blue:W.fgMuted,
+             fontSize:"11px",cursor:"pointer",margin:"0 4px",
+             letterSpacing:"1px"}
+    }, splitMode ? "⊟ split" : "⊞ split"),
     React.createElement("button", {
       onClick:()=>setShowSettings(true),
       style:{background:"none",border:`1px solid ${W.splitBg}`,
@@ -5077,155 +5153,143 @@ const App = () => {
              flexShrink:0,
              WebkitTapHighlightColor:"transparent"}
     }, b.label)),
-    // ── 🔗 Notitie-link dropdown ───────────────────────────────────────────
+    // ── 🔗 Gecombineerde link/koppelen dropdown ───────────────────────────────
     React.createElement("div",{style:{position:"relative",flexShrink:0},
       onClick:e=>e.stopPropagation()},
       React.createElement("button",{
-        onClick:()=>{ setShowNoteLink(v=>!v); setNoteLinkSearch(""); },
-        title:"Link naar een andere notitie invoegen",
-        style:{background:showNoteLink?"rgba(159,202,86,0.15)":"none",
-               border:`1px solid ${showNoteLink?"rgba(159,202,86,0.5)":W.splitBg}`,
+        onClick:()=>{ setShowLinkMenu(v=>!v); setLinkSearch(""); setLinkTypeFilter("all"); },
+        title:"Link invoegen: notitie, PDF of afbeelding",
+        style:{background:showLinkMenu?"rgba(138,198,242,0.15)":"none",
+               border:`1px solid ${showLinkMenu?"rgba(138,198,242,0.4)":W.splitBg}`,
                borderRadius:"6px",padding:isMobile?"7px 12px":"4px 10px",
-               color:showNoteLink?W.comment:W.fgMuted,
+               color:showLinkMenu?W.blue:W.fgMuted,
                fontSize:isMobile?"13px":"11px",cursor:"pointer",flexShrink:0}
-      },"🔗 link"),
-      showNoteLink && React.createElement("div",{
+      },"🔗 koppelen"),
+      showLinkMenu && React.createElement("div",{
         style:{position:"absolute",top:"calc(100% + 4px)",right:0,zIndex:210,
-               background:W.bg2,border:`1px solid ${W.splitBg}`,borderRadius:"7px",
-               width:"280px",maxHeight:"360px",display:"flex",flexDirection:"column",
-               boxShadow:"0 8px 32px rgba(0,0,0,0.7)"}
+               background:W.bg2,border:`1px solid ${W.splitBg}`,borderRadius:"8px",
+               width:"300px",maxHeight:"420px",display:"flex",flexDirection:"column",
+               boxShadow:"0 8px 32px rgba(0,0,0,0.75)"}
       },
+        // Type-filter tabs
+        React.createElement("div",{style:{display:"flex",borderBottom:`1px solid ${W.splitBg}`,flexShrink:0}},
+          [["all","Alles"],["notes","📝 Notities"],["pdf","📄 PDF"],["images","🖼 Plaatjes"]].map(([id,lbl])=>
+            React.createElement("button",{key:id,
+              onClick:()=>setLinkTypeFilter(id),
+              style:{flex:1,background:linkTypeFilter===id?"rgba(138,198,242,0.12)":"none",
+                     border:"none",borderBottom:linkTypeFilter===id?`2px solid ${W.blue}`:"2px solid transparent",
+                     color:linkTypeFilter===id?W.blue:W.fgMuted,
+                     fontSize:"9px",padding:"7px 2px",cursor:"pointer",letterSpacing:"0.3px"}
+            },lbl)
+          )
+        ),
         // Zoekbalk
-        React.createElement("div",{style:{padding:"8px 10px",borderBottom:`1px solid ${W.splitBg}`,flexShrink:0}},
+        React.createElement("div",{style:{padding:"7px 10px",borderBottom:`1px solid ${W.splitBg}`,flexShrink:0}},
           React.createElement("input",{
             autoFocus:true,
-            value:noteLinkSearch,
-            onChange:e=>setNoteLinkSearch(e.target.value),
-            placeholder:"Zoek notitie…",
+            value:linkSearch,
+            onChange:e=>setLinkSearch(e.target.value),
+            placeholder:"Zoeken…",
             style:{width:"100%",background:"rgba(255,255,255,0.06)",
                    border:`1px solid ${W.splitBg}`,borderRadius:"5px",
-                   padding:"5px 9px",color:W.fg,fontSize:"12px",outline:"none",
-                   fontFamily:"inherit"}
+                   padding:"5px 9px",color:W.fg,fontSize:"12px",outline:"none",fontFamily:"inherit"}
           })
         ),
-        // Notitie-lijst gefilterd op zoekterm
+        // Resultatenlijst
         React.createElement("div",{style:{overflowY:"auto",flex:1}},
-          (notes
-            .filter(n=> n.id !== selId && ( // huidige notitie uitsluiten
-              !noteLinkSearch ||
-              n.title.toLowerCase().includes(noteLinkSearch.toLowerCase()) ||
-              (n.tags||[]).some(t=>t.toLowerCase().includes(noteLinkSearch.toLowerCase()))
-            ))
-            .slice(0,40)
-          ).length === 0
-            ? React.createElement("div",{style:{padding:"20px",color:W.fgMuted,
-                fontSize:"11px",textAlign:"center"}},"Geen notities gevonden")
-            : (notes
-                .filter(n=> n.id !== selId && (
-                  !noteLinkSearch ||
-                  n.title.toLowerCase().includes(noteLinkSearch.toLowerCase()) ||
-                  (n.tags||[]).some(t=>t.toLowerCase().includes(noteLinkSearch.toLowerCase()))
-                ))
-                .slice(0,40)
-              ).map(n => React.createElement("div",{
-                key:n.id,
+          // Notities
+          (linkTypeFilter==="all"||linkTypeFilter==="notes") && (() => {
+            const ns = notes.filter(n=>n.id!==selId&&(
+              !linkSearch||n.title?.toLowerCase().includes(linkSearch.toLowerCase())||
+              (n.tags||[]).some(t=>t.includes(linkSearch.toLowerCase()))
+            )).slice(0,20);
+            if(!ns.length) return null;
+            return React.createElement(React.Fragment,null,
+              linkTypeFilter==="all"&&React.createElement("div",{style:{
+                padding:"5px 12px 3px",fontSize:"9px",color:W.fgMuted,
+                letterSpacing:"2px",background:"rgba(0,0,0,0.2)",flexShrink:0
+              }},"NOTITIES"),
+              ns.map(n=>React.createElement("div",{key:n.id,
                 onClick:()=>{
-                  // Voeg [[notitie-titel]] in op cursor positie
-                  const link = "[["+n.title+"]]";
-                  if (contentRef.current?.insertAtCursor) {
-                    contentRef.current.insertAtCursor(link);
-                  } else {
-                    setEditContent(c=>c+link);
-                  }
-                  setShowNoteLink(false); setNoteLinkSearch("");
+                  const link="[["+n.title+"]]";
+                  contentRef.current?.insertAtCursor?contentRef.current.insertAtCursor(link):setEditContent(c=>c+link);
+                  setShowLinkMenu(false);
                 },
-                style:{padding:"8px 12px",cursor:"pointer",
+                style:{padding:"7px 12px",cursor:"pointer",
                        borderBottom:`1px solid rgba(255,255,255,0.03)`,
-                       display:"flex",flexDirection:"column",gap:"2px"}
+                       display:"flex",flexDirection:"column",gap:"1px"}
               },
-                React.createElement("span",{style:{
-                  fontSize:"12px",color:W.fg,
-                  overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},
-                  n.title),
-                (n.tags||[]).length>0 && React.createElement("span",{
-                  style:{fontSize:"9px",color:W.comment,letterSpacing:"0.5px"}},
-                  (n.tags||[]).map(t=>"#"+t).join("  "))
+                React.createElement("span",{style:{fontSize:"12px",color:W.fg,
+                  overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},n.title),
+                (n.tags||[]).length>0&&React.createElement("span",{
+                  style:{fontSize:"9px",color:W.comment}},(n.tags||[]).map(t=>"#"+t).join("  "))
               ))
+            );
+          })(),
+          // PDFs
+          (linkTypeFilter==="all"||linkTypeFilter==="pdf") && (() => {
+            const ps = (serverPdfs||[]).filter(p=>
+              !linkSearch||p.name.toLowerCase().includes(linkSearch.toLowerCase())
+            ).slice(0,15);
+            if(!ps.length) return null;
+            return React.createElement(React.Fragment,null,
+              linkTypeFilter==="all"&&React.createElement("div",{style:{
+                padding:"5px 12px 3px",fontSize:"9px",color:W.orange,
+                letterSpacing:"2px",background:"rgba(0,0,0,0.2)"
+              }},"PDF"),
+              ps.map(p=>React.createElement("div",{key:p.name,
+                onClick:()=>{
+                  const link="\n\n> 📄 **PDF:** [[pdf:"+p.name+"]]\n";
+                  setEditContent(c=>c+link);
+                  setShowLinkMenu(false);
+                },
+                style:{padding:"7px 12px",cursor:"pointer",
+                       borderBottom:`1px solid rgba(255,255,255,0.03)`,
+                       display:"flex",alignItems:"center",gap:"8px"}
+              },
+                React.createElement("span",{style:{fontSize:"13px"}},"📄"),
+                React.createElement("span",{style:{fontSize:"12px",color:W.fgDim,
+                  overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1}},p.name)
+              ))
+            );
+          })(),
+          // Afbeeldingen
+          (linkTypeFilter==="all"||linkTypeFilter==="images") && (() => {
+            const imgs = (serverImages||[]).filter(i=>
+              !linkSearch||i.name.toLowerCase().includes(linkSearch.toLowerCase())
+            ).slice(0,15);
+            if(!imgs.length) return null;
+            return React.createElement(React.Fragment,null,
+              linkTypeFilter==="all"&&React.createElement("div",{style:{
+                padding:"5px 12px 3px",fontSize:"9px",color:W.blue,
+                letterSpacing:"2px",background:"rgba(0,0,0,0.2)"
+              }},"AFBEELDINGEN"),
+              imgs.map(img=>React.createElement("div",{key:img.name,
+                onClick:()=>{
+                  const link="\n\n![[img:"+img.name+"]]\n";
+                  setEditContent(c=>c+link);
+                  setShowLinkMenu(false);
+                },
+                style:{padding:"7px 12px",cursor:"pointer",
+                       borderBottom:`1px solid rgba(255,255,255,0.03)`,
+                       display:"flex",alignItems:"center",gap:"8px"}
+              },
+                React.createElement("span",{style:{fontSize:"13px"}},"🖼"),
+                React.createElement("span",{style:{fontSize:"12px",color:W.fgDim,
+                  overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1}},img.name)
+              ))
+            );
+          })(),
+          // Lege staat
+          [notes.filter(n=>n.id!==selId&&(!linkSearch||n.title?.toLowerCase().includes(linkSearch.toLowerCase()))).length,
+           (serverPdfs||[]).filter(p=>!linkSearch||p.name.toLowerCase().includes(linkSearch.toLowerCase())).length,
+           (serverImages||[]).filter(i=>!linkSearch||i.name.toLowerCase().includes(linkSearch.toLowerCase())).length
+          ].every(c=>c===0) && React.createElement("div",{style:{padding:"20px",color:W.fgMuted,
+            fontSize:"11px",textAlign:"center"}},"Geen resultaten")
         )
-      )
-    ),
-    // ── 📎 Media koppelen dropdown ─────────────────────────────────────────
-    React.createElement("div",{style:{position:"relative",flexShrink:0}},
-      React.createElement("button",{
-        onClick:()=>setShowMediaMenu(v=>!v),
-        title:"PDF of afbeelding koppelen in notitie",
-        style:{background:showMediaMenu?"rgba(138,198,242,0.15)":"none",
-               border:`1px solid ${showMediaMenu?"rgba(138,198,242,0.4)":W.splitBg}`,
-               borderRadius:"6px",padding:isMobile?"7px 12px":"4px 10px",
-               color:showMediaMenu?W.blue:W.fgMuted,
-               fontSize:isMobile?"13px":"11px",cursor:"pointer",flexShrink:0}
-      },"📎 koppelen"),
-      showMediaMenu && React.createElement("div",{
-        style:{position:"absolute",top:"calc(100% + 4px)",right:0,zIndex:200,
-               background:W.bg2,border:`1px solid ${W.splitBg}`,borderRadius:"7px",
-               minWidth:"240px",maxHeight:"320px",overflowY:"auto",
-               boxShadow:"0 8px 32px rgba(0,0,0,0.6)"}
-      },
-        // Sectie PDFs
-        (serverPdfs||[]).length>0 && React.createElement(React.Fragment,null,
-          React.createElement("div",{style:{padding:"6px 12px 4px",fontSize:"9px",
-            color:"rgba(229,120,109,0.6)",letterSpacing:"2px",
-            borderBottom:`1px solid ${W.splitBg}`}},"PDF'S"),
-          (serverPdfs||[]).map(p=>React.createElement("div",{
-            key:p.name,
-            onClick:()=>{
-              const link = "\n\n> 📄 **PDF:** [[pdf:"+p.name+"]]\n";
-              setEditContent(c=>c+link);
-              setShowMediaMenu(false);
-            },
-            style:{padding:"8px 14px",cursor:"pointer",fontSize:"12px",
-                   color:W.fgDim,borderBottom:`1px solid rgba(255,255,255,0.03)`,
-                   display:"flex",alignItems:"center",gap:"8px"}
-          },
-            React.createElement("span",{style:{fontSize:"14px"}},"📄"),
-            React.createElement("span",{style:{overflow:"hidden",textOverflow:"ellipsis",
-              whiteSpace:"nowrap",flex:1}},p.name)
-          ))
-        ),
-        // Sectie afbeeldingen
-        (serverImages||[]).length>0 && React.createElement(React.Fragment,null,
-          React.createElement("div",{style:{padding:"6px 12px 4px",fontSize:"9px",
-            color:"rgba(138,198,242,0.6)",letterSpacing:"2px",
-            borderBottom:`1px solid ${W.splitBg}`}},"AFBEELDINGEN"),
-          (serverImages||[]).map(img=>React.createElement("div",{
-            key:img.name,
-            onClick:()=>{
-              const md = "\n\n![[img:"+img.name+"]]\n";
-              setEditContent(c=>c+md);
-              setShowMediaMenu(false);
-            },
-            style:{padding:"8px 14px",cursor:"pointer",fontSize:"12px",
-                   color:W.fgDim,borderBottom:`1px solid rgba(255,255,255,0.03)`,
-                   display:"flex",alignItems:"center",gap:"8px"}
-          },
-            React.createElement("span",{style:{fontSize:"14px"}},"🖼"),
-            React.createElement("span",{style:{overflow:"hidden",textOverflow:"ellipsis",
-              whiteSpace:"nowrap",flex:1}},img.name)
-          ))
-        ),
-        !(serverPdfs||[]).length && !(serverImages||[]).length &&
-          React.createElement("div",{style:{padding:"16px 14px",color:W.fgMuted,
-            fontSize:"12px",textAlign:"center"}},"Geen media in vault"),
-        // Sluit dropdown bij klik buiten
-        React.createElement("div",{
-          style:{display:"none"},
-          onClick:()=>setShowMediaMenu(false)
-        })
       )
     )
   );
-
-  // ── Preview toolbar ───────────────────────────────────────────────────────
   const previewToolbar = React.createElement("div", {
     style:{display:"flex",gap:"6px",marginBottom:"16px",
            paddingBottom:"10px",borderBottom:`1px solid ${W.splitBg}`,
@@ -5421,93 +5485,87 @@ const App = () => {
 
     // Content
     React.createElement("div", {style:{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}},
-      tab==="graph" ? React.createElement("div",{style:{flex:1,overflow:"hidden"}},
-        React.createElement(Graph,{notes,pdfNotes,
-          onSelect:id=>{setSelId(id);setTab("notes");},
-          selectedId:selId})
-      )
-      : tab==="pdf" ? React.createElement("div",{style:{flex:1,overflow:"hidden"}},
-        React.createElement(PDFViewer,{pdfNotes,setPdfNotes,allTags,serverPdfs,
-          onRefreshPdfs:refreshPdfs,
-          onDeletePdf:async(fname)=>{
-            // Verwijder ook gekoppelde samenvatting-notities
-            const stem = fname.replace(/\.pdf$/i,"");
-            const linked = notes.filter(n=>
-              n.tags?.includes("samenvatting") &&
-              (n.title?.includes(stem) || n.content?.includes(fname))
-            );
-            for(const n of linked){
-              await api.del("/notes/"+n.id);
-            }
-            if(linked.length) setNotes(p=>p.filter(n=>!linked.find(l=>l.id===n.id)));
-            // Annotaties lokaal bijwerken
-            setPdfNotes(p=>p.filter(a=>a.file!==fname));
-          },
-          onAutoSummarize:async(fname)=>{
-            const stem=fname.replace(/\.pdf$/i,"");
-            setAiStatus("🧠 Samenvatten: "+stem.slice(0,20)+"…");
-            try{
-              const res=await api.llmSummarizePdf(fname,llmModel);
-              if(res?.ok && res.summary){
-                const note={
-                  id:genId(),
-                  title:"Samenvatting — "+stem,
-                  content:"*Automatisch gegenereerd door Notebook LLM*\n\n"+res.summary
-                    +"\n\n---\n📄 **Bron:** [[pdf:"+fname+"]]",
-                  tags:["samenvatting","pdf"],
-                  created:new Date().toISOString(),
-                  modified:new Date().toISOString()
-                };
-                const saved=await api.post("/notes",note);
-                setNotes(p=>[saved,...p]);
-              } else if(res && !res.ok){
-                // Gooi de fout zodat PDFViewer hem kan tonen
-                throw new Error(res.error||"Samenvatten mislukt");
-              }
-            } finally {
-              setAiStatus(null);
-            }
-            // Geen catch hier — laat de fout propageren naar PDFViewer
-          }})
-      )
-      : tab==="images" ? React.createElement("div",{style:{flex:1,overflow:"hidden"}},
-        React.createElement(ImagesGallery,{
-          serverImages, onRefresh:refreshImages, llmModel,
-          setAiStatus,
-          notes,
-          imgNotes, setImgNotes,
-          allTags,
-          onDeleteNote: id => setNotes(p=>p.filter(n=>n.id!==id)),
-          onAddNote:async(note)=>{
-            const saved=await api.post("/notes",note);
-            setNotes(p=>[saved,...p]);
-          }
-        })
-      )
-      : tab==="import" ? React.createElement("div",{style:{flex:1,overflow:"hidden"}},
-        React.createElement(WebImporter,{
-          llmModel, allTags,
-          onAddNote:async(note)=>{
-            const saved=await api.post("/notes",note);
-            setNotes(p=>[saved,...p]); setSelId(saved.id); setTab("notes");
-          }
-        })
-      )
-      : tab==="mindmap" ? React.createElement("div",{style:{flex:1,overflow:"hidden"}},
-        React.createElement(MindMap,{notes,allTags,aiMindmap,
-          onSelectNote:id=>{ setSelId(id); setTab("notes"); }})
-      )
-      : tab==="llm" ? React.createElement("div",{style:{flex:1,overflow:"hidden"}},
-        React.createElement(LLMNotebook,{notes,pdfNotes,serverPdfs,serverImages,allTags,
-          llmModel,setLlmModel,
-          onMindmapReady:(mm)=>{ setAiMindmap(mm); setTab("mindmap"); },
-          onAddNote:async(note)=>{
-            const saved=await api.post("/notes",note);
-            setNotes(p=>[saved,...p]); setSelId(saved.id); setTab("notes");
-          }
-        })
-      )
-      : notesContent
+      (() => {
+        // Render een tab naar een React element
+        const renderTab = (t) => {
+          if(t==="graph") return React.createElement("div",{style:{flex:1,overflow:"hidden"}},
+            React.createElement(Graph,{notes,pdfNotes,
+              onSelect:id=>{setSelId(id);setTab("notes");},selectedId:selId}));
+          if(t==="pdf") return React.createElement("div",{style:{flex:1,overflow:"hidden"}},
+            React.createElement(PDFViewer,{pdfNotes,setPdfNotes,allTags,serverPdfs,
+              onRefreshPdfs:refreshPdfs,
+              onDeletePdf:async(fname)=>{
+                const stem=fname.replace(/\.pdf$/i,"");
+                const linked=notes.filter(n=>n.tags?.includes("samenvatting")&&(n.title?.includes(stem)||n.content?.includes(fname)));
+                for(const n of linked){ await api.del("/notes/"+n.id); }
+                if(linked.length) setNotes(p=>p.filter(n=>!linked.find(l=>l.id===n.id)));
+                setPdfNotes(p=>p.filter(a=>a.file!==fname));
+              },
+              onAutoSummarize:async(fname)=>{
+                const stem=fname.replace(/\.pdf$/i,"");
+                setAiStatus("🧠 Samenvatten: "+stem.slice(0,20)+"…");
+                try{
+                  const res=await api.llmSummarizePdf(fname,llmModel);
+                  if(res?.ok && res.summary){
+                    const note={id:genId(),title:"Samenvatting — "+stem,
+                      content:"*Automatisch gegenereerd door Notebook LLM*\n\n"+res.summary+"\n\n---\n📄 **Bron:** [[pdf:"+fname+"]]",
+                      tags:["samenvatting","pdf"],created:new Date().toISOString(),modified:new Date().toISOString()};
+                    const saved=await api.post("/notes",note);
+                    setNotes(p=>[saved,...p]);
+                  } else if(res&&!res.ok){ throw new Error(res.error||"Samenvatten mislukt"); }
+                } finally { setAiStatus(null); }
+              }}));
+          if(t==="images") return React.createElement("div",{style:{flex:1,overflow:"hidden"}},
+            React.createElement(ImagesGallery,{serverImages,onRefresh:refreshImages,llmModel,setAiStatus,notes,imgNotes,setImgNotes,allTags,
+              onDeleteNote:id=>setNotes(p=>p.filter(n=>n.id!==id)),
+              onAddNote:async(note)=>{ const saved=await api.post("/notes",note); setNotes(p=>[saved,...p]); }}));
+          if(t==="import") return React.createElement("div",{style:{flex:1,overflow:"hidden"}},
+            React.createElement(WebImporter,{llmModel,allTags,
+              onAddNote:async(note)=>{ const saved=await api.post("/notes",note); setNotes(p=>[saved,...p]); setSelId(saved.id); setTab("notes"); }}));
+          if(t==="mindmap") return React.createElement("div",{style:{flex:1,overflow:"hidden"}},
+            React.createElement(MindMap,{notes,allTags,aiMindmap,
+              onSelectNote:id=>{ setSelId(id); setTab("notes"); }}));
+          if(t==="llm") return React.createElement("div",{style:{flex:1,overflow:"hidden"}},
+            React.createElement(LLMNotebook,{notes,pdfNotes,serverPdfs,serverImages,allTags,llmModel,setLlmModel,
+              onMindmapReady:(mm)=>{ setAiMindmap(mm); setTab("mindmap"); },
+              onAddNote:async(note)=>{ const saved=await api.post("/notes",note); setNotes(p=>[saved,...p]); setSelId(saved.id); setTab("notes"); }}));
+          return notesContent; // default = notes
+        };
+
+        // Split-screen modus: links notities, rechts andere tab
+        if(splitMode && isDesktop) {
+          const splitTabs = tabs.filter(t=>t.id!=="notes");
+          return React.createElement("div",{style:{flex:1,display:"flex",overflow:"hidden"}},
+            // Linker helft: altijd notities
+            React.createElement("div",{style:{flex:1,display:"flex",overflow:"hidden",
+              borderRight:`2px solid ${W.splitBg}`,minWidth:0}},
+              notesContent
+            ),
+            // Rechter helft: selecteerbare tab
+            React.createElement("div",{style:{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",minWidth:0}},
+              // Tab-kiezer voor rechter paneel
+              React.createElement("div",{style:{
+                background:W.statusBg,borderBottom:`1px solid ${W.splitBg}`,
+                padding:"0",display:"flex",alignItems:"center",flexShrink:0,height:"36px"
+              }},
+                splitTabs.map(({id,icon,label})=>React.createElement("button",{
+                  key:id, onClick:()=>setSplitTab(id),
+                  style:{background:splitTab===id?W.bg:"none",
+                         border:"none",borderBottom:splitTab===id?`2px solid ${W.yellow}`:"2px solid transparent",
+                         color:splitTab===id?W.statusFg:W.fgMuted,
+                         padding:"0 14px",height:"100%",fontSize:"11px",
+                         cursor:"pointer",letterSpacing:"0.5px",flexShrink:0}
+                },icon," ",label))
+              ),
+              renderTab(splitTab)
+            )
+          );
+        }
+
+        // Normale modus
+        if(tab==="notes") return notesContent;
+        return renderTab(tab);
+      })()
     ),
 
     bottomNav
