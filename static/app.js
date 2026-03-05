@@ -244,9 +244,13 @@ const TagEditor = ({tags=[], onChange, allTags=[]}) => {
 
   return React.createElement("div",{style:{position:"relative"}},
     React.createElement("div",{
-      style:{display:"flex",flexWrap:"wrap",gap:"3px",padding:"4px 6px",
+      style:{display:"flex",flexWrap:"wrap",gap:"3px",padding:"4px 6px 6px",
         background:W.bg,border:`1px solid ${W.splitBg}`,borderRadius:"4px",
-        cursor:"text",minHeight:"28px"},
+        cursor:"text",minHeight:"28px",maxHeight:"120px",
+        overflow:"auto",
+        // Schaalbaar met de muis via resize-handle rechtsonder
+        resize:"vertical",
+      },
       onClick:()=>inputRef.current?.focus()
     },
       ...tags.map(t=>React.createElement(TagPill,{key:t,tag:t,onRemove:t=>onChange(tags.filter(x=>x!==t)),small:true})),
@@ -4812,25 +4816,29 @@ const App = () => {
                  fontSize:"18px",cursor:"pointer",padding:"0 4px",lineHeight:1}
         }, "×")
       ),
-      // Zoekbalk + nieuw zettel
-      React.createElement("div",{style:{display:"flex",gap:"5px"}},
-        React.createElement("input", {
-          value:search, onChange:e=>setSearch(e.target.value),
-          placeholder:"🔍 zoeken…",
-          style:{flex:1,background:W.bg,
-                 border:`1px solid ${search?W.blue:W.splitBg}`,
-                 borderRadius:"6px",padding:"6px 9px",color:W.fg,
-                 fontSize:"12px",outline:"none",
-                 WebkitAppearance:"none",transition:"border-color 0.15s"}
-        }),
-        React.createElement("button", {
-          onClick:newNote,
-          title:"Nieuw zettel",
-          style:{background:W.blue,color:W.bg,border:"none",
-                 borderRadius:"6px",padding:"6px 11px",fontSize:"15px",
-                 cursor:"pointer",fontWeight:"bold",flexShrink:0,lineHeight:1}
-        }, "+")
-      )
+      // Nieuw zettel — volle breedte, boven zoekbalk
+      React.createElement("button", {
+        onClick:newNote,
+        style:{background:W.blue,color:W.bg,border:"none",
+               borderRadius:"6px",padding:"8px 12px",fontSize:"12px",
+               cursor:"pointer",fontWeight:"bold",letterSpacing:"0.5px",
+               width:"100%",marginBottom:"7px",
+               display:"flex",alignItems:"center",justifyContent:"center",gap:"6px"}
+      },
+        React.createElement("span",{style:{fontSize:"16px",lineHeight:1}},"＋"),
+        "nieuw zettel"
+      ),
+      // Zoekbalk
+      React.createElement("input", {
+        value:search, onChange:e=>setSearch(e.target.value),
+        placeholder:"🔍 zoeken…",
+        style:{width:"100%",background:W.bg,
+               border:`1px solid ${search?W.blue:W.splitBg}`,
+               borderRadius:"6px",padding:"6px 9px",color:W.fg,
+               fontSize:"12px",outline:"none",
+               WebkitAppearance:"none",transition:"border-color 0.15s",
+               boxSizing:"border-box"}
+      })
     ),
     // Tag-filter chips
     sidebarTags.length > 0 && React.createElement("div", {
