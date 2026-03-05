@@ -3581,6 +3581,198 @@ const MermaidPreviewBlock = ({ code, onEdit }) => {
   );
 };
 
+// ── MermaidCodeEditor — textarea met syntax highlighting overlay ───────────────
+// Gebruikt de overlay-techniek: een div met gekleurde spans eronder,
+// een transparante textarea erboven. Tekst en cursor blijven volledig bewerkbaar.
+// Kleuren komen exact overeen met het canvas-kleurenpalet.
+const MermaidCodeEditor = ({ value, onChange }) => {
+  const taRef        = React.useRef(null);
+  const backdropRef  = React.useRef(null);
+
+  const PALETTE = [W.blue, W.comment, W.orange, W.purple,
+                   W.string, W.type, W.keyword, "#e8d44d"];
+
+  // Sync scroll tussen textarea en backdrop
+  const syncScroll = () => {
+    if (taRef.current && backdropRef.current) {
+      backdropRef.current.scrollTop  = taRef.current.scrollTop;
+      backdropRef.current.scrollLeft = taRef.current.scrollLeft;
+    }
+  };
+
+  // Bouw de gekleurd-gerenderde HTML op basis van inspringing
+  const highlight = (text) => {
+    const lines = text.split("\n");
+
+    // Bepaal welke kleur elke tak-index krijgt (eerste-niveau nodes)
+    // We lopen door de regels en tracken de tak-index
+    let branchIdx = 0;
+    let branchDepth = null; // diepte van de huidige tak-root (diepte 1)
+    const lineBranchIdx = []; // per regel: welke tak-index
+
+    lines.forEach((line, li) => {
+      const trimmed = line.trimEnd();
+      if (!trimmed || trimmed.toLowerCase().startsWith("mindmap")) {
+        lineBranchIdx.push(-2); // header
+        return;
+      }
+      const depth = Math.floor((line.match(/^( *)/)[1].length) / 2);
+
+      if (depth === 1) {
+        lineBranchIdx.push(-1); // root node
+        branchIdx = 0;
+        branchDepth = null;
+      } else if (depth === 2) {
+        // Nieuwe eerste-niveau tak
+        if (branchDepth !== null) branchIdx++;
+        branchDepth = 2;
+        lineBranchIdx.push(branchIdx);
+      } else {
+        lineBranchIdx.push(branchDepth !== null ? branchIdx : 0);
+      }
+    });
+
+    // Render elke regel als gekleurde span
+    return lines.map((line, li) => {
+      const idx = lineBranchIdx[li];
+      const raw = line
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+
+      if (idx === -2) {
+        // "mindmap" header
+        return `<span style="color:${W.fgMuted};font-style:italic">${raw}</span>`;
+      }
+
+      const depth  = Math.floor((line.match(/^( *)/)[1].length) / 2);
+      const indent = raw.match(/^( *)/)[1]; // leading spaces
+      const rest   = raw.slice(indent.length);
+
+      if (idx === -1) {
+        // Root node: root((label)) - toon in blauw vet
+        const highlighted = rest
+          .replace(/^(root)(\(\()(.*)(\)\))/, (_, kw, op, lbl, cl) =>
+            `<span style="color:${W.fgMuted}">${kw}</span>` +
+            `<span style="color:rgba(255,255,255,0.35)">${op}</span>` +
+            `<span style="color:${W.blue};font-weight:bold">${lbl}</span>` +
+            `<span style="color:rgba(255,255,255,0.35)">${cl}</span>`
+          );
+        const wasReplaced = highlighted !== rest;
+        return indent + (wasReplaced
+          ? highlighted
+          : `<span style="color:${W.blue};font-weight:bold">${rest}</span>`);
+      }
+
+      // Tak/subnode: kleur op basis van tak-index
+      const col = PALETTE[idx % PALETTE.length];
+
+      // Lichtere kleur voor diepere nodes
+      const opacity = depth === 1 ? "ff"
+                    : depth === 2 ? "cc"
+                    : depth === 3 ? "99"
+                    : "77";
+
+      // Inspring-gids: toon dots voor elke inspring-level
+      const indentGuide = "  ".repeat(depth);
+      const indentHtml  = depth > 0
+        ? `<span style="color:rgba(255,255,255,0.1)">${"· ".repeat(depth)}</span>`
+          .replace(/·/g, "·")
+        : "";
+
+      // Kleur de speciale syntax: (()), (), []
+      const coloredRest = rest
+        .replace(/^(\(\()(.*)(\)\))/, (_, op, lbl, cl) =>
+          `<span style="color:rgba(255,255,255,0.3)">${op}</span>` +
+          `<span style="color:${col}${opacity};font-weight:bold">${lbl}</span>` +
+          `<span style="color:rgba(255,255,255,0.3)">${cl}</span>`)
+        .replace(/^(\()(.*)(\))/, (_, op, lbl, cl) =>
+          `<span style="color:rgba(255,255,255,0.3)">${op}</span>` +
+          `<span style="color:${col}${opacity}">${lbl}</span>` +
+          `<span style="color:rgba(255,255,255,0.3)">${cl}</span>`)
+        .replace(/^(\[)(.*)(\])/, (_, op, lbl, cl) =>
+          `<span style="color:rgba(255,255,255,0.3)">${op}</span>` +
+          `<span style="color:${col}${opacity}">${lbl}</span>` +
+          `<span style="color:rgba(255,255,255,0.3)">${cl}</span>`);
+
+      const wasReplaced = coloredRest !== rest;
+
+      return indent + (wasReplaced
+        ? coloredRest
+        : `<span style="color:${col}${opacity};font-weight:${depth<=1?"bold":"normal"}">${rest}</span>`);
+    }).join("\n");
+  };
+
+  const SHARED_STYLE = {
+    position:    "absolute",
+    inset:       0,
+    margin:      0,
+    padding:     "12px 14px",
+    border:      "none",
+    outline:     "none",
+    fontSize:    "12px",
+    fontFamily:  "'Hack','Courier New',monospace",
+    lineHeight:  "1.7",
+    tabSize:     2,
+    whiteSpace:  "pre",
+    overflowWrap:"normal",
+    wordWrap:    "normal",
+    overflow:    "auto",
+  };
+
+  const handleKeyDown = (e) => {
+    if (e.key === "Tab") {
+      e.preventDefault();
+      const ta  = e.target;
+      const s   = ta.selectionStart;
+      const end = ta.selectionEnd;
+      const nv  = value.slice(0,s) + "  " + value.slice(end);
+      onChange(nv);
+      requestAnimationFrame(() => { ta.selectionStart = ta.selectionEnd = s+2; });
+    }
+  };
+
+  return React.createElement("div",{
+    style:{ flex:1, position:"relative", overflow:"hidden", background:W.bg }
+  },
+    // Backdrop: gekleurd HTML (niet interactief)
+    React.createElement("div",{
+      ref: backdropRef,
+      "aria-hidden": "true",
+      style:{
+        ...SHARED_STYLE,
+        color:       "transparent",  // eigen tekst onzichtbaar
+        background:  "transparent",
+        pointerEvents:"none",
+        userSelect:  "none",
+        zIndex:      1,
+        // Getoonde highlighting
+        color: W.fg,  // fallback, spans overschrijven
+      },
+      dangerouslySetInnerHTML:{ __html: highlight(value) + "\n" }
+    }),
+    // Textarea: transparante tekst, cursor zichtbaar
+    React.createElement("textarea",{
+      ref:          taRef,
+      value,
+      onChange:     e => { onChange(e.target.value); syncScroll(); },
+      onScroll:     syncScroll,
+      onKeyDown:    handleKeyDown,
+      spellCheck:   false,
+      autoCapitalize:"off",
+      autoCorrect:  "off",
+      style:{
+        ...SHARED_STYLE,
+        background:  "transparent",
+        color:       "transparent",
+        caretColor:  W.fg,          // cursor wél zichtbaar
+        resize:      "none",
+        zIndex:      2,
+      }
+    })
+  );
+};
+
 // ── Mermaid Mindmap Editor (split: code | preview) ───────────────────────────
 const MermaidEditor = ({ initialText="", onSave, onCancel }) => {
   const DEFAULT = `mindmap\n  root((Mijn Mindmap))\n    Tak A\n      Sub A1\n      Sub A2\n    Tak B\n      Sub B1\n    Tak C`;
@@ -3670,7 +3862,7 @@ const MermaidEditor = ({ initialText="", onSave, onCancel }) => {
     // Split: editor links | preview rechts
     React.createElement("div",{style:{flex:1,display:"flex",overflow:"hidden"}},
 
-      // Code editor
+      // Code editor met syntax highlighting
       React.createElement("div",{style:{
         width:"42%", flexShrink:0, display:"flex", flexDirection:"column",
         borderRight:`1px solid ${W.splitBg}`
@@ -3685,27 +3877,9 @@ const MermaidEditor = ({ initialText="", onSave, onCancel }) => {
           React.createElement("span",{style:{fontSize:"9px",color:W.fgDim,fontStyle:"italic",fontWeight:"normal"}},
             "root((Label)) · Tak · " + "  Sub")
         ),
-        React.createElement("textarea",{
-          value:code, onChange:e=>setCode(e.target.value),
-          spellCheck:false, autoCapitalize:"off", autoCorrect:"off",
-          style:{
-            flex:1, background:W.bg, border:"none", outline:"none",
-            padding:"12px 14px", color:W.fg, fontSize:"12px",
-            fontFamily:"'Hack','Courier New',monospace",
-            lineHeight:"1.7", resize:"none",
-            tabSize:2,
-          },
-          onKeyDown: e => {
-            // Tab → 2 spaties invoegen
-            if (e.key === "Tab") {
-              e.preventDefault();
-              const ta = e.target;
-              const s = ta.selectionStart, end = ta.selectionEnd;
-              const newVal = code.slice(0,s) + "  " + code.slice(end);
-              setCode(newVal);
-              requestAnimationFrame(() => { ta.selectionStart = ta.selectionEnd = s+2; });
-            }
-          }
+        React.createElement(MermaidCodeEditor, {
+          value: code,
+          onChange: setCode,
         })
       ),
 
