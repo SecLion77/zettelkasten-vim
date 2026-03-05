@@ -3100,14 +3100,14 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages}) => {
           React.createElement("div",{style:{borderTop:`1px solid ${W.splitBg}`,paddingTop:"10px"}}),
           React.createElement("div",{style:{
             display:"flex", alignItems:"center", justifyContent:"space-between",
-            marginBottom:"8px"
+            marginBottom:"8px", flexShrink:0
           }},
             React.createElement("div",{style:{fontSize:"9px",color:W.fgMuted,letterSpacing:"1px"}},
-              "🖼 AFBEELDINGEN",
+              "🖼 AFBEELDINGEN (" + preview.images.length + ")",
               React.createElement("span",{style:{
                 marginLeft:"6px", fontSize:"9px",
                 color: selectedImages.size>0 ? W.comment : W.fgMuted
-              }}, selectedImages.size>0 ? `(${selectedImages.size} geselecteerd)` : "(geen geselecteerd)")
+              }}, selectedImages.size>0 ? `${selectedImages.size} geselecteerd` : "geen geselecteerd")
             ),
             selectedImages.size > 0 && React.createElement("button",{
               onClick:()=>setSelectedImages(new Set()),
@@ -3115,9 +3115,12 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages}) => {
                      fontSize:"9px",cursor:"pointer",padding:"0",textDecoration:"underline"}
             },"wis alles")
           ),
-          // Grid van klikbare thumbnails
+          // Scrollbaar grid van klikbare thumbnails
           React.createElement("div",{style:{
-            display:"grid", gridTemplateColumns:"repeat(3, 1fr)", gap:"5px"
+            display:"grid", gridTemplateColumns:"repeat(3, 1fr)", gap:"5px",
+            maxHeight:"260px", overflowY:"auto",
+            scrollbarWidth:"thin", scrollbarColor:`${W.splitBg} transparent`,
+            paddingRight:"2px",
           }},
             preview.images.map(img => {
               const sel = selectedImages.has(img.name);
@@ -3134,34 +3137,45 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages}) => {
                 style:{
                   position:"relative", cursor:"pointer",
                   borderRadius:"5px", overflow:"hidden",
-                  border:`2px solid ${sel ? W.comment : "transparent"}`,
+                  border:`2px solid ${sel ? W.comment : "rgba(255,255,255,0.06)"}`,
                   boxShadow: sel ? `0 0 0 1px ${W.comment}` : "none",
                   transition:"border 0.12s, box-shadow 0.12s",
-                  aspectRatio:"1",
+                  aspectRatio:"1", background:"rgba(0,0,0,0.3)",
                 }
               },
                 React.createElement("img",{
                   src:"/api/image/"+encodeURIComponent(img.name),
-                  style:{width:"100%",height:"100%",objectFit:"cover",display:"block"}
+                  style:{width:"100%",height:"100%",objectFit:"cover",display:"block"},
+                  onError: e => {
+                    // Toon plaatsnaam als het plaatje niet laadt
+                    e.target.style.display = "none";
+                    e.target.parentNode.style.display = "flex";
+                    e.target.parentNode.style.alignItems = "center";
+                    e.target.parentNode.style.justifyContent = "center";
+                    e.target.parentNode.style.fontSize = "8px";
+                    e.target.parentNode.style.color = W.fgMuted;
+                    e.target.parentNode.style.padding = "4px";
+                    e.target.parentNode.style.wordBreak = "break-all";
+                    e.target.parentNode.innerText = img.name;
+                  }
                 }),
-                // Checkmark overlay bij selectie
                 sel && React.createElement("div",{style:{
                   position:"absolute",inset:0,
-                  background:"rgba(159,202,86,0.25)",
+                  background:"rgba(159,202,86,0.3)",
                   display:"flex",alignItems:"center",justifyContent:"center",
-                  fontSize:"18px",
+                  fontSize:"20px", fontWeight:"bold",
                 }},"✓"),
-                // Donkere overlay als niet geselecteerd (subtiel)
                 !sel && React.createElement("div",{style:{
                   position:"absolute",inset:0,
-                  background:"rgba(0,0,0,0.35)",
+                  background:"rgba(0,0,0,0.3)",
+                  transition:"background 0.12s",
                 }})
               );
             })
           ),
           React.createElement("div",{style:{
             fontSize:"9px",color:W.fgMuted,marginTop:"5px",lineHeight:"1.5"
-          }}, "Klik op een afbeelding om deze mee te nemen in de notitie. Alle afbeeldingen staan al in de Plaatjes tab.")
+          }}, "Klik om mee te nemen in de notitie. Alle afbeeldingen staan in de Plaatjes tab.")
         ),
 
         React.createElement("div",{style:{borderTop:`1px solid ${W.splitBg}`,paddingTop:"12px"}}),

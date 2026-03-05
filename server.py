@@ -830,13 +830,7 @@ class ZKHandler(BaseHTTPRequestHandler):
                 continue  # sla mislukte downloads stilletjes over
 
         # ── Laat LLM opschonen en structureren als Markdown ──────────────────
-        # Voeg afbeelding-placeholders toe in prompt zodat LLM ze kan inbedden
-        img_hint = ""
-        if saved_images:
-            img_hint = ("\n\nBeschikbare afbeeldingen (gebruik ze op de juiste plek in de tekst "
-                        "met de syntaxis ![[img:NAAM]]):\n"
-                        + "\n".join(f"- {i['name']}" for i in saved_images))
-
+        # Geen afbeeldingen in de markdown — die kiest de gebruiker zelf via de selectie-UI
         prompt = (
             "Converteer de onderstaande webpagina-tekst naar nette Markdown, "
             "als een leesbaar artikel (Instapaper-stijl). "
@@ -844,8 +838,7 @@ class ZKHandler(BaseHTTPRequestHandler):
             "Verwijder navigatie, advertenties, cookieteksten en irrelevante herhalingen. "
             "Gebruik ## voor secties, - voor lijsten, **vet** voor sleutelwoorden. "
             "Schrijf een korte intro na de titel. "
-            + img_hint +
-            "\nGeef ALLEEN de Markdown terug, geen uitleg.\n\n"
+            "Geef ALLEEN de Markdown terug, geen uitleg.\n\n"
             f"TITEL: {page_title}\nURL: {url}\n\n"
             "TEKST:\n" + raw_text
         )
@@ -858,20 +851,12 @@ class ZKHandler(BaseHTTPRequestHandler):
         except Exception:
             md = f"# {page_title}\n\n{raw_text[:4000]}"
 
-        # Als LLM de afbeeldingen niet heeft ingebed, voeg ze onderaan toe
-        if saved_images:
-            embedded = [i["name"] for i in saved_images if i["name"] in md]
-            missing  = [i for i in saved_images if i["name"] not in md]
-            if missing:
-                md += "\n\n---\n\n### Afbeeldingen\n\n"
-                md += "\n\n".join(f"![[img:{i['name']}]]" for i in missing)
-
         return self._send(200,{
             "ok":     True,
             "title":  page_title,
             "url":    url,
             "markdown": md,
-            "images": saved_images,
+            "images": saved_images,   # beschikbaar voor selectie in de UI
         })
 
 
