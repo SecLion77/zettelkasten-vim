@@ -1058,6 +1058,13 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
     React.createElement("div", {
       style: {flex:1, position:"relative", overflow:"hidden"},
       onClick: () => inputRef.current?.focus(),
+      onWheel: (e) => {
+        e.preventDefault();
+        const s = S.current;
+        const lines = e.deltaY > 0 ? 3 : -3;
+        s.scroll = Math.max(0, Math.min(s.lines.length - 1, s.scroll + lines));
+        draw();
+      },
     },
       React.createElement("canvas", {ref:cvRef, style:{display:"block"}}),
       // Onzichtbaar input-element — vangt ALLES af, inclusief Escape
@@ -5016,31 +5023,81 @@ const App = () => {
     React.createElement("div", {style:{flex:1}}),
     // Stats
     React.createElement("div", {
-      style:{padding:"0 10px",fontSize:"10px",color:W.fgMuted,
-             display:"flex",gap:"10px",alignItems:"center"}
+      style:{padding:"0 6px", display:"flex", gap:"4px", alignItems:"center"}
     },
+      // AI-status indicator
       aiStatus && React.createElement("div", {
-        style:{display:"flex",alignItems:"center",gap:"6px",
-               background:"rgba(138,198,242,0.08)",
-               border:"1px solid rgba(138,198,242,0.25)",
-               borderRadius:"12px",padding:"3px 10px",
-               color:"#a8d8f0",fontSize:"10px",animation:"ai-pulse 1.4s ease-in-out infinite"}
+        style:{display:"flex",alignItems:"center",gap:"5px",
+               background:"rgba(138,198,242,0.1)",
+               border:"1px solid rgba(138,198,242,0.3)",
+               borderRadius:"20px",padding:"3px 11px",
+               color:"#a8d8f0",fontSize:"10px",
+               animation:"ai-pulse 1.4s ease-in-out infinite",
+               marginRight:"4px"}
       },
         React.createElement("span",{style:{
-          display:"inline-block",width:"7px",height:"7px",
-          borderRadius:"50%",background:"#a8d8f0",
+          display:"inline-block",width:"6px",height:"6px",
+          borderRadius:"50%",background:"#a8d8f0",flexShrink:0,
           animation:"ai-dot 1.4s ease-in-out infinite"}}),
         aiStatus
       ),
-      React.createElement("span", null, notes.length, " zettels"),
-      React.createElement("span", {style:{color:W.splitBg}}, "│"),
-      React.createElement("span", {
-        style:{color:W.fgDim,maxWidth:"160px",overflow:"hidden",
-               textOverflow:"ellipsis",whiteSpace:"nowrap",
-               fontSize:"9px",cursor:"pointer"},
+      // Zettels badge
+      React.createElement("div",{style:{
+        display:"flex", alignItems:"baseline", gap:"3px",
+        background:"rgba(229,192,123,0.13)",
+        border:"1px solid rgba(229,192,123,0.32)",
+        borderRadius:"6px", padding:"4px 10px",
+      }},
+        React.createElement("span",{style:{
+          fontSize:"14px", fontWeight:"700",
+          color:W.yellow, letterSpacing:"-0.5px", lineHeight:1
+        }}, notes.length),
+        React.createElement("span",{style:{
+          fontSize:"9px", color:"rgba(229,192,123,0.7)",
+          letterSpacing:"0.8px", textTransform:"uppercase"
+        }}, "zettels")
+      ),
+      // Tags badge
+      React.createElement("div",{style:{
+        display:"flex", alignItems:"baseline", gap:"3px",
+        background:"rgba(159,202,86,0.13)",
+        border:"1px solid rgba(159,202,86,0.32)",
+        borderRadius:"6px", padding:"4px 10px",
+      }},
+        React.createElement("span",{style:{
+          fontSize:"14px", fontWeight:"700",
+          color:W.comment, letterSpacing:"-0.5px", lineHeight:1
+        }}, allTags.length),
+        React.createElement("span",{style:{
+          fontSize:"9px", color:"rgba(159,202,86,0.7)",
+          letterSpacing:"0.8px", textTransform:"uppercase"
+        }}, "tags")
+      ),
+      // Scheidingslijn
+      React.createElement("div",{style:{
+        width:"1px", height:"20px",
+        background:W.splitBg, margin:"0 4px"
+      }}),
+      // Vault pad
+      React.createElement("div",{
         onClick:()=>setShowSettings(true),
-        title:vaultPath
-      }, "📁 ", vaultPath.split("/").slice(-2).join("/"))
+        title:vaultPath,
+        style:{
+          display:"flex", alignItems:"center", gap:"5px",
+          background:"rgba(138,198,242,0.07)",
+          border:"1px solid rgba(138,198,242,0.18)",
+          borderRadius:"6px", padding:"4px 10px",
+          cursor:"pointer", maxWidth:"170px",
+          transition:"background 0.12s, border 0.12s",
+        }
+      },
+        React.createElement("span",{style:{fontSize:"12px",lineHeight:1,flexShrink:0}},"📁"),
+        React.createElement("span",{style:{
+          fontSize:"10px", color:"rgba(138,198,242,0.75)",
+          overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap",
+          letterSpacing:"0.2px", fontWeight:"500"
+        }}, vaultPath.split("/").slice(-2).join("/"))
+      )
     ),
     // Split-scherm knop
     React.createElement("button", {
@@ -5261,7 +5318,8 @@ const App = () => {
                 letterSpacing:"2px",background:"rgba(0,0,0,0.2)",flexShrink:0
               }},"NOTITIES"),
               ns.map(n=>React.createElement("div",{key:n.id,
-                onClick:()=>{
+                onMouseDown:(e)=>{
+                  e.preventDefault(); // voorkom blur van editor → cursor blijft behouden
                   const link="[["+n.title+"]]";
                   contentRef.current?.insertAtCursor?contentRef.current.insertAtCursor(link):setEditContent(c=>c+link);
                   setShowLinkMenu(false);
@@ -5289,9 +5347,10 @@ const App = () => {
                 letterSpacing:"2px",background:"rgba(0,0,0,0.2)"
               }},"PDF"),
               ps.map(p=>React.createElement("div",{key:p.name,
-                onClick:()=>{
+                onMouseDown:(e)=>{
+                  e.preventDefault();
                   const link="\n\n> 📄 **PDF:** [[pdf:"+p.name+"]]\n";
-                  setEditContent(c=>c+link);
+                  contentRef.current?.insertAtCursor?contentRef.current.insertAtCursor(link):setEditContent(c=>c+link);
                   setShowLinkMenu(false);
                 },
                 style:{padding:"7px 12px",cursor:"pointer",
@@ -5316,9 +5375,10 @@ const App = () => {
                 letterSpacing:"2px",background:"rgba(0,0,0,0.2)"
               }},"AFBEELDINGEN"),
               imgs.map(img=>React.createElement("div",{key:img.name,
-                onClick:()=>{
+                onMouseDown:(e)=>{
+                  e.preventDefault();
                   const link="\n\n![[img:"+img.name+"]]\n";
-                  setEditContent(c=>c+link);
+                  contentRef.current?.insertAtCursor?contentRef.current.insertAtCursor(link):setEditContent(c=>c+link);
                   setShowLinkMenu(false);
                 },
                 style:{padding:"7px 12px",cursor:"pointer",
