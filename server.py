@@ -695,7 +695,8 @@ class ZKHandler(BaseHTTPRequestHandler):
             return self._send(200,{"ok":False,"error":str(e)})
 
     def _import_url(self):
-        """Haal inhoud van een URL op en converteer naar Markdown — Instapaper-stijl."""
+        """Haal inhoud van een URL op en converteer naar Markdown — Instapaper-stijl.
+        Downloadt ook afbeeldingen en slaat ze op in de vault/images map."""
         body   = self._body()
         url    = body.get("url","").strip()
         model  = body.get("model","llama3.2-vision")
@@ -703,6 +704,9 @@ class ZKHandler(BaseHTTPRequestHandler):
             return self._send(400,{"error":"url vereist"})
         if not url.startswith(("http://","https://")):
             url = "https://" + url
+
+        parsed_base = urlparse(url)
+        base_url    = f"{parsed_base.scheme}://{parsed_base.netloc}"
 
         try:
             req = urllib.request.Request(url, headers={
@@ -720,7 +724,7 @@ class ZKHandler(BaseHTTPRequestHandler):
         except Exception as e:
             return self._send(200,{"ok":False,"error":"URL ophalen mislukt: "+str(e)})
 
-        # ── HTML → tekst via stdlib html.parser ──────────────────────────────
+        # ── HTML → tekst + afbeelding-URLs via stdlib html.parser ────────────
         from html.parser import HTMLParser
 
         class ArticleExtractor(HTMLParser):
@@ -734,14 +738,19 @@ class ZKHandler(BaseHTTPRequestHandler):
                 self.text_chunks = []
                 self.title       = ""
                 self._in_title   = False
-                self._cur_tag    = None
+                self.img_srcs    = []   # alle <img src="..."> in artikel
 
             def handle_starttag(self, tag, attrs):
-                self._cur_tag = tag
+                attr_d = dict(attrs)
                 if tag == "title": self._in_title = True
                 if tag in self.SKIP_TAGS: self.skip_depth += 1
                 if tag in self.BLOCK_TAGS and self.text_chunks:
                     self.text_chunks.append("\n")
+                # Verzamel afbeeldingen buiten skip-zones
+                if tag == "img" and self.skip_depth == 0:
+                    src = attr_d.get("src","") or attr_d.get("data-src","") or attr_d.get("data-lazy-src","")
+                    if src and not src.startswith("data:"):
+                        self.img_srcs.append(src)
 
             def handle_endtag(self, tag):
                 if tag == "title": self._in_title = False
@@ -761,14 +770,73 @@ class ZKHandler(BaseHTTPRequestHandler):
 
         page_title = parser.title.strip() or url
         raw_text   = " ".join(parser.text_chunks)
-        # Deduplicate whitespace, truncate
         raw_text   = re.sub(r'\s{3,}', ' ', raw_text)[:12000]
 
         if len(raw_text) < 100:
             return self._send(200,{"ok":False,
                 "error":"Pagina bevat te weinig leesbare tekst (mogelijk JavaScript-only of betaalmuur)"})
 
+        # ── Afbeeldingen downloaden ───────────────────────────────────────────
+        IMAGE_MIME_TYPES = {"image/jpeg","image/png","image/gif","image/webp","image/svg+xml"}
+        SKIP_PATTERNS    = ("logo","icon","avatar","badge","pixel","tracking","1x1",
+                            "spacer","blank","transparent","spinner","loading")
+        saved_images = []   # [{name, url_path}]
+
+        for raw_src in parser.img_srcs[:20]:  # max 20 afbeeldingen
+            try:
+                # Maak absolute URL
+                if raw_src.startswith("//"):
+                    img_url = parsed_base.scheme + ":" + raw_src
+                elif raw_src.startswith("/"):
+                    img_url = base_url + raw_src
+                elif not raw_src.startswith("http"):
+                    img_url = url.rsplit("/",1)[0] + "/" + raw_src
+                else:
+                    img_url = raw_src
+
+                # Sla over als URL al een bekende tracker/icon is
+                low = img_url.lower()
+                if any(p in low for p in SKIP_PATTERNS):
+                    continue
+
+                # Download
+                img_req = urllib.request.Request(img_url, headers={
+                    "User-Agent":"Mozilla/5.0","Referer":url
+                })
+                with urllib.request.urlopen(img_req, timeout=10) as ir:
+                    img_bytes = ir.read(5_000_000)  # max 5 MB
+                    img_ct    = ir.headers.get("Content-Type","").split(";")[0].strip()
+
+                # Filter op MIME
+                if img_ct not in IMAGE_MIME_TYPES and not img_ct.startswith("image/"):
+                    continue
+                if len(img_bytes) < 2000:   # kleiner dan 2 KB = waarschijnlijk icon
+                    continue
+
+                # Bestandsnaam
+                ext_map = {"image/jpeg":".jpg","image/png":".png","image/gif":".gif",
+                           "image/webp":".webp","image/svg+xml":".svg"}
+                ext = ext_map.get(img_ct, ".jpg")
+                raw_name = img_url.split("?")[0].rsplit("/",1)[-1]
+                if "." not in raw_name[-5:]:
+                    raw_name = raw_name + ext
+                # Prefix met domein voor uniciteit
+                domain_prefix = parsed_base.netloc.replace("www.","").replace(".","_")
+                fname = domain_prefix + "_" + raw_name[:60]
+
+                saved = self.vault.save_image(fname, img_bytes)
+                saved_images.append({"name": saved["name"], "url": saved["url"]})
+            except Exception:
+                continue  # sla mislukte downloads stilletjes over
+
         # ── Laat LLM opschonen en structureren als Markdown ──────────────────
+        # Voeg afbeelding-placeholders toe in prompt zodat LLM ze kan inbedden
+        img_hint = ""
+        if saved_images:
+            img_hint = ("\n\nBeschikbare afbeeldingen (gebruik ze op de juiste plek in de tekst "
+                        "met de syntaxis ![[img:NAAM]]):\n"
+                        + "\n".join(f"- {i['name']}" for i in saved_images))
+
         prompt = (
             "Converteer de onderstaande webpagina-tekst naar nette Markdown, "
             "als een leesbaar artikel (Instapaper-stijl). "
@@ -776,7 +844,8 @@ class ZKHandler(BaseHTTPRequestHandler):
             "Verwijder navigatie, advertenties, cookieteksten en irrelevante herhalingen. "
             "Gebruik ## voor secties, - voor lijsten, **vet** voor sleutelwoorden. "
             "Schrijf een korte intro na de titel. "
-            "Geef ALLEEN de Markdown terug, geen uitleg.\n\n"
+            + img_hint +
+            "\nGeef ALLEEN de Markdown terug, geen uitleg.\n\n"
             f"TITEL: {page_title}\nURL: {url}\n\n"
             "TEKST:\n" + raw_text
         )
@@ -785,16 +854,24 @@ class ZKHandler(BaseHTTPRequestHandler):
                 {"model":model,"prompt":prompt,"stream":False}, 120)
             md = r.get("response","").strip()
             if not md:
-                # Fallback: lever ruwe tekst zonder LLM-verwerking
                 md = f"# {page_title}\n\n{raw_text[:4000]}"
         except Exception:
             md = f"# {page_title}\n\n{raw_text[:4000]}"
 
+        # Als LLM de afbeeldingen niet heeft ingebed, voeg ze onderaan toe
+        if saved_images:
+            embedded = [i["name"] for i in saved_images if i["name"] in md]
+            missing  = [i for i in saved_images if i["name"] not in md]
+            if missing:
+                md += "\n\n---\n\n### Afbeeldingen\n\n"
+                md += "\n\n".join(f"![[img:{i['name']}]]" for i in missing)
+
         return self._send(200,{
-            "ok":    True,
-            "title": page_title,
-            "url":   url,
+            "ok":     True,
+            "title":  page_title,
+            "url":    url,
             "markdown": md,
+            "images": saved_images,
         })
 
 

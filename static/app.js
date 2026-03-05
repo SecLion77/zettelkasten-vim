@@ -1081,6 +1081,54 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
 
 
 
+// ── Gedeelde TagFilterBar ─────────────────────────────────────────────────────
+// Eenduidig tag-filter component dat overal in de app gebruikt wordt.
+// Props:
+//   tags        – array van beschikbare tag-strings
+//   activeTag   – huidig actieve tag (null = alles)
+//   onChange    – callback(tag|null)
+//   compact     – bool, kleinere weergave (default false)
+//   tagColors   – optioneel object {tag: kleur}
+const TagFilterBar = ({tags=[], activeTag, onChange, compact=false, tagColors={}}) => {
+  if (!tags.length) return null;
+  const sz   = compact ? "9px"  : "10px";
+  const pad  = compact ? "2px 5px" : "3px 8px";
+  const rad  = compact ? "3px"  : "5px";
+  const gap  = compact ? "3px"  : "4px";
+
+  const chipStyle = (t) => {
+    const active  = t ? activeTag===t : !activeTag;
+    const col     = t ? (tagColors[t] || W.comment) : W.blue;
+    return {
+      fontSize:sz, padding:pad, borderRadius:rad,
+      cursor:"pointer", userSelect:"none",
+      background: active ? col+"28" : "rgba(255,255,255,0.04)",
+      color:       active ? col      : W.fgMuted,
+      border:     `1px solid ${active ? col+"60" : W.splitBg}`,
+      fontWeight:  active ? "600"    : "400",
+      transition: "background 0.12s, color 0.12s, border 0.12s",
+    };
+  };
+
+  return React.createElement("div",{
+    style:{display:"flex", flexWrap:"wrap", gap, alignItems:"center"}
+  },
+    // "Alles" chip
+    React.createElement("span",{
+      key:"__all",
+      onClick:()=>onChange(null),
+      style:chipStyle(null)
+    }, "alles"),
+    // Per-tag chips
+    ...tags.map(t => React.createElement("span",{
+      key:t,
+      onClick:()=>onChange(activeTag===t ? null : t),
+      style:chipStyle(t)
+    }, "#"+t))
+  );
+};
+
+
 // ── Obsidian-stijl Knowledge Graph ────────────────────────────────────────────
 const Graph = ({notes, pdfNotes, onSelect, selectedId, localMode=false}) => {
   const cvRef    = useRef(null);
@@ -1302,35 +1350,13 @@ const Graph = ({notes, pdfNotes, onSelect, selectedId, localMode=false}) => {
       padding:"10px 12px",backdropFilter:"blur(6px)",
       maxWidth:"260px",
     }},
-      // Label
       React.createElement("div",{style:{fontSize:"9px",color:"rgba(138,198,242,0.5)",
         letterSpacing:"2px",marginBottom:"2px"}},"FILTER OP TAG"),
-      // Tag pills
-      allGraphTags.length===0
-        ? React.createElement("span",{style:{fontSize:"11px",color:W.fgMuted}},"geen tags")
-        : React.createElement("div",{style:{display:"flex",flexWrap:"wrap",gap:"5px"}},
-            allGraphTags.map(t=>React.createElement("span",{
-              key:t,
-              onClick:()=>setFilterTag(filterTag===t?null:t),
-              style:{
-                fontSize:"11px",padding:"3px 8px",borderRadius:"5px",
-                cursor:"pointer",userSelect:"none",fontWeight:"500",
-                background:filterTag===t
-                  ? (tagColors[t]||W.blue)+"35"
-                  : "rgba(138,198,242,0.08)",
-                color:filterTag===t
-                  ? (tagColors[t]||W.blue)
-                  : "#a8d8f0",
-                border:`1px solid ${filterTag===t
-                  ? (tagColors[t]||W.blue)+"70"
-                  : "rgba(138,198,242,0.22)"}`,
-                boxShadow:filterTag===t?`0 0 8px ${(tagColors[t]||W.blue)}40`:"none",
-              }
-            },"#"+t))
-          ),
-      // Divider
+      React.createElement(TagFilterBar,{
+        tags:allGraphTags, activeTag:filterTag,
+        onChange:setFilterTag, tagColors
+      }),
       React.createElement("div",{style:{height:"1px",background:"rgba(255,255,255,0.06)",margin:"2px 0"}}),
-      // Weergave-opties
       React.createElement("div",{style:{fontSize:"9px",color:"rgba(138,198,242,0.5)",
         letterSpacing:"2px",marginBottom:"2px"}},"WEERGAVE"),
       React.createElement("div",{style:{display:"flex",gap:"5px",flexWrap:"wrap"}},
@@ -1346,18 +1372,6 @@ const Graph = ({notes, pdfNotes, onSelect, selectedId, localMode=false}) => {
             fontSize:"11px",cursor:"pointer",fontWeight:val?"600":"400",
           }
         },label))
-      ),
-      // Actief filter tonen + wis knop
-      filterTag && React.createElement("div",{style:{
-        display:"flex",alignItems:"center",gap:"6px",
-        marginTop:"2px",paddingTop:"6px",
-        borderTop:"1px solid rgba(255,255,255,0.06)"
-      }},
-        React.createElement("span",{style:{fontSize:"11px",color:"#a8d8f0"}},"filter: #"+filterTag),
-        React.createElement("button",{onClick:()=>setFilterTag(null),style:{
-          background:"none",border:"none",color:W.fgMuted,
-          fontSize:"13px",cursor:"pointer",padding:"0 2px",lineHeight:1
-        }},"×")
       )
     ),
     React.createElement("canvas",{
@@ -1922,8 +1936,8 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
         filterTag&&React.createElement("button",{onClick:()=>setFilterTag(null),style:{background:"rgba(159,202,86,0.15)",color:W.comment,border:`1px solid rgba(159,202,86,0.3)`,borderRadius:"3px",fontSize:"10px",padding:"1px 6px",cursor:"pointer"}},"#",filterTag," ×"),
         React.createElement("button",{onClick:()=>setShowAnnotPanel(false),style:{background:"none",border:"none",color:W.fgMuted,fontSize:"16px",cursor:"pointer",padding:"0 2px",lineHeight:1}}, "×")
       ),
-      allAnnotTags.length>0&&React.createElement("div",{style:{padding:"5px 8px",borderBottom:`1px solid ${W.splitBg}`,display:"flex",gap:"3px",flexWrap:"wrap",background:"rgba(0,0,0,0.15)"}},
-        allAnnotTags.map(t=>React.createElement("span",{key:t,onClick:()=>setFilterTag(filterTag===t?null:t),style:{fontSize:"9px",padding:"1px 5px",borderRadius:"3px",cursor:"pointer",background:filterTag===t?"rgba(159,202,86,0.3)":"rgba(159,202,86,0.08)",color:W.comment,border:`1px solid rgba(159,202,86,${filterTag===t?0.5:0.15})`}},"#",t))
+      allAnnotTags.length>0&&React.createElement("div",{style:{padding:"5px 8px",borderBottom:`1px solid ${W.splitBg}`,background:"rgba(0,0,0,0.15)",flexShrink:0}},
+        React.createElement(TagFilterBar,{tags:allAnnotTags,activeTag:filterTag,onChange:setFilterTag,compact:true})
       ),
       React.createElement("div",{style:{flex:1,overflow:"auto"}},
         panelHl.length===0
@@ -2591,15 +2605,8 @@ const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote, setAiStatu
         )
       ),
       // Tag filter
-      allAnnotTags.length>0 && React.createElement("div",{style:{
-        padding:"5px 8px",borderBottom:`1px solid ${W.splitBg}`,
-        display:"flex",gap:"3px",flexWrap:"wrap",background:"rgba(0,0,0,0.15)"}},
-        allAnnotTags.map(t=>React.createElement("span",{key:t,
-          onClick:()=>setFilterTag(filterTag===t?null:t),
-          style:{fontSize:"9px",padding:"1px 5px",borderRadius:"3px",cursor:"pointer",
-                 background:filterTag===t?"rgba(159,202,86,0.3)":"rgba(159,202,86,0.08)",
-                 color:W.comment,
-                 border:`1px solid rgba(159,202,86,${filterTag===t?0.5:0.15})`}},"#",t))
+      allAnnotTags.length>0 && React.createElement("div",{style:{padding:"5px 8px",borderBottom:`1px solid ${W.splitBg}`,background:"rgba(0,0,0,0.15)",flexShrink:0}},
+        React.createElement(TagFilterBar,{tags:allAnnotTags,activeTag:filterTag,onChange:setFilterTag,compact:true})
       ),
       // Annotatielijst
       React.createElement("div",{style:{flex:1,overflow:"auto"}},
@@ -2717,13 +2724,13 @@ const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote, setAiStatu
 // ── WebImporter ────────────────────────────────────────────────────────────────
 // Instapaper-stijl: URL opgeven → inhoud ophalen → opschonen → Zettelkasten-notitie
 
-const WebImporter = ({llmModel, allTags, onAddNote}) => {
+const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages}) => {
   const { useState, useRef, useCallback } = React;
 
   const [url,        setUrl]       = useState("");
   const [busy,       setBusy]      = useState(false);
   const [error,      setError]     = useState(null);
-  const [preview,    setPreview]   = useState(null);   // {title, url, markdown}
+  const [preview,    setPreview]   = useState(null);   // {title, url, markdown, images}
   const [editMd,     setEditMd]    = useState("");
   const [editTitle,  setEditTitle] = useState("");
   const [tags,       setTags]      = useState([]);
@@ -2740,9 +2747,10 @@ const WebImporter = ({llmModel, allTags, onAddNote}) => {
         setPreview(res);
         setEditMd(res.markdown);
         setEditTitle(res.title);
-        // Automatisch tags voorstellen op basis van domein
         const domain = new URL(res.url).hostname.replace("www.","");
         setTags(["import", domain.split(".")[0]].filter(Boolean));
+        // Ververs plaatjes-tab als er afbeeldingen zijn gedownload
+        if (res.images?.length && onRefreshImages) onRefreshImages();
       } else {
         setError(res?.error || "Import mislukt");
       }
@@ -2750,7 +2758,7 @@ const WebImporter = ({llmModel, allTags, onAddNote}) => {
       setError(e.message);
     }
     setBusy(false);
-  }, [url, llmModel]);
+  }, [url, llmModel, onRefreshImages]);
 
   const saveNote = useCallback(async () => {
     if (!preview) return;
@@ -2900,6 +2908,34 @@ const WebImporter = ({llmModel, allTags, onAddNote}) => {
           letterSpacing:"1px"}},"BRON"),
         React.createElement("div",{style:{fontSize:"11px",color:W.blue,
           wordBreak:"break-all",lineHeight:"1.5"}}, preview.url),
+
+        // Geïmporteerde afbeeldingen
+        preview.images?.length > 0 && React.createElement(React.Fragment, null,
+          React.createElement("div",{style:{borderTop:`1px solid ${W.splitBg}`,paddingTop:"10px"}}),
+          React.createElement("div",{style:{fontSize:"9px",color:W.fgMuted,
+            letterSpacing:"1px",marginBottom:"6px"}},
+            "🖼 AFBEELDINGEN ("+preview.images.length+")"),
+          React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:"4px"}},
+            preview.images.map(img => React.createElement("div",{key:img.name,
+              style:{display:"flex",alignItems:"center",gap:"6px",
+                     background:"rgba(159,202,86,0.06)",
+                     border:"1px solid rgba(159,202,86,0.15)",
+                     borderRadius:"4px",padding:"4px 7px"}
+            },
+              React.createElement("img",{
+                src:"/api/image/"+encodeURIComponent(img.name),
+                style:{width:"32px",height:"32px",objectFit:"cover",
+                       borderRadius:"3px",flexShrink:0}
+              }),
+              React.createElement("span",{style:{fontSize:"9px",color:W.comment,
+                overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1}},
+                img.name)
+            ))
+          ),
+          React.createElement("div",{style:{fontSize:"9px",color:W.fgMuted,
+            marginTop:"4px",lineHeight:"1.5"}},
+            "Opgeslagen in Plaatjes tab")
+        ),
 
         React.createElement("div",{style:{borderTop:`1px solid ${W.splitBg}`,paddingTop:"12px"}}),
 
@@ -3678,24 +3714,9 @@ const MindMap = ({notes, allTags, onSelectNote, aiMindmap}) => {
         ),
         // Tag filter: alleen in vault-modus
         !aiMode && allTags.length>0 && React.createElement("div",null,
-          React.createElement("div",{style:{fontSize:"9px",color:"rgba(138,198,242,0.5)",
+          React.createElement("div",{style:{fontSize:"9px",color:W.fgMuted,
             letterSpacing:"2px",marginBottom:"4px"}},"TAG FILTER"),
-          React.createElement("div",{style:{display:"flex",flexWrap:"wrap",gap:"3px"}},
-            React.createElement("span",{
-              onClick:()=>setTagFilter(null),
-              style:{fontSize:"10px",padding:"2px 6px",borderRadius:"4px",cursor:"pointer",
-                     background:!tagFilter?"rgba(138,198,242,0.18)":"rgba(138,198,242,0.05)",
-                     color:!tagFilter?"#a8d8f0":"rgba(168,216,240,0.5)",
-                     border:`1px solid ${!tagFilter?"rgba(138,198,242,0.4)":"rgba(138,198,242,0.12)"}`}
-            },"alle"),
-            allTags.map(t=>React.createElement("span",{key:t,
-              onClick:()=>setTagFilter(tagFilter===t?null:t),
-              style:{fontSize:"10px",padding:"2px 6px",borderRadius:"4px",cursor:"pointer",
-                     background:tagFilter===t?(tagColorMap[t]||W.comment)+"25":"rgba(138,198,242,0.05)",
-                     color:tagFilter===t?(tagColorMap[t]||W.comment):"rgba(168,216,240,0.5)",
-                     border:`1px solid ${tagFilter===t?(tagColorMap[t]||W.comment)+"50":"rgba(138,198,242,0.12)"}`}
-            },"#"+t))
-          )
+          React.createElement(TagFilterBar,{tags:allTags,activeTag:tagFilter,onChange:setTagFilter,compact:true,tagColors:tagColorMap})
         )
       ),
 
@@ -4180,21 +4201,9 @@ const LLMNotebook = ({notes, pdfNotes, serverPdfs, serverImages, allTags, onAddN
                    color:W.orange,borderRadius:"4px",padding:"3px 8px",fontSize:"10px",cursor:"pointer"}
           }, "✕ wis alles")
         ),
-        // Tag filter
-        allNoteTags.length > 0 && React.createElement("div", {
-          style:{marginTop:"8px",display:"flex",flexWrap:"wrap",gap:"4px"}
-        },
-          React.createElement("span",{style:{fontSize:"9px",color:W.fgMuted,width:"100%",marginBottom:"2px",letterSpacing:"1px"}},"FILTER:"),
-          allNoteTags.map(t => React.createElement("span", {
-            key:t,
-            onClick:()=>setTagFilter(tagFilter===t?null:t),
-            style:{
-              fontSize:"10px",padding:"2px 6px",borderRadius:"4px",cursor:"pointer",
-              background:tagFilter===t?"rgba(138,198,242,0.2)":"rgba(138,198,242,0.07)",
-              color:tagFilter===t?"#a8d8f0":"rgba(168,216,240,0.6)",
-              border:`1px solid ${tagFilter===t?"rgba(138,198,242,0.4)":"rgba(138,198,242,0.15)"}`,
-            }
-          }, "#"+t))
+        allNoteTags.length > 0 && React.createElement("div",{style:{marginTop:"8px"}},
+          React.createElement("span",{style:{fontSize:"9px",color:W.fgMuted,display:"block",marginBottom:"4px",letterSpacing:"1px"}},"FILTER:"),
+          React.createElement(TagFilterBar,{tags:allNoteTags,activeTag:tagFilter,onChange:setTagFilter,compact:true})
         )
       ),
 
@@ -4840,20 +4849,11 @@ const App = () => {
                boxSizing:"border-box"}
       })
     ),
-    // Tag-filter chips
     sidebarTags.length > 0 && React.createElement("div", {
       style:{padding:"5px 8px",borderBottom:`1px solid ${W.splitBg}`,
-             display:"flex",gap:"3px",flexWrap:"wrap",
-             background:"rgba(0,0,0,0.1)",flexShrink:0,maxHeight:"72px",overflowY:"auto"}
+             background:"rgba(0,0,0,0.1)",flexShrink:0}
     },
-      sidebarTags.map(t => React.createElement("span", {
-        key:t, onClick:()=>setTagFilter(tagFilter===t?null:t),
-        style:{fontSize:"9px",padding:"2px 6px",borderRadius:"4px",
-               cursor:"pointer",userSelect:"none",
-               background:tagFilter===t?"rgba(159,202,86,0.3)":"rgba(159,202,86,0.08)",
-               color:W.comment,
-               border:`1px solid rgba(159,202,86,${tagFilter===t?0.5:0.15})`}
-      }, "#", t))
+      React.createElement(TagFilterBar,{tags:sidebarTags,activeTag:tagFilter,onChange:setTagFilter,compact:true})
     ),
     // Actieve filter badge
     (tagFilter||search) && React.createElement("div",{style:{
@@ -5538,6 +5538,7 @@ const App = () => {
               onAddNote:async(note)=>{ const saved=await api.post("/notes",note); setNotes(p=>[saved,...p]); }}));
           if(t==="import") return React.createElement("div",{style:{flex:1,overflow:"hidden"}},
             React.createElement(WebImporter,{llmModel,allTags,
+              onRefreshImages: refreshImages,
               onAddNote:async(note)=>{ const saved=await api.post("/notes",note); setNotes(p=>[saved,...p]); setSelId(saved.id); setTab("notes"); }}));
           if(t==="mindmap") return React.createElement("div",{style:{flex:1,overflow:"hidden"}},
             React.createElement(MindMap,{notes,allTags,aiMindmap,
