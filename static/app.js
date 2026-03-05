@@ -140,18 +140,10 @@ const renderMd = (text, notes=[]) => {
   h = h.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
     const i = codeBlocks.length;
     if (lang === "mindmap") {
-      // Mermaid mindmap: toon als speciaal blok met data attribuut
-      const escaped = code.replace(/"/g, "&quot;").replace(/\n/g, "&#10;");
+      // Mermaid mindmap: placeholder met data — React vervangt dit met MermaidPreviewBlock
+      const escaped = code.replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/\n/g,"&#10;");
       codeBlocks.push(
-        `<div class="mermaid-mindmap-block" data-mermaid="${escaped}" ` +
-        `style="background:rgba(0,0,0,0.25);border:1px solid rgba(159,202,86,0.3);` +
-        `border-radius:8px;padding:12px;margin:10px 0;cursor:pointer" ` +
-        `title="Klik om te bewerken">` +
-        `<div style="font-size:9px;color:rgba(159,202,86,0.7);letter-spacing:2px;margin-bottom:8px">` +
-        `🌿 MERMAID MINDMAP · klik om te bewerken</div>` +
-        `<pre style="font-size:11px;color:rgba(159,202,86,0.85);line-height:1.6;margin:0;` +
-        `overflow:auto;max-height:120px;background:transparent;border:none;padding:0">` +
-        `${code.replace(/</g,"&lt;").replace(/>/g,"&gt;")}</pre></div>`
+        `<div class="mermaid-mindmap-block" data-mermaid="${escaped}"></div>`
       );
     } else {
       codeBlocks.push(`<pre><code class="lang-${lang}">${code}</code></pre>`);
@@ -3294,154 +3286,299 @@ const parseMermaidMindmap = (text) => {
   return nodes;
 };
 
-const MermaidCanvas = ({ text, width, height }) => {
-  const cvRef = React.useRef(null);
+const MermaidCanvas = ({ text, width, height, interactive=false }) => {
+  const cvRef   = React.useRef(null);
+  const stateRef = React.useRef({ pan:{x:0,y:0}, zoom:1, dragging:false,
+                                   lastX:0, lastY:0 });
 
-  React.useEffect(() => {
+  const render = React.useCallback(() => {
     const cv = cvRef.current;
     if (!cv || !text) return;
-    const ctx = cv.getContext("2d");
-    const dpr = window.devicePixelRatio || 1;
-    cv.width  = width  * dpr;
-    cv.height = height * dpr;
+    const ctx   = cv.getContext("2d");
+    const dpr   = window.devicePixelRatio || 1;
+    const W_px  = width;
+    const H_px  = height;
+    cv.width    = W_px * dpr;
+    cv.height   = H_px * dpr;
     ctx.scale(dpr, dpr);
 
-    ctx.clearRect(0, 0, width, height);
+    ctx.clearRect(0, 0, W_px, H_px);
     ctx.fillStyle = W.bg;
-    ctx.fillRect(0, 0, width, height);
+    ctx.fillRect(0, 0, W_px, H_px);
 
-    const nodes = parseMermaidMindmap(text);
-    if (!nodes.length) {
+    const allNodes = parseMermaidMindmap(text);
+    if (!allNodes.length) {
       ctx.fillStyle = W.fgMuted;
-      ctx.font = "13px 'Hack','Courier New',monospace";
+      ctx.font = "12px 'Hack','Courier New',monospace";
       ctx.textAlign = "center";
-      ctx.fillText("Typ een mindmap…", width/2, height/2);
+      ctx.textBaseline = "middle";
+      ctx.fillText("Typ een mindmap om de preview te zien…", W_px/2, H_px/2);
       return;
     }
 
-    // ── Layout: radiale boom vanuit midden ───────────────────────────────────
-    const NODE_W = 120, NODE_H = 28, LEVEL_GAP = 160, SIBLING_GAP = 36;
     const PALETTE = [W.blue, W.comment, W.orange, W.purple,
                      W.string, W.type, W.keyword, "#e8d44d"];
 
-    // Bereken posities per niveau
-    const byParent = {};
-    nodes.forEach(n => {
-      const p = n.parentId || "__root";
-      if (!byParent[p]) byParent[p] = [];
-      byParent[p].push(n);
+    // ── Bereken tekstbreedte ─────────────────────────────────────────────────
+    const FONT_ROOT = "bold 13px 'Hack','Courier New',monospace";
+    const FONT_L1   = "bold 12px 'Hack','Courier New',monospace";
+    const FONT_L2   = "11px 'Hack','Courier New',monospace";
+    const FONT_L3   = "10px 'Hack','Courier New',monospace";
+    const getFont  = (d) => d===0 ? FONT_ROOT : d===1 ? FONT_L1 : d===2 ? FONT_L2 : FONT_L3;
+    const NODE_PAD_X = 14, NODE_H = 26;
+
+    const measured = {};
+    allNodes.forEach(n => {
+      ctx.font = getFont(n.depth);
+      const tw = ctx.measureText(n.label).width;
+      measured[n.id] = { tw, nw: Math.max(tw + NODE_PAD_X*2, 60), nh: n.depth===0?32:NODE_H };
     });
 
-    const positions = {};
-    const root = nodes[0];
-    if (!root) return;
+    // ── Tree layout: Reingold-Tilford stijl ──────────────────────────────────
+    // We doen een horizontale boom: root links, kinderen rechts.
+    const byParent = {};
+    allNodes.forEach(n => { byParent[n.id] = []; });
+    allNodes.forEach(n => { if (n.parentId) byParent[n.parentId].push(n); });
 
-    // Root in midden
-    positions[root.id] = { x: width/2, y: height/2 };
+    const LEVEL_W  = 180;   // horizontale afstand per diepte-niveau
+    const MIN_GAP  = 10;    // minimale verticale ruimte tussen nodes
 
-    // BFS layout
-    const queue = [root.id];
-    const visited = new Set([root.id]);
-    const childColorIdx = {};
+    // Post-order: bereken benodigde hoogte per node
+    const subtreeH = {};
+    const calcH = (id) => {
+      const ch = byParent[id] || [];
+      if (!ch.length) { subtreeH[id] = measured[id]?.nh || NODE_H; return; }
+      ch.forEach(c => calcH(c.id));
+      const total = ch.reduce((s,c) => s + subtreeH[c.id], 0) + (ch.length-1)*MIN_GAP;
+      subtreeH[id] = Math.max(measured[id]?.nh || NODE_H, total);
+    };
+    const root = allNodes[0];
+    calcH(root.id);
 
-    while (queue.length) {
-      const pid = queue.shift();
-      const children = byParent[pid] || [];
-      if (!children.length) continue;
+    // Pre-order: wijs y-posities toe
+    const pos = {};
+    const assignPos = (id, x, topY) => {
+      const ch = byParent[id] || [];
+      const totalH = subtreeH[id];
+      const cy = topY + totalH / 2;
+      pos[id] = { x, y: cy };
 
-      const parentPos = positions[pid];
-      const parentNode = nodes.find(n => n.id === pid);
-      const isRoot = pid === root.id;
-
-      // Verdeel kinderen radiaal (of horizontaal voor diepere niveaus)
-      const n = children.length;
-      children.forEach((child, i) => {
-        if (!visited.has(child.id)) {
-          visited.add(child.id);
-          let x, y;
-          if (isRoot) {
-            // Eerste niveau: radiaal verdeeld
-            const angle = (2 * Math.PI * i / n) - Math.PI / 2;
-            x = parentPos.x + Math.cos(angle) * LEVEL_GAP * 1.6;
-            y = parentPos.y + Math.sin(angle) * LEVEL_GAP * 1.1;
-            childColorIdx[child.id] = i % PALETTE.length;
-          } else {
-            // Diepere niveaus: horizontaal rechts, verticaal gestapeld
-            const colIdx = childColorIdx[pid] ?? (i % PALETTE.length);
-            childColorIdx[child.id] = colIdx;
-            x = parentPos.x + LEVEL_GAP;
-            y = parentPos.y + (i - (n-1)/2) * SIBLING_GAP;
-          }
-          positions[child.id] = { x, y };
-          queue.push(child.id);
-        }
+      let curY = topY;
+      ch.forEach(c => {
+        assignPos(c.id, x + LEVEL_W, curY);
+        curY += subtreeH[c.id] + MIN_GAP;
       });
+    };
+    assignPos(root.id, 0, -subtreeH[root.id]/2);
+
+    // ── Auto-fit: schaal + centreer op canvas ────────────────────────────────
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    allNodes.forEach(n => {
+      const p = pos[n.id]; if (!p) return;
+      const m = measured[n.id] || {nw:60};
+      minX = Math.min(minX, p.x - m.nw/2);
+      maxX = Math.max(maxX, p.x + m.nw/2);
+      minY = Math.min(minY, p.y - NODE_H/2);
+      maxY = Math.max(maxY, p.y + NODE_H/2);
+    });
+    const treeW = maxX - minX + 40;
+    const treeH = maxY - minY + 40;
+    const fitZoom = Math.min(1.2, Math.min((W_px-20)/treeW, (H_px-20)/treeH));
+
+    const s = stateRef.current;
+    // Bij eerste render of als niet interactief: reset zoom/pan
+    if (!interactive || (s.zoom === 1 && s.pan.x === 0 && s.pan.y === 0)) {
+      s.zoom = fitZoom;
+      s.pan  = {
+        x: W_px/2 - (minX + treeW/2) * fitZoom,
+        y: H_px/2 - (minY + treeH/2) * fitZoom
+      };
     }
 
-    // ── Teken edges ──────────────────────────────────────────────────────────
-    nodes.forEach(node => {
-      if (!node.parentId) return;
-      const from = positions[node.id];
-      const to   = positions[node.parentId];
-      if (!from || !to) return;
-      const col = PALETTE[childColorIdx[node.id] ?? 0];
+    ctx.save();
+    ctx.translate(s.pan.x, s.pan.y);
+    ctx.scale(s.zoom, s.zoom);
+
+    // ── Kleur per tak (gebaseerd op eerste-niveau kind) ──────────────────────
+    const nodeColor = {};
+    nodeColor[root.id] = W.blue;
+    (byParent[root.id]||[]).forEach((c,i) => {
+      const col = PALETTE[i % PALETTE.length];
+      const paint = (id, col) => {
+        nodeColor[id] = col;
+        (byParent[id]||[]).forEach(ch => paint(ch.id, col));
+      };
+      paint(c.id, col);
+    });
+
+    // ── Edges ────────────────────────────────────────────────────────────────
+    allNodes.forEach(n => {
+      if (!n.parentId) return;
+      const f = pos[n.id], t = pos[n.parentId];
+      if (!f || !t) return;
+      const col = nodeColor[n.id] || W.fgMuted;
+      const fm  = measured[n.id]  || {nw:60};
+      const tm  = measured[n.parentId] || {nw:60};
+
       ctx.beginPath();
-      ctx.moveTo(to.x, to.y);
-      // Bezier curve
-      const mx = (from.x + to.x) / 2;
-      ctx.bezierCurveTo(mx, to.y, mx, from.y, from.x, from.y);
-      ctx.strokeStyle = col + "66";
-      ctx.lineWidth = node.depth === 1 ? 2 : 1.5;
+      const x1 = t.x + tm.nw/2;     // rechterkant parent
+      const y1 = t.y;
+      const x2 = f.x - fm.nw/2;     // linkerkant kind
+      const y2 = f.y;
+      const mx = (x1+x2)/2;
+      ctx.moveTo(x1, y1);
+      ctx.bezierCurveTo(mx, y1, mx, y2, x2, y2);
+      ctx.strokeStyle = col + "70";
+      ctx.lineWidth   = n.depth <= 1 ? 2.5 : 1.5;
       ctx.stroke();
     });
 
-    // ── Teken nodes ──────────────────────────────────────────────────────────
-    nodes.forEach(node => {
-      const pos = positions[node.id];
-      if (!pos) return;
-      const isRoot = node.id === root.id;
-      const col = isRoot ? W.blue : (PALETTE[childColorIdx[node.id] ?? 0]);
+    // ── Nodes ────────────────────────────────────────────────────────────────
+    allNodes.forEach(n => {
+      const p   = pos[n.id]; if (!p) return;
+      const m   = measured[n.id] || {nw:60, nh:NODE_H};
+      const col = nodeColor[n.id] || W.fgMuted;
+      const isRoot = n.depth === 0;
+      const nx  = p.x - m.nw/2;
+      const ny  = p.y - m.nh/2;
 
-      const label = node.label;
-      ctx.font = `${isRoot ? "bold " : ""}${isRoot ? 13 : node.depth===1 ? 12 : 11}px 'Hack','Courier New',monospace`;
-      const tw = ctx.measureText(label).width;
-      const nw = isRoot ? Math.max(tw + 24, 70) : Math.max(tw + 20, NODE_W * 0.55);
-      const nh = isRoot ? 34 : NODE_H;
-      const nx = pos.x - nw/2;
-      const ny = pos.y - nh/2;
-      const r  = isRoot ? nh/2 : 5;
+      // Schaduw
+      ctx.shadowColor   = col + "40";
+      ctx.shadowBlur    = isRoot ? 12 : 6;
+      ctx.shadowOffsetX = 0;
+      ctx.shadowOffsetY = 2;
 
       // Achtergrond
       ctx.beginPath();
       if (isRoot) {
-        ctx.arc(pos.x, pos.y, nw/2, 0, Math.PI*2);
+        const r = m.nh / 2;
+        ctx.roundRect(nx, ny, m.nw, m.nh, r);
       } else {
-        ctx.roundRect(nx, ny, nw, nh, r);
+        ctx.roundRect(nx, ny, m.nw, m.nh, 5);
       }
-      ctx.fillStyle   = col + (isRoot ? "30" : "20");
-      ctx.strokeStyle = col + (isRoot ? "cc" : "88");
+      ctx.fillStyle   = isRoot ? col + "35" : col + "18";
+      ctx.strokeStyle = col + (isRoot ? "ee" : "99");
       ctx.lineWidth   = isRoot ? 2 : 1.5;
       ctx.fill();
       ctx.stroke();
+      ctx.shadowBlur = 0;
 
-      // Label
-      ctx.fillStyle  = isRoot ? W.statusFg : col;
-      ctx.font       = `${isRoot ? "bold " : ""}${isRoot ? 13 : node.depth===1 ? 12 : 11}px 'Hack','Courier New',monospace`;
-      ctx.textAlign  = "center";
+      // Tekst
+      ctx.font        = getFont(n.depth);
+      ctx.fillStyle   = isRoot ? W.statusFg : col;
+      ctx.textAlign   = "center";
       ctx.textBaseline = "middle";
-      // Truncate bij overflow
-      let lbl = label;
-      while (ctx.measureText(lbl).width > nw - 12 && lbl.length > 3)
-        lbl = lbl.slice(0, -2) + "…";
-      ctx.fillText(lbl, pos.x, pos.y);
+      ctx.fillText(n.label, p.x, p.y);
     });
 
-  }, [text, width, height]);
+    ctx.restore();
+
+    // Hint bij interactieve modus
+    if (interactive) {
+      ctx.fillStyle = "rgba(255,255,255,0.15)";
+      ctx.font = "9px 'Hack','Courier New',monospace";
+      ctx.textAlign = "right";
+      ctx.textBaseline = "bottom";
+      ctx.fillText("scroll=zoom · sleep=pan", W_px-8, H_px-6);
+    }
+  }, [text, width, height, interactive]);
+
+  React.useEffect(() => { render(); }, [render]);
+
+  // Pan & zoom handlers (alleen als interactive)
+  const onWheel = (e) => {
+    if (!interactive) return;
+    e.preventDefault();
+    const s = stateRef.current;
+    const factor = e.deltaY < 0 ? 1.12 : 0.9;
+    const rect = cvRef.current.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    s.pan.x = mx - (mx - s.pan.x) * factor;
+    s.pan.y = my - (my - s.pan.y) * factor;
+    s.zoom *= factor;
+    render();
+  };
+  const onMouseDown = (e) => {
+    if (!interactive) return;
+    const s = stateRef.current;
+    s.dragging = true; s.lastX = e.clientX; s.lastY = e.clientY;
+  };
+  const onMouseMove = (e) => {
+    const s = stateRef.current;
+    if (!s.dragging) return;
+    s.pan.x += e.clientX - s.lastX;
+    s.pan.y += e.clientY - s.lastY;
+    s.lastX = e.clientX; s.lastY = e.clientY;
+    render();
+  };
+  const onMouseUp = () => { stateRef.current.dragging = false; };
 
   return React.createElement("canvas", {
     ref: cvRef,
-    style: { display:"block", width:"100%", height:"100%", borderRadius:"6px" }
+    style: { display:"block", width:"100%", height:"100%",
+             cursor: interactive ? "grab" : "default" },
+    onWheel, onMouseDown, onMouseMove, onMouseUp,
+    onMouseLeave: onMouseUp,
   });
+};
+
+// ── Mermaid inline preview blok (in note-viewer) ──────────────────────────────
+// Vervangt het klikbare code-blok met een echte canvas render + knoppen.
+const MermaidPreviewBlock = ({ code, onEdit }) => {
+  const containerRef = React.useRef(null);
+  const [size, setSize]       = React.useState({w:600, h:320});
+  const [expanded, setExpanded] = React.useState(false);
+
+  React.useEffect(() => {
+    if (!containerRef.current) return;
+    const ro = new ResizeObserver(e => {
+      const r = e[0].contentRect;
+      setSize({ w: r.width||600, h: expanded ? 520 : 320 });
+    });
+    ro.observe(containerRef.current);
+    return () => ro.disconnect();
+  }, [expanded]);
+
+  return React.createElement("div", {
+    style:{ margin:"14px 0", border:`1px solid rgba(159,202,86,0.35)`,
+            borderRadius:"8px", overflow:"hidden",
+            background:"rgba(0,0,0,0.2)" }
+  },
+    // Header
+    React.createElement("div",{style:{
+      display:"flex", alignItems:"center", gap:"8px",
+      padding:"6px 12px",
+      background:"rgba(159,202,86,0.06)",
+      borderBottom:`1px solid rgba(159,202,86,0.2)`
+    }},
+      React.createElement("span",{style:{fontSize:"11px",color:W.comment,
+        fontWeight:"600",letterSpacing:"1px"}},"🌿 MINDMAP"),
+      React.createElement("div",{style:{flex:1}}),
+      React.createElement("button",{
+        onClick:()=>setExpanded(v=>!v),
+        style:{background:"none",border:"none",color:W.fgMuted,
+               fontSize:"10px",cursor:"pointer",padding:"2px 6px"}
+      }, expanded ? "⊟ inklappen" : "⊞ uitvouwen"),
+      onEdit && React.createElement("button",{
+        onClick: onEdit,
+        style:{background:"rgba(138,198,242,0.1)",
+               border:"1px solid rgba(138,198,242,0.3)",
+               color:W.blue,borderRadius:"4px",fontSize:"10px",
+               cursor:"pointer",padding:"2px 8px"}
+      }, "✏ bewerken")
+    ),
+    // Canvas
+    React.createElement("div",{
+      ref:containerRef,
+      style:{ height: expanded ? "520px" : "320px",
+              transition:"height 0.2s", position:"relative" }
+    },
+      React.createElement(MermaidCanvas,{
+        text:code, width:size.w, height:size.h, interactive:true
+      })
+    )
+  );
 };
 
 // ── Mermaid Mindmap Editor (split: code | preview) ───────────────────────────
@@ -5399,6 +5536,53 @@ if(!document.getElementById("llm-css")){
   document.head.appendChild(s);
 }
 
+// ── MarkdownWithMermaid ───────────────────────────────────────────────────────
+// Rendert markdown maar vervangt mermaid-mindmap blokken door MermaidPreviewBlock.
+const MarkdownWithMermaid = ({ content, notes, renderMode, isMobile, onClick, onEditMermaid }) => {
+  const html = renderMd(content, notes);
+
+  // Splits HTML op mermaid placeholders
+  const MARKER = /<div class="mermaid-mindmap-block" data-mermaid="([^"]+)"><\/div>/g;
+  const parts  = [];
+  let last = 0, m;
+  while ((m = MARKER.exec(html)) !== null) {
+    if (m.index > last)
+      parts.push({ type:"html", html: html.slice(last, m.index) });
+    const code = m[1]
+      .replace(/&amp;/g,"&")
+      .replace(/&quot;/g,'"')
+      .replace(/&#10;/g,"\n");
+    parts.push({ type:"mermaid", code });
+    last = m.index + m[0].length;
+  }
+  if (last < html.length) parts.push({ type:"html", html: html.slice(last) });
+
+  const mdStyle = {
+    fontSize:   renderMode==="rich" ? (isMobile?"17px":"15px") : (isMobile?"15px":"13px"),
+    lineHeight: renderMode==="rich" ? "2.0" : (isMobile?"1.9":"1.85"),
+    maxWidth:   renderMode==="rich" ? "720px" : "none",
+    margin:     renderMode==="rich" ? "0 auto" : "0",
+    fontFamily: renderMode==="rich" ? "'Georgia','Times New Roman',serif" : "inherit",
+  };
+
+  return React.createElement("div", { style: mdStyle, onClick },
+    parts.map((p, i) => {
+      if (p.type === "mermaid") {
+        return React.createElement(MermaidPreviewBlock, {
+          key: i,
+          code: p.code,
+          onEdit: onEditMermaid ? () => onEditMermaid(p.code) : null,
+        });
+      }
+      return React.createElement("div", {
+        key: i,
+        className: renderMode==="rich" ? "mdv mdv-rich" : "mdv",
+        dangerouslySetInnerHTML: { __html: p.html },
+      });
+    })
+  );
+};
+
 const App = () => {
   const { useState, useEffect, useRef, useMemo, useCallback } = React;
 
@@ -6286,19 +6470,13 @@ const App = () => {
                        WebkitOverflowScrolling:"touch"}
               },
                 previewToolbar,
-                React.createElement("div", {
-                  className: renderMode==="rich" ? "mdv mdv-rich" : "mdv",
-                  style:{
-                    fontSize:   renderMode==="rich" ? (isMobile?"17px":"15px") : (isMobile?"15px":"13px"),
-                    lineHeight: renderMode==="rich" ? "2.0" : (isMobile?"1.9":"1.85"),
-                    maxWidth:   renderMode==="rich" ? "720px" : "none",
-                    margin:     renderMode==="rich" ? "0 auto" : "0",
-                    fontFamily: renderMode==="rich"
-                      ? "'Georgia','Times New Roman',serif"
-                      : "inherit",
-                  },
-                  dangerouslySetInnerHTML:{__html:renderMd(selNote.content,notes)},
-                  onClick:handleLink
+                React.createElement(MarkdownWithMermaid, {
+                  content: selNote.content,
+                  notes,
+                  renderMode,
+                  isMobile,
+                  onClick: handleLink,
+                  onEditMermaid: (code) => setMermaidEditNote({noteId:selId, code}),
                 }),
                 backlinks.length>0 && React.createElement("div",{
                   style:{marginTop:"40px",paddingTop:"14px",
