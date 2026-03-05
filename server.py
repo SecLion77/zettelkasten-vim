@@ -417,6 +417,7 @@ class ZKHandler(BaseHTTPRequestHandler):
         if p=="/api/llm/summarize-pdf":  return self._llm_summarize_pdf()
         if p=="/api/llm/describe-image": return self._llm_describe_image()
         if p=="/api/llm/mindmap":        return self._llm_mindmap()
+        if p=="/api/import-url":         return self._import_url()
         if p=="/api/vault":
             body=self._body()
             np=body.get("path","").strip()
@@ -692,6 +693,109 @@ class ZKHandler(BaseHTTPRequestHandler):
             return self._send(200,{"ok":False,"error":"JSON parse fout: "+str(e),"raw":raw[:400] if 'raw' in dir() else ""})
         except Exception as e:
             return self._send(200,{"ok":False,"error":str(e)})
+
+    def _import_url(self):
+        """Haal inhoud van een URL op en converteer naar Markdown — Instapaper-stijl."""
+        body   = self._body()
+        url    = body.get("url","").strip()
+        model  = body.get("model","llama3.2-vision")
+        if not url:
+            return self._send(400,{"error":"url vereist"})
+        if not url.startswith(("http://","https://")):
+            url = "https://" + url
+
+        try:
+            req = urllib.request.Request(url, headers={
+                "User-Agent": "Mozilla/5.0 (compatible; Zettelkasten/1.0)",
+                "Accept": "text/html,application/xhtml+xml",
+                "Accept-Language": "nl,en;q=0.9",
+            })
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                raw_bytes = resp.read(500_000)
+                charset   = "utf-8"
+                ct = resp.headers.get("Content-Type","")
+                if "charset=" in ct:
+                    charset = ct.split("charset=")[-1].split(";")[0].strip()
+                html = raw_bytes.decode(charset, errors="replace")
+        except Exception as e:
+            return self._send(200,{"ok":False,"error":"URL ophalen mislukt: "+str(e)})
+
+        # ── HTML → tekst via stdlib html.parser ──────────────────────────────
+        from html.parser import HTMLParser
+
+        class ArticleExtractor(HTMLParser):
+            SKIP_TAGS = {"script","style","nav","footer","header","aside",
+                         "noscript","form","button","svg","iframe","ads"}
+            BLOCK_TAGS = {"p","h1","h2","h3","h4","li","blockquote","pre","td","th","figcaption"}
+
+            def __init__(self):
+                super().__init__()
+                self.skip_depth  = 0
+                self.text_chunks = []
+                self.title       = ""
+                self._in_title   = False
+                self._cur_tag    = None
+
+            def handle_starttag(self, tag, attrs):
+                self._cur_tag = tag
+                if tag == "title": self._in_title = True
+                if tag in self.SKIP_TAGS: self.skip_depth += 1
+                if tag in self.BLOCK_TAGS and self.text_chunks:
+                    self.text_chunks.append("\n")
+
+            def handle_endtag(self, tag):
+                if tag == "title": self._in_title = False
+                if tag in self.SKIP_TAGS and self.skip_depth > 0:
+                    self.skip_depth -= 1
+
+            def handle_data(self, data):
+                if self._in_title:
+                    self.title += data
+                    return
+                if self.skip_depth > 0: return
+                t = data.strip()
+                if t: self.text_chunks.append(t)
+
+        parser = ArticleExtractor()
+        parser.feed(html)
+
+        page_title = parser.title.strip() or url
+        raw_text   = " ".join(parser.text_chunks)
+        # Deduplicate whitespace, truncate
+        raw_text   = re.sub(r'\s{3,}', ' ', raw_text)[:12000]
+
+        if len(raw_text) < 100:
+            return self._send(200,{"ok":False,
+                "error":"Pagina bevat te weinig leesbare tekst (mogelijk JavaScript-only of betaalmuur)"})
+
+        # ── Laat LLM opschonen en structureren als Markdown ──────────────────
+        prompt = (
+            "Converteer de onderstaande webpagina-tekst naar nette Markdown, "
+            "als een leesbaar artikel (Instapaper-stijl). "
+            "Behoud de hoofdstructuur en alle relevante inhoud. "
+            "Verwijder navigatie, advertenties, cookieteksten en irrelevante herhalingen. "
+            "Gebruik ## voor secties, - voor lijsten, **vet** voor sleutelwoorden. "
+            "Schrijf een korte intro na de titel. "
+            "Geef ALLEEN de Markdown terug, geen uitleg.\n\n"
+            f"TITEL: {page_title}\nURL: {url}\n\n"
+            "TEKST:\n" + raw_text
+        )
+        try:
+            r = self._ollama_post("/api/generate",
+                {"model":model,"prompt":prompt,"stream":False}, 120)
+            md = r.get("response","").strip()
+            if not md:
+                # Fallback: lever ruwe tekst zonder LLM-verwerking
+                md = f"# {page_title}\n\n{raw_text[:4000]}"
+        except Exception:
+            md = f"# {page_title}\n\n{raw_text[:4000]}"
+
+        return self._send(200,{
+            "ok":    True,
+            "title": page_title,
+            "url":   url,
+            "markdown": md,
+        })
 
 
 def get_local_ip():

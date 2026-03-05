@@ -91,6 +91,7 @@ const api = {
   },
   async getImgAnnotations()        { const r=await fetch(API+"/img-annotations"); return r.json(); },
   async saveImgAnnotations(annots) { const r=await fetch(API+"/img-annotations",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(annots)}); return r.json(); },
+  async importUrl(payload)         { const r=await fetch(API+"/import-url",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)}); return r.json(); },
 };
 
 // ── Utils ──────────────────────────────────────────────────────────────────────
@@ -2709,6 +2710,247 @@ const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote, setAiStatu
 
 
 
+// ── WebImporter ────────────────────────────────────────────────────────────────
+// Instapaper-stijl: URL opgeven → inhoud ophalen → opschonen → Zettelkasten-notitie
+
+const WebImporter = ({llmModel, allTags, onAddNote}) => {
+  const { useState, useRef, useCallback } = React;
+
+  const [url,        setUrl]       = useState("");
+  const [busy,       setBusy]      = useState(false);
+  const [error,      setError]     = useState(null);
+  const [preview,    setPreview]   = useState(null);   // {title, url, markdown}
+  const [editMd,     setEditMd]    = useState("");
+  const [editTitle,  setEditTitle] = useState("");
+  const [tags,       setTags]      = useState([]);
+  const [saved,      setSaved]     = useState(false);
+  const urlRef = useRef(null);
+
+  const doImport = useCallback(async () => {
+    const u = url.trim();
+    if (!u) return;
+    setBusy(true); setError(null); setPreview(null); setSaved(false);
+    try {
+      const res = await api.importUrl({url: u, model: llmModel||"llama3.2-vision"});
+      if (res?.ok) {
+        setPreview(res);
+        setEditMd(res.markdown);
+        setEditTitle(res.title);
+        // Automatisch tags voorstellen op basis van domein
+        const domain = new URL(res.url).hostname.replace("www.","");
+        setTags(["import", domain.split(".")[0]].filter(Boolean));
+      } else {
+        setError(res?.error || "Import mislukt");
+      }
+    } catch(e) {
+      setError(e.message);
+    }
+    setBusy(false);
+  }, [url, llmModel]);
+
+  const saveNote = useCallback(async () => {
+    if (!preview) return;
+    await onAddNote({
+      id:      genId(),
+      title:   editTitle,
+      content: editMd + "\n\n---\n🌐 **Bron:** [" + preview.url + "](" + preview.url + ")",
+      tags,
+      created: new Date().toISOString(),
+      modified: new Date().toISOString(),
+    });
+    setSaved(true);
+  }, [preview, editTitle, editMd, tags, onAddNote]);
+
+  const reset = () => {
+    setUrl(""); setPreview(null); setEditMd(""); setEditTitle("");
+    setTags([]); setError(null); setSaved(false);
+    setTimeout(()=>urlRef.current?.focus(), 50);
+  };
+
+  return React.createElement("div",{
+    style:{display:"flex",flexDirection:"column",height:"100%",overflow:"hidden"}
+  },
+
+    // ── Toolbar ──────────────────────────────────────────────────────────────
+    React.createElement("div",{style:{
+      background:W.statusBg, borderBottom:`1px solid ${W.splitBg}`,
+      padding:"10px 16px", display:"flex", alignItems:"center",
+      gap:"10px", flexShrink:0, flexWrap:"wrap"
+    }},
+      React.createElement("span",{style:{fontSize:"11px",color:W.statusFg,
+        letterSpacing:"2px",fontWeight:"bold"}},"🌐 WEB IMPORT"),
+      React.createElement("span",{style:{fontSize:"10px",color:W.fgMuted}}),
+      React.createElement("div",{style:{flex:1}}),
+      preview && !saved && React.createElement("button",{
+        onClick:reset,
+        style:{background:"none",border:`1px solid ${W.splitBg}`,color:W.fgMuted,
+               borderRadius:"4px",padding:"4px 10px",fontSize:"10px",cursor:"pointer"}
+      },"+ nieuwe import")
+    ),
+
+    // ── URL invoer ───────────────────────────────────────────────────────────
+    !preview && React.createElement("div",{style:{
+      flex:1, display:"flex", flexDirection:"column",
+      alignItems:"center", justifyContent:"center",
+      padding:"32px 24px", gap:"20px"
+    }},
+      React.createElement("div",{style:{fontSize:"48px",lineHeight:1}},"🌐"),
+      React.createElement("div",{style:{fontSize:"15px",color:W.fgDim,
+        textAlign:"center",lineHeight:"1.6",maxWidth:"460px"}},
+        "Plak een URL om de inhoud te importeren als Zettelkasten-notitie.",
+        React.createElement("br"),
+        React.createElement("span",{style:{fontSize:"12px",color:W.fgMuted}},
+          "De AI verwijdert navigatie, advertenties en rommel — zoals Instapaper.")),
+
+      // URL invoer
+      React.createElement("div",{style:{
+        display:"flex", gap:"10px", width:"100%", maxWidth:"560px"
+      }},
+        React.createElement("input",{
+          ref:urlRef,
+          type:"url",
+          value:url,
+          autoFocus:true,
+          onChange:e=>setUrl(e.target.value),
+          onKeyDown:e=>{ if(e.key==="Enter") doImport(); },
+          placeholder:"https://example.com/artikel",
+          style:{flex:1, background:W.bg2, border:`1px solid ${W.splitBg}`,
+                 borderRadius:"6px", padding:"10px 14px", color:W.fg,
+                 fontSize:"14px", outline:"none",
+                 boxShadow: url ? `0 0 0 2px rgba(138,198,242,0.25)` : "none"}
+        }),
+        React.createElement("button",{
+          onClick:doImport,
+          disabled:busy||!url.trim(),
+          style:{background:W.blue, color:W.bg, border:"none",
+                 borderRadius:"6px", padding:"10px 22px",
+                 fontSize:"13px", fontWeight:"bold", cursor:"pointer",
+                 opacity:busy||!url.trim()?0.5:1, whiteSpace:"nowrap"}
+        }, busy ? "⏳ ophalen…" : "→ Importeren")
+      ),
+
+      error && React.createElement("div",{style:{
+        color:W.orange, fontSize:"12px", background:"rgba(229,120,109,0.08)",
+        border:`1px solid rgba(229,120,109,0.25)`, borderRadius:"6px",
+        padding:"10px 16px", maxWidth:"560px", width:"100%"
+      }}, "⚠ "+error)
+    ),
+
+    // ── Preview & bewerken ───────────────────────────────────────────────────
+    preview && !saved && React.createElement("div",{style:{
+      flex:1, display:"flex", gap:0, overflow:"hidden"
+    }},
+
+      // Linker kolom: bewerken
+      React.createElement("div",{style:{
+        flex:1, display:"flex", flexDirection:"column",
+        borderRight:`1px solid ${W.splitBg}`, overflow:"hidden"
+      }},
+        // Meta-balk
+        React.createElement("div",{style:{
+          padding:"10px 14px", borderBottom:`1px solid ${W.splitBg}`,
+          background:"rgba(0,0,0,0.15)", flexShrink:0, display:"flex",
+          flexDirection:"column", gap:"6px"
+        }},
+          React.createElement("div",{style:{fontSize:"9px",color:W.fgMuted,
+            letterSpacing:"1px"}},"TITEL"),
+          React.createElement("input",{
+            value:editTitle,
+            onChange:e=>setEditTitle(e.target.value),
+            style:{background:W.bg, border:`1px solid ${W.splitBg}`,
+                   borderRadius:"4px", padding:"6px 10px", color:W.fg,
+                   fontSize:"13px", outline:"none", fontWeight:"bold"}
+          }),
+          React.createElement("div",{style:{fontSize:"9px",color:W.fgMuted,
+            letterSpacing:"1px",marginTop:"4px"}},"TAGS"),
+          React.createElement(TagEditor,{tags, onChange:setTags,
+            allTags:[...(allTags||[]),"import","artikel","onderzoek","referentie"]})
+        ),
+        // Markdown editor
+        React.createElement("div",{style:{
+          flex:1, display:"flex", flexDirection:"column", overflow:"hidden"
+        }},
+          React.createElement("div",{style:{
+            fontSize:"9px",color:W.fgMuted,letterSpacing:"1px",
+            padding:"6px 14px 4px",borderBottom:`1px solid ${W.splitBg}`,
+            background:"rgba(0,0,0,0.1)", flexShrink:0
+          }},"INHOUD (bewerkbaar)"),
+          React.createElement("textarea",{
+            value:editMd,
+            onChange:e=>setEditMd(e.target.value),
+            spellCheck:false,
+            style:{flex:1, background:W.bg, border:"none", padding:"14px 16px",
+                   color:W.fg, fontSize:"12px", lineHeight:"1.7",
+                   outline:"none", resize:"none", fontFamily:"'Hack','Courier New',monospace"}
+          })
+        )
+      ),
+
+      // Rechter kolom: metadata + opslaan
+      React.createElement("div",{style:{
+        width:"260px", flexShrink:0, display:"flex",
+        flexDirection:"column", background:W.bg2,
+        padding:"16px", gap:"14px", overflowY:"auto"
+      }},
+        React.createElement("div",{style:{fontSize:"9px",color:W.fgMuted,
+          letterSpacing:"1px"}},"BRON"),
+        React.createElement("div",{style:{fontSize:"11px",color:W.blue,
+          wordBreak:"break-all",lineHeight:"1.5"}}, preview.url),
+
+        React.createElement("div",{style:{borderTop:`1px solid ${W.splitBg}`,paddingTop:"12px"}}),
+
+        React.createElement("div",{style:{fontSize:"9px",color:W.fgMuted,
+          letterSpacing:"1px"}},"STATISTIEKEN"),
+        React.createElement("div",{style:{fontSize:"11px",color:W.fgDim,lineHeight:"1.8"}},
+          "📝 "+editMd.length+" tekens",
+          React.createElement("br"),
+          "📄 "+editMd.split("\n").filter(Boolean).length+" regels",
+          React.createElement("br"),
+          "🏷 "+tags.length+" tags"
+        ),
+
+        React.createElement("div",{style:{borderTop:`1px solid ${W.splitBg}`,paddingTop:"12px"}}),
+
+        React.createElement("button",{
+          onClick:saveNote,
+          style:{background:W.comment, color:W.bg, border:"none",
+                 borderRadius:"6px", padding:"10px 0", fontSize:"12px",
+                 fontWeight:"bold", cursor:"pointer", width:"100%"}
+        },"✓ Opslaan als notitie"),
+
+        React.createElement("button",{
+          onClick:reset,
+          style:{background:"none", color:W.fgMuted,
+                 border:`1px solid ${W.splitBg}`,
+                 borderRadius:"6px", padding:"8px 0", fontSize:"11px",
+                 cursor:"pointer", width:"100%"}
+        },"✕ Annuleren")
+      )
+    ),
+
+    // ── Opgeslagen bevestiging ────────────────────────────────────────────────
+    saved && React.createElement("div",{style:{
+      flex:1, display:"flex", flexDirection:"column",
+      alignItems:"center", justifyContent:"center",
+      gap:"16px", color:W.fgMuted
+    }},
+      React.createElement("div",{style:{fontSize:"48px"}},"✓"),
+      React.createElement("div",{style:{fontSize:"16px",color:W.comment,fontWeight:"bold"}},
+        "Opgeslagen als notitie"),
+      React.createElement("div",{style:{fontSize:"12px",color:W.fgDim}},
+        editTitle),
+      React.createElement("div",{style:{display:"flex",gap:"10px",marginTop:"8px"}},
+        React.createElement("button",{
+          onClick:reset,
+          style:{background:W.blue,color:W.bg,border:"none",borderRadius:"6px",
+                 padding:"8px 20px",fontSize:"12px",fontWeight:"bold",cursor:"pointer"}
+        },"+ nieuw importeren")
+      )
+    )
+  );
+};
+
+
 // ── Mindmap ────────────────────────────────────────────────────────────────────
 // Interactieve mindmap op basis van notities en tags.
 // Layout: radiale boom — root in midden, takken per tag, notities als bladeren.
@@ -2851,21 +3093,30 @@ const MindMap = ({notes, allTags, onSelectNote, aiMindmap}) => {
         }
       }
     } else if (layout === "tree") {
-      // Verticale boom: root bovenaan, tags als rij, notities eronder
+      // Horizontale boom naar rechts: root links, tags als kolom, notities rechts
       const tagCount = visibleTags.length;
-      const tagSpacing = Math.min(200, (CW-80) / Math.max(tagCount,1));
-      const startX = cx - ((tagCount-1)/2) * tagSpacing;
+      const rootX  = 80;
+      const tagX   = 260;
+      const noteX  = 440;
+      const tGap   = Math.min(80, (CH - 80) / Math.max(tagCount, 1));
+      const tStartY = cy - ((tagCount-1)/2) * tGap;
+
+      // Root naar links
+      newNodes[0].x = rootX;
+      newNodes[0].y = cy;
+
       visibleTags.forEach((tag, ti) => {
-        const tx = startX + ti*tagSpacing;
-        const ty = cy - 120;
+        const ty = tStartY + ti * tGap;
         const tagNode = {id:"tag-"+tag, label:"#"+tag, type:"tag",
-                         x:tx, y:ty, color:tagColorMap[tag]||W.comment, parentId:"root"};
+                         x:tagX, y:ty, color:tagColorMap[tag]||W.comment, parentId:"root"};
         newNodes.push(tagNode);
         newEdges.push({from:"root", to:"tag-"+tag});
 
         if (showNotes) {
           const tagNotes = notes.filter(n=>(n.tags||[]).includes(tag));
-          tagNotes.forEach((note,ni) => {
+          const nGap = Math.min(55, tGap / Math.max(tagNotes.length, 1));
+          const nStartY = ty - ((tagNotes.length-1)/2) * nGap;
+          tagNotes.forEach((note, ni) => {
             if (newNodes.find(n=>n.id==="note-"+note.id)) {
               newEdges.push({from:"tag-"+tag, to:"note-"+note.id, secondary:true});
               return;
@@ -2873,8 +3124,7 @@ const MindMap = ({notes, allTags, onSelectNote, aiMindmap}) => {
             newNodes.push({
               id:"note-"+note.id, label:note.title?.slice(0,18)||"–",
               fullLabel:note.title||"–", type:"note",
-              x:tx + (ni - (tagNotes.length-1)/2)*100,
-              y:ty - 110 - Math.floor(ni/3)*60,
+              x: noteX, y: nStartY + ni * nGap,
               noteId:note.id, color:tagColorMap[tag]||W.keyword, parentId:"tag-"+tag
             });
             newEdges.push({from:"tag-"+tag, to:"note-"+note.id});
@@ -2909,36 +3159,51 @@ const MindMap = ({notes, allTags, onSelectNote, aiMindmap}) => {
     const PALETTE   = ["#8ac6f2","#9fcf56","#e5786d","#d4a4f7","#e8d44d","#f4bf75","#a8d8a0","#f097c0"];
 
     if (layout === "tree") {
-      // Verticale boom: takken als rij bovenaan, subtopics eronder, details nog verder
+      // Horizontale boom naar rechts: root links, takken als rij rechts, subtopics verder rechts
       const bCount = branches.length;
-      const bSpacing = Math.min(180, (CW - 80) / Math.max(bCount, 1));
-      const startX = cx - ((bCount-1)/2) * bSpacing;
+      const LEVEL1_X = 220;   // root → tak
+      const LEVEL2_X = 420;   // tak → subtopic
+      const LEVEL3_X = 580;   // subtopic → detail
+      const rootX    = 80;
+
+      // Overschrijf root x-positie naar links
+      newNodes[0].x = rootX;
+      newNodes[0].y = cy;
+
+      // Verdeel takken verticaal
+      const bGap = Math.min(90, (CH - 80) / Math.max(bCount, 1));
+      const bStartY = cy - ((bCount-1)/2) * bGap;
 
       branches.forEach((b, bi) => {
         const color = b.color || PALETTE[bi % PALETTE.length];
-        const bx = startX + bi * bSpacing;
-        const by = cy - 160;
+        const bx = LEVEL1_X;
+        const by = bStartY + bi * bGap;
         const bId = "branch-"+bi;
         newNodes.push({id:bId, label:b.label, type:"branch",
                        x:bx, y:by, color, parentId:"root", important:b.importance==="high"});
         newEdges.push({from:"root", to:bId, weight: b.importance==="high"?3:1.5});
 
         const children = b.children || [];
+        const cGap = Math.min(70, bGap / Math.max(children.length, 1));
+        const cStartY = by - ((children.length-1)/2) * cGap;
+
         children.forEach((c, ci) => {
           const cLabel = typeof c==="string" ? c : c.label;
           const cDetails = typeof c==="string" ? [] : (c.details||[]);
-          const sx = bx + (ci - (children.length-1)/2) * 110;
-          const sy = by - 100;
+          const sx = LEVEL2_X;
+          const sy = cStartY + ci * cGap;
           const sId = "sub-"+bi+"-"+ci;
           newNodes.push({id:sId, label:cLabel, type:"sub", x:sx, y:sy, color, parentId:bId});
           newEdges.push({from:bId, to:sId});
 
+          const dGap = Math.min(50, cGap / Math.max(cDetails.length, 1));
+          const dStartY = sy - ((Math.min(cDetails.length,3)-1)/2) * dGap;
           cDetails.slice(0,3).forEach((d, di) => {
             const dId = "detail-"+bi+"-"+ci+"-"+di;
             newNodes.push({id:dId, label: d.length>28?d.slice(0,26)+"…":d,
                            fullLabel:d, type:"detail",
-                           x: sx + (di - (cDetails.length-1)/2) * 95,
-                           y: sy - 70,
+                           x: LEVEL3_X,
+                           y: dStartY + di * dGap,
                            color: color+"99", parentId:sId});
             newEdges.push({from:sId, to:dId, detail:true});
           });
@@ -4617,6 +4882,7 @@ const App = () => {
     {id:"graph",   icon:"🕸",  label:"Graaf"},
     {id:"pdf",     icon:"📄", label:"PDF"},
     {id:"images",  icon:"🖼",  label:"Plaatjes"},
+    {id:"import",  icon:"🌐", label:"Import"},
     {id:"mindmap", icon:"🗺",  label:"Mindmap"},
     {id:"llm",     icon:"🧠", label:"Notebook"},
   ];
@@ -5186,7 +5452,8 @@ const App = () => {
                 const note={
                   id:genId(),
                   title:"Samenvatting — "+stem,
-                  content:"*Automatisch gegenereerd door Notebook LLM*\n\n"+res.summary,
+                  content:"*Automatisch gegenereerd door Notebook LLM*\n\n"+res.summary
+                    +"\n\n---\n📄 **Bron:** [[pdf:"+fname+"]]",
                   tags:["samenvatting","pdf"],
                   created:new Date().toISOString(),
                   modified:new Date().toISOString()
@@ -5214,6 +5481,15 @@ const App = () => {
           onAddNote:async(note)=>{
             const saved=await api.post("/notes",note);
             setNotes(p=>[saved,...p]);
+          }
+        })
+      )
+      : tab==="import" ? React.createElement("div",{style:{flex:1,overflow:"hidden"}},
+        React.createElement(WebImporter,{
+          llmModel, allTags,
+          onAddNote:async(note)=>{
+            const saved=await api.post("/notes",note);
+            setNotes(p=>[saved,...p]); setSelId(saved.id); setTab("notes");
           }
         })
       )
