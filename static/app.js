@@ -2735,12 +2735,13 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages}) => {
   const [editTitle,  setEditTitle] = useState("");
   const [tags,       setTags]      = useState([]);
   const [saved,      setSaved]     = useState(false);
+  const [selectedImages, setSelectedImages] = useState(new Set()); // geselecteerde afbeeldingen
   const urlRef = useRef(null);
 
   const doImport = useCallback(async () => {
     const u = url.trim();
     if (!u) return;
-    setBusy(true); setError(null); setPreview(null); setSaved(false);
+    setBusy(true); setError(null); setPreview(null); setSaved(false); setSelectedImages(new Set());
     try {
       const res = await api.importUrl({url: u, model: llmModel||"llama3.2-vision"});
       if (res?.ok) {
@@ -2762,20 +2763,30 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages}) => {
 
   const saveNote = useCallback(async () => {
     if (!preview) return;
+    // Bouw content: bewerkbare Markdown + geselecteerde afbeeldingen inbedden
+    let content = editMd;
+    if (selectedImages.size > 0 && preview.images?.length) {
+      const pickedLinks = preview.images
+        .filter(img => selectedImages.has(img.name))
+        .map(img => `![[img:${img.name}]]`)
+        .join("\n\n");
+      content += "\n\n" + pickedLinks;
+    }
+    content += "\n\n---\n🌐 **Bron:** [" + preview.url + "](" + preview.url + ")";
     await onAddNote({
       id:      genId(),
       title:   editTitle,
-      content: editMd + "\n\n---\n🌐 **Bron:** [" + preview.url + "](" + preview.url + ")",
+      content,
       tags,
       created: new Date().toISOString(),
       modified: new Date().toISOString(),
     });
     setSaved(true);
-  }, [preview, editTitle, editMd, tags, onAddNote]);
+  }, [preview, editTitle, editMd, tags, selectedImages, onAddNote]);
 
   const reset = () => {
     setUrl(""); setPreview(null); setEditMd(""); setEditTitle("");
-    setTags([]); setError(null); setSaved(false);
+    setTags([]); setError(null); setSaved(false); setSelectedImages(new Set());
     setTimeout(()=>urlRef.current?.focus(), 50);
   };
 
@@ -2909,32 +2920,73 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages}) => {
         React.createElement("div",{style:{fontSize:"11px",color:W.blue,
           wordBreak:"break-all",lineHeight:"1.5"}}, preview.url),
 
-        // Geïmporteerde afbeeldingen
+        // Afbeeldingen selecteren
         preview.images?.length > 0 && React.createElement(React.Fragment, null,
           React.createElement("div",{style:{borderTop:`1px solid ${W.splitBg}`,paddingTop:"10px"}}),
-          React.createElement("div",{style:{fontSize:"9px",color:W.fgMuted,
-            letterSpacing:"1px",marginBottom:"6px"}},
-            "🖼 AFBEELDINGEN ("+preview.images.length+")"),
-          React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:"4px"}},
-            preview.images.map(img => React.createElement("div",{key:img.name,
-              style:{display:"flex",alignItems:"center",gap:"6px",
-                     background:"rgba(159,202,86,0.06)",
-                     border:"1px solid rgba(159,202,86,0.15)",
-                     borderRadius:"4px",padding:"4px 7px"}
-            },
-              React.createElement("img",{
-                src:"/api/image/"+encodeURIComponent(img.name),
-                style:{width:"32px",height:"32px",objectFit:"cover",
-                       borderRadius:"3px",flexShrink:0}
-              }),
-              React.createElement("span",{style:{fontSize:"9px",color:W.comment,
-                overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1}},
-                img.name)
-            ))
+          React.createElement("div",{style:{
+            display:"flex", alignItems:"center", justifyContent:"space-between",
+            marginBottom:"8px"
+          }},
+            React.createElement("div",{style:{fontSize:"9px",color:W.fgMuted,letterSpacing:"1px"}},
+              "🖼 AFBEELDINGEN",
+              React.createElement("span",{style:{
+                marginLeft:"6px", fontSize:"9px",
+                color: selectedImages.size>0 ? W.comment : W.fgMuted
+              }}, selectedImages.size>0 ? `(${selectedImages.size} geselecteerd)` : "(geen geselecteerd)")
+            ),
+            selectedImages.size > 0 && React.createElement("button",{
+              onClick:()=>setSelectedImages(new Set()),
+              style:{background:"none",border:"none",color:W.fgMuted,
+                     fontSize:"9px",cursor:"pointer",padding:"0",textDecoration:"underline"}
+            },"wis alles")
           ),
-          React.createElement("div",{style:{fontSize:"9px",color:W.fgMuted,
-            marginTop:"4px",lineHeight:"1.5"}},
-            "Opgeslagen in Plaatjes tab")
+          // Grid van klikbare thumbnails
+          React.createElement("div",{style:{
+            display:"grid", gridTemplateColumns:"repeat(3, 1fr)", gap:"5px"
+          }},
+            preview.images.map(img => {
+              const sel = selectedImages.has(img.name);
+              return React.createElement("div",{
+                key:img.name,
+                onClick:()=>{
+                  setSelectedImages(prev => {
+                    const next = new Set(prev);
+                    sel ? next.delete(img.name) : next.add(img.name);
+                    return next;
+                  });
+                },
+                title: img.name,
+                style:{
+                  position:"relative", cursor:"pointer",
+                  borderRadius:"5px", overflow:"hidden",
+                  border:`2px solid ${sel ? W.comment : "transparent"}`,
+                  boxShadow: sel ? `0 0 0 1px ${W.comment}` : "none",
+                  transition:"border 0.12s, box-shadow 0.12s",
+                  aspectRatio:"1",
+                }
+              },
+                React.createElement("img",{
+                  src:"/api/image/"+encodeURIComponent(img.name),
+                  style:{width:"100%",height:"100%",objectFit:"cover",display:"block"}
+                }),
+                // Checkmark overlay bij selectie
+                sel && React.createElement("div",{style:{
+                  position:"absolute",inset:0,
+                  background:"rgba(159,202,86,0.25)",
+                  display:"flex",alignItems:"center",justifyContent:"center",
+                  fontSize:"18px",
+                }},"✓"),
+                // Donkere overlay als niet geselecteerd (subtiel)
+                !sel && React.createElement("div",{style:{
+                  position:"absolute",inset:0,
+                  background:"rgba(0,0,0,0.35)",
+                }})
+              );
+            })
+          ),
+          React.createElement("div",{style:{
+            fontSize:"9px",color:W.fgMuted,marginTop:"5px",lineHeight:"1.5"
+          }}, "Klik op een afbeelding om deze mee te nemen in de notitie. Alle afbeeldingen staan al in de Plaatjes tab.")
         ),
 
         React.createElement("div",{style:{borderTop:`1px solid ${W.splitBg}`,paddingTop:"12px"}}),
