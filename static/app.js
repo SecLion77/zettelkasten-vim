@@ -3604,83 +3604,91 @@ const MermaidCodeEditor = ({ value, onChange }) => {
   const highlight = (text) => {
     const lines = text.split("\n");
 
-    // Bepaal welke kleur elke tak-index krijgt (eerste-niveau nodes)
-    // We lopen door de regels en tracken de tak-index
+    // ── Stap 1: bepaal tak-kleur per regel ───────────────────────────────────
     let branchIdx = 0;
-    let branchDepth = null; // diepte van de huidige tak-root (diepte 1)
-    const lineBranchIdx = []; // per regel: welke tak-index
+    let branchDepth = null;
+    const lineBranchIdx = [];
 
-    lines.forEach((line, li) => {
+    lines.forEach((line) => {
       const trimmed = line.trimEnd();
       if (!trimmed || trimmed.toLowerCase().startsWith("mindmap")) {
-        lineBranchIdx.push(-2); // header
-        return;
+        lineBranchIdx.push(-2); return;
       }
       const depth = Math.floor((line.match(/^( *)/)[1].length) / 2);
-
       if (depth === 1) {
-        lineBranchIdx.push(-1); // root node
-        branchIdx = 0;
-        branchDepth = null;
+        lineBranchIdx.push(-1); branchIdx = 0; branchDepth = null;
       } else if (depth === 2) {
-        // Nieuwe eerste-niveau tak
         if (branchDepth !== null) branchIdx++;
-        branchDepth = 2;
-        lineBranchIdx.push(branchIdx);
+        branchDepth = 2; lineBranchIdx.push(branchIdx);
       } else {
         lineBranchIdx.push(branchDepth !== null ? branchIdx : 0);
       }
     });
 
-    // Render elke regel als gekleurde span
+    // ── Stap 2: bouw per tak-index de kleur op ───────────────────────────────
+    // branchColors[i] = PALETTE[i % len] voor tak i
+    const branchColors = {};
+    lineBranchIdx.forEach(idx => {
+      if (idx >= 0 && !(idx in branchColors))
+        branchColors[idx] = PALETTE[idx % PALETTE.length];
+    });
+
+    // ── Stap 3: render elke regel ─────────────────────────────────────────────
     return lines.map((line, li) => {
       const idx = lineBranchIdx[li];
       const raw = line
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;");
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
+      // ── Header "mindmap" ──────────────────────────────────────────────────
       if (idx === -2) {
-        // "mindmap" header
         return `<span style="color:${W.fgMuted};font-style:italic">${raw}</span>`;
       }
 
-      const depth  = Math.floor((line.match(/^( *)/)[1].length) / 2);
-      const indent = raw.match(/^( *)/)[1]; // leading spaces
-      const rest   = raw.slice(indent.length);
+      const spaces = (line.match(/^( *)/)[1].length);
+      const depth  = Math.floor(spaces / 2);
+      const rest   = raw.slice(spaces); // tekst na inspringing
 
+      // ── Indent guides: één verticale lijn per inspring-niveau ─────────────
+      // De lijn direct voor de tekst (lvl === depth-1) krijgt de tak-kleur.
+      // Bovenliggende lijnen krijgen een steeds zwakkere neutrale kleur.
+      let indentHtml = "";
+      for (let lvl = 0; lvl < depth; lvl++) {
+        const isLast = lvl === depth - 1;
+        const branchCol = branchColors[idx] || W.fgMuted;
+
+        // Laatste lijn: tak-kleur, helder genoeg om op te vallen
+        // Oudere lijnen: neutraal grijs, steeds verder vervaagd
+        const lineCol = isLast
+          ? branchCol + "66"
+          : `rgba(255,255,255,${Math.max(0.04, 0.12 - lvl * 0.03)})`;
+
+        indentHtml +=
+          `<span style="display:inline-block;width:1ch;` +
+          `border-left:1.5px solid ${lineCol};` +
+          `box-sizing:border-box"> </span>` +
+          `<span style="display:inline-block;width:1ch"> </span>`;
+      }
+
+      // ── Root node ────────────────────────────────────────────────────────
       if (idx === -1) {
-        // Root node: root((label)) - toon in blauw vet
         const highlighted = rest
           .replace(/^(root)(\(\()(.*)(\)\))/, (_, kw, op, lbl, cl) =>
             `<span style="color:${W.fgMuted}">${kw}</span>` +
-            `<span style="color:rgba(255,255,255,0.35)">${op}</span>` +
+            `<span style="color:rgba(255,255,255,0.3)">${op}</span>` +
             `<span style="color:${W.blue};font-weight:bold">${lbl}</span>` +
-            `<span style="color:rgba(255,255,255,0.35)">${cl}</span>`
-          );
-        const wasReplaced = highlighted !== rest;
-        return indent + (wasReplaced
-          ? highlighted
-          : `<span style="color:${W.blue};font-weight:bold">${rest}</span>`);
+            `<span style="color:rgba(255,255,255,0.3)">${cl}</span>`);
+        const colored = highlighted !== rest ? highlighted
+          : `<span style="color:${W.blue};font-weight:bold">${rest}</span>`;
+        return indentHtml + colored;
       }
 
-      // Tak/subnode: kleur op basis van tak-index
+      // ── Tak / sub-node ────────────────────────────────────────────────────
       const col = PALETTE[idx % PALETTE.length];
-
-      // Lichtere kleur voor diepere nodes
-      const opacity = depth === 1 ? "ff"
-                    : depth === 2 ? "cc"
-                    : depth === 3 ? "99"
+      const opacity = depth === 2 ? "ff"
+                    : depth === 3 ? "cc"
+                    : depth === 4 ? "99"
                     : "77";
 
-      // Inspring-gids: toon dots voor elke inspring-level
-      const indentGuide = "  ".repeat(depth);
-      const indentHtml  = depth > 0
-        ? `<span style="color:rgba(255,255,255,0.1)">${"· ".repeat(depth)}</span>`
-          .replace(/·/g, "·")
-        : "";
-
-      // Kleur de speciale syntax: (()), (), []
       const coloredRest = rest
         .replace(/^(\(\()(.*)(\)\))/, (_, op, lbl, cl) =>
           `<span style="color:rgba(255,255,255,0.3)">${op}</span>` +
@@ -3695,11 +3703,10 @@ const MermaidCodeEditor = ({ value, onChange }) => {
           `<span style="color:${col}${opacity}">${lbl}</span>` +
           `<span style="color:rgba(255,255,255,0.3)">${cl}</span>`);
 
-      const wasReplaced = coloredRest !== rest;
+      const colored = coloredRest !== rest ? coloredRest
+        : `<span style="color:${col}${opacity};font-weight:${depth<=2?"bold":"normal"}">${rest}</span>`;
 
-      return indent + (wasReplaced
-        ? coloredRest
-        : `<span style="color:${col}${opacity};font-weight:${depth<=1?"bold":"normal"}">${rest}</span>`);
+      return indentHtml + colored;
     }).join("\n");
   };
 
@@ -3718,6 +3725,8 @@ const MermaidCodeEditor = ({ value, onChange }) => {
     overflowWrap:"normal",
     wordWrap:    "normal",
     overflow:    "auto",
+    letterSpacing: "0",   // expliciet nul — voorkomt subpixel-drift bij meerdere regels
+    wordSpacing:   "0",
   };
 
   const handleKeyDown = (e) => {
