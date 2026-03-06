@@ -354,7 +354,8 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
     S.current.mode = m;
     setModeState(m);
     blinkOn.current = true;
-  }, []);
+    onModeChange(m);
+  }, [onModeChange]);
 
   // ── Externe value sync ────────────────────────────────────────────────────
   useEffect(() => {
@@ -3584,7 +3585,7 @@ const MermaidPreviewBlock = ({ code, onEdit }) => {
 // ── MermaidCodeEditor — canvas-based editor, identiek gedrag aan VimEditor ────
 // Volledig VIM-modes (INSERT/NORMAL/COMMAND/SEARCH), cursorline+cursorcolumn,
 // syntax highlighting per regel via canvas drawLine, statusbalk met mode-badge.
-const MermaidCodeEditor = ({ value, onChange, editorRef, noteTags=[], onTagsChange=()=>{}, allTags=[] }) => {
+const MermaidCodeEditor = ({ value, onChange, editorRef, noteTags=[], onTagsChange=()=>{}, allTags=[], onModeChange=()=>{} }) => {
   const { useState, useEffect, useRef, useCallback } = React;
 
   const FONT_SZ = 13;
@@ -3641,11 +3642,17 @@ const MermaidCodeEditor = ({ value, onChange, editorRef, noteTags=[], onTagsChan
     }
   }, [value]);
 
-  // ── editorRef API (focus + insertAtCursor) ───────────────────────────────
+  // ── editorRef API (focus + insertAtCursor + triggerInsert) ──────────────
   useEffect(() => {
     if (!editorRef) return;
     editorRef.current = {
       focus: () => inputRef.current?.focus(),
+      // Zet editor in INSERT mode en geef focus — voor "✏ bewerken" knop
+      triggerInsert: () => {
+        setMode("INSERT");
+        draw();
+        inputRef.current?.focus();
+      },
       insertAtCursor: (text) => {
         const s = S.current;
         setMode("INSERT");
@@ -4171,6 +4178,22 @@ const MermaidEditor = ({ initialText="", onSave, onCancel, notes=[], serverPdfs=
     setLinkSearch("");
   };
 
+  // ── Preview toggle + nieuw mindmap state (voor linkDropdown) ───────────────
+  const [showPreview, setShowPreview] = React.useState(true);
+  const [editorMode, setEditorMode]   = React.useState("INSERT");
+
+  const enterInsert = () => {
+    editorRef.current?.focus();
+    editorRef.current?.triggerInsert?.();
+  };
+
+  const newMindmap = () => {
+    const NW = `mindmap\n  root((Nieuwe Mindmap))\n    Tak A\n      Sub A1\n    Tak B`;
+    setCode(NW);
+    setTitle("");
+    setTimeout(() => { editorRef.current?.focus(); editorRef.current?.triggerInsert?.(); }, 60);
+  };
+
   // ── Link dropdown (identiek aan notitie-editor) ───────────────────────────
   const linkDropdown = showLink && React.createElement("div",{
     style:{position:"absolute", top:"calc(100% + 4px)", right:0, zIndex:210,
@@ -4287,19 +4310,17 @@ const MermaidEditor = ({ initialText="", onSave, onCancel, notes=[], serverPdfs=
     background:W.bg
   }},
 
-    // ── Toolbar — IDENTIEK aan notitie-editor (editorToolbar) ────────────────
-    // Zelfde achtergrond (W.bg2), zelfde hoogte, zelfde knop-stijlen
+    // ── Toolbar — identiek aan notitie-editor ────────────────────────────────
     React.createElement("div",{style:{
       background:W.bg2, borderBottom:`1px solid ${W.splitBg}`,
       padding:"6px 10px", display:"flex",
       alignItems:"center", gap:"6px", flexShrink:0,
-      flexWrap:"nowrap",
     }},
-      // Titel — groot bold, transparant, precies als notitie-editor
+      // Titel
       React.createElement("input",{
         value:title, onChange:e=>setTitle(e.target.value),
-        placeholder:"Mindmap titel… (Enter = naar editor)",
-        onKeyDown:e=>{ if(e.key==="Enter"){ e.preventDefault(); editorRef.current?.focus(); } },
+        placeholder:"Mindmap titel…",
+        onKeyDown:e=>{ if(e.key==="Enter"){ e.preventDefault(); editorRef.current?.focus(); editorRef.current?.triggerInsert?.(); } },
         style:{
           flex:1, minWidth:"120px", background:"transparent",
           border:"none", color:W.statusFg,
@@ -4309,17 +4330,63 @@ const MermaidEditor = ({ initialText="", onSave, onCancel, notes=[], serverPdfs=
       }),
       // Tags
       React.createElement(TagEditor,{tags, onChange:setTags, allTags:["mindmap","ai","overzicht"]}),
-      // ◎ focus (placeholder — Mermaid heeft geen goyo, maar knop voor consistentie)
+
+      // ── Knoppen — zelfde stijl/volgorde als notitie-editor ──────────────
+      // ✏ bewerken — brengt editor naar INSERT mode; licht op als INSERT actief
       React.createElement("button",{
-        disabled:true,
+        onClick: enterInsert,
+        title: "Klik om te bewerken (INSERT mode) — of druk 'i' in de editor",
+        style:{
+          background: editorMode==="INSERT" ? "rgba(159,202,86,0.12)" : "none",
+          border: `1px solid ${editorMode==="INSERT" ? W.comment : W.splitBg}`,
+          borderRadius:"6px", padding:"4px 10px",
+          color: editorMode==="INSERT" ? W.comment : W.fgMuted,
+          fontSize:"11px", cursor:"pointer", flexShrink:0,
+        }
+      }, "✏ bewerken"),
+
+      // 🔗 koppelen
+      React.createElement("div",{style:{position:"relative",flexShrink:0}, onClick:e=>e.stopPropagation()},
+        React.createElement("button",{
+          onClick:()=>{ setShowLink(v=>!v); setLinkSearch(""); setLinkType("all"); },
+          title:"Link invoegen op cursorpositie",
+          style:{
+            background: showLink?"rgba(138,198,242,0.15)":"none",
+            border:`1px solid ${showLink?"rgba(138,198,242,0.4)":W.splitBg}`,
+            borderRadius:"6px", padding:"4px 10px",
+            color: showLink?W.blue:W.fgMuted,
+            fontSize:"11px", cursor:"pointer", flexShrink:0,
+          }
+        }, "🔗 koppelen"),
+        linkDropdown
+      ),
+
+      // ✦ nieuw — lege mindmap
+      React.createElement("button",{
+        onClick: newMindmap,
+        title:"Nieuwe lege mindmap",
         style:{
           background:"none", border:`1px solid ${W.splitBg}`,
           borderRadius:"6px", padding:"4px 10px",
           color:W.fgMuted, fontSize:"11px",
-          cursor:"default", flexShrink:0, opacity:0.4,
+          cursor:"pointer", flexShrink:0,
         }
-      }, "🌿 mermaid"),
-      // ✓ opslaan — zelfde kleur/stijl als notitie-editor "✓ opslaan"
+      }, "✦ nieuw"),
+
+      // ⊞/⊟ preview
+      React.createElement("button",{
+        onClick:()=>setShowPreview(v=>!v),
+        title: showPreview ? "Preview verbergen" : "Preview tonen",
+        style:{
+          background: showPreview?"rgba(138,198,242,0.1)":"none",
+          border:`1px solid ${showPreview?"rgba(138,198,242,0.35)":W.splitBg}`,
+          borderRadius:"6px", padding:"4px 10px",
+          color: showPreview?W.blue:W.fgMuted,
+          fontSize:"11px", cursor:"pointer", flexShrink:0,
+        }
+      }, showPreview ? "⊟ preview" : "⊞ preview"),
+
+      // ✓ opslaan
       React.createElement("button",{
         onClick:handleSave, disabled:saving,
         style:{
@@ -4328,12 +4395,13 @@ const MermaidEditor = ({ initialText="", onSave, onCancel, notes=[], serverPdfs=
           color:W.bg, fontSize:"11px", fontWeight:"bold",
           cursor:saving?"default":"pointer", flexShrink:0,
         }
-      }, saving ? "⏳ opslaan…" : "✓ opslaan"),
-      // Feedback
+      }, saving ? "⏳…" : "✓ opslaan"),
+
       saveMsg && React.createElement("span",{style:{
         fontSize:"10px", flexShrink:0,
         color:saveMsg.startsWith("✓")?W.comment:W.orange,
       }}, saveMsg),
+
       // ✕ sluiten
       onCancel && React.createElement("button",{
         onClick:onCancel,
@@ -4346,57 +4414,15 @@ const MermaidEditor = ({ initialText="", onSave, onCancel, notes=[], serverPdfs=
       }, "✕ sluiten"),
     ),
 
-    // ── Kolom-headers (dun, subtiel) ─────────────────────────────────────────
-    React.createElement("div",{style:{
-      display:"flex", flexShrink:0,
-      background:"rgba(0,0,0,0.15)",
-      borderBottom:`1px solid ${W.splitBg}`,
-      fontSize:"9px", color:W.fgMuted, letterSpacing:"0.5px",
-    }},
-      React.createElement("div",{style:{
-        width:"42%", flexShrink:0,
-        padding:"3px 12px",
-        display:"flex", alignItems:"center", justifyContent:"space-between",
-        borderRight:`1px solid ${W.splitBg}`,
-      }},
-        React.createElement("span",{style:{letterSpacing:"2px", color:W.fgMuted}}, "EDITOR"),
-        // 🔗 koppelen hier in de sub-header, zodat het duidelijk bij de editor-kant hoort
-        React.createElement("div",{
-          style:{position:"relative"},
-          onClick:e=>e.stopPropagation()
-        },
-          React.createElement("button",{
-            onClick:()=>{ setShowLink(v=>!v); setLinkSearch(""); setLinkType("all"); },
-            title:"Link invoegen op cursorpositie",
-            style:{
-              background: showLink?"rgba(138,198,242,0.15)":"none",
-              border:`1px solid ${showLink?"rgba(138,198,242,0.4)":W.splitBg}`,
-              borderRadius:"5px", padding:"2px 8px",
-              color: showLink?W.blue:W.fgMuted,
-              fontSize:"9px", cursor:"pointer",
-            }
-          }, "🔗 koppelen"),
-          linkDropdown
-        )
-      ),
-      React.createElement("div",{style:{
-        flex:1, padding:"3px 12px",
-        display:"flex", alignItems:"center", justifyContent:"flex-end", gap:"8px",
-      }},
-        React.createElement("span",{style:{color:W.fgDim, fontStyle:"italic"}},
-          "scroll=zoom · sleep=pan"
-        ),
-        React.createElement("span",{style:{letterSpacing:"2px", color:W.fgMuted}}, "PREVIEW"),
-      ),
-    ),
-
-    // ── Split: editor links | preview rechts ────────────────────────────────
+    // ── Split: editor | preview ──────────────────────────────────────────────
     React.createElement("div",{style:{flex:1, display:"flex", overflow:"hidden"}},
 
-      // Code editor (met ingebakken statusbalk onderaan)
+      // Code editor (neemt volledige breedte als preview verborgen)
       React.createElement("div",{style:{
-        width:"42%", flexShrink:0, display:"flex", flexDirection:"column",
-        borderRight:`1px solid ${W.splitBg}`
+        width: showPreview ? "42%" : "100%",
+        flexShrink:0, display:"flex", flexDirection:"column",
+        borderRight: showPreview ? `1px solid ${W.splitBg}` : "none",
+        transition:"width 0.2s",
       }},
         React.createElement(MermaidCodeEditor, {
           value: code,
@@ -4405,11 +4431,12 @@ const MermaidEditor = ({ initialText="", onSave, onCancel, notes=[], serverPdfs=
           noteTags: tags,
           onTagsChange: setTags,
           allTags: ["mindmap","ai","overzicht","notitie","pdf","import"],
+          onModeChange: setEditorMode,
         })
       ),
 
-      // Preview canvas
-      React.createElement("div",{
+      // Preview canvas — verborgen als showPreview false
+      showPreview && React.createElement("div",{
         ref:containerRef,
         style:{flex:1, position:"relative", background:W.bg, overflow:"hidden"}
       },
