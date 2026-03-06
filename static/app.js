@@ -187,6 +187,18 @@ const renderMd = (text, notes=[]) => {
   h = h.replace(/^\d+\. (.+)$/gm,"<li>$1</li>");
   h = h.replace(/(<li>[\s\S]*?<\/li>\n?)+/g,"<ul>$&</ul>");
 
+  // Externe Markdown links: [tekst](url) → klikbaar
+  h = h.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g,
+    (_,label,url) => `<a href="${url}" target="_blank" rel="noopener noreferrer" `+
+      `style="color:#8ac6f2;text-decoration:underline;text-decoration-color:rgba(138,198,242,0.4)">${label}</a>`
+  );
+
+  // Naakte URLs in tekst: https://... → klikbaar (niet al omsloten door href="")
+  h = h.replace(/(?<!href=["'])(?<!src=["'])(https?:\/\/[^\s<>"'\)]+)/g,
+    url => `<a href="${url}" target="_blank" rel="noopener noreferrer" `+
+      `style="color:#8ac6f2;text-decoration:underline;text-decoration-color:rgba(138,198,242,0.4);word-break:break-all">${url}</a>`
+  );
+
   // Zettelkasten links
   h = h.replace(/\[\[([^\]]+)\]\]/g,(_,id)=>{
     const n=notes.find(x=>x.id===id||x.title===id);
@@ -2323,21 +2335,34 @@ const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote, setAiStatu
     setShowAnnotPanel(true);  // sidebar altijd zichtbaar bij nieuwe pin
   }, [activeImg]);
 
-  const upload = useCallback(async (files) => {
-    for (const f of Array.from(files)) {
-      if (!f.type.startsWith("image/")) continue;
+  const upload = useCallback((files) => {
+    const imgFiles = Array.from(files).filter(f => f.type.startsWith("image/"));
+    if (!imgFiles.length) return;
+    // Alle bestanden parallel uploaden + beschrijven
+    imgFiles.forEach(f => {
+      const jid = genId();
+      const shortName = f.name.slice(0, 26);
+      addJob && addJob({id: jid, type: "upload", label: "📤 Uploaden: " + shortName});
       setBusy(f.name);
-      setAiStatus?.("Uploaden: "+f.name.slice(0,24)+"…");
-      try {
-        const res = await api.uploadImage(f);
-        if (res?.name) {
-          await onRefresh();
-          describeImage(res.name);
+      (async () => {
+        try {
+          const res = await api.uploadImage(f);
+          if (res?.name) {
+            await onRefresh();
+            updateJob && updateJob(jid, {status: "done", result: "Geüpload → beschrijven…"});
+            describeImage(res.name);
+          } else {
+            updateJob && updateJob(jid, {status: "error", error: "Upload mislukt"});
+          }
+        } catch(e) {
+          console.error("upload:", e);
+          updateJob && updateJob(jid, {status: "error", error: e.message});
+        } finally {
+          setBusy(null);
         }
-      } catch(e) { console.error("upload:", e); setAiStatus?.(null); }
-      setBusy(null);
-    }
-  }, [onRefresh]);
+      })();
+    });
+  }, [onRefresh, addJob, updateJob]);
 
   const describeImage = useCallback((fname) => {
     setBusy(fname);
