@@ -19,7 +19,7 @@
       height: 100%; width: 100%; overflow: hidden;
       background: #1c1c1c; color: #e3e0d7;
       font-family: 'DM Sans', 'Segoe UI', system-ui, sans-serif;
-      font-size: 14px;
+      font-size: 15px;
       -webkit-font-smoothing: antialiased;
       -moz-osx-font-smoothing: grayscale;
     }
@@ -55,24 +55,24 @@
     /* Markdown */
     .mdv h1 { font-size: 1.2rem; font-weight: 600; color: #ffffd7; margin: 0 0 14px; border-bottom: 1px solid #3a4046; padding-bottom: 6px; }
     .mdv h2 { font-size: 1rem; font-weight: 600; color: #cae682; margin: 18px 0 8px; }
-    .mdv h3 { font-size: .875rem; font-weight: 500; color: #e3e0d7; margin: 14px 0 6px; }
-    .mdv p  { color: #d8d5cc; line-height: 1.85; margin: 0 0 10px; font-size: .875rem; }
+    .mdv h3 { font-size: .9375rem; font-weight: 500; color: #e3e0d7; margin: 14px 0 6px; }
+    .mdv p  { color: #d8d5cc; line-height: 1.85; margin: 0 0 10px; font-size: .9375rem; }
     .mdv ul, .mdv ol { padding-left: 22px; margin: 6px 0 10px; }
-    .mdv li { color: #d8d5cc; line-height: 1.8; font-size: .875rem; margin-bottom: 3px; }
+    .mdv li { color: #d8d5cc; line-height: 1.8; font-size: .9375rem; margin-bottom: 3px; }
     .mdv strong { color: #ffffd7; font-weight: 600; }
     .mdv em { color: #a0a8b0; font-style: italic; }
-    .mdv code { background: rgba(255,255,255,.07); padding: 1px 6px; border-radius: 4px; font-size: .8rem; color: #cae682; font-family: 'Hack', monospace; border: 1px solid rgba(255,255,255,.06); }
+    .mdv code { background: rgba(255,255,255,.07); padding: 1px 6px; border-radius: 4px; font-size: .9375rem; color: #cae682; font-family: 'Hack', monospace; border: 1px solid rgba(255,255,255,.06); }
     .mdv pre  { background: rgba(0,0,0,.35); padding: 12px 14px; border-radius: 6px; margin: 10px 0; overflow-x: auto; border: 1px solid rgba(255,255,255,.06); border-left: 3px solid #3a4046; }
-    .mdv pre code { background: none; padding: 0; font-size: .8rem; color: #cae682; border: none; }
+    .mdv pre code { background: none; padding: 0; font-size: .9375rem; color: #cae682; border: none; }
     .mdv blockquote { border-left: 3px solid #e5786d; padding: 4px 12px; margin: 10px 0; background: rgba(229,120,109,.07); color: #a0a8b0; font-style: italic; border-radius: 0 4px 4px 0; }
-    .mdv table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: .8rem; }
+    .mdv table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: .9375rem; }
     .mdv th { background: rgba(255,255,255,.06); color: #8ac6f2; padding: 6px 10px; border: 1px solid #3a4046; text-align: left; font-weight: 500; }
     .mdv td { padding: 5px 10px; border: 1px solid #3a4046; }
     .mdv tr:nth-child(even) td { background: rgba(255,255,255,.02); }
     .mdv hr { border: none; border-top: 1px solid #3a4046; margin: 18px 0; }
-    .zlink { color: #8ac6f2; cursor: pointer; text-decoration: underline; text-decoration-color: rgba(138,198,242,.35); font-size: .875rem; transition: color .12s; }
+    .zlink { color: #8ac6f2; cursor: pointer; text-decoration: underline; text-decoration-color: rgba(138,198,242,.35); font-size: .9375rem; transition: color .12s; }
     .zlink:hover { color: #ffffd7; }
-    .taghl { color: #9fca56; font-size: .875rem; }
+    .taghl { color: #9fca56; font-size: .9375rem; }
     .spell-error { border-bottom: 2px solid #e5786d; cursor: help; }
 
     textarea::placeholder, input::placeholder { color: #5a524a; }
@@ -85,7 +85,7 @@
     /* Modern button base */
     .btn-wombat {
       display: inline-flex; align-items: center; gap: 5px;
-      padding: 4px 11px; border-radius: 6px; font-size: 11px;
+      padding: 4px 11px; border-radius: 6px; font-size: 15px;
       border: 1px solid #3a4046; background: transparent;
       color: #857b6f; cursor: pointer; transition: all .12s;
       letter-spacing: .2px; white-space: nowrap; flex-shrink: 0;
@@ -102,7 +102,7 @@
 
     .snippet-hint {
       position: absolute; background: #2a2a2a; border: 1px solid #3a4046;
-      border-radius: 5px; padding: 4px 8px; font-size: 11px; color: #8ac6f2;
+      border-radius: 5px; padding: 4px 8px; font-size: 15px; color: #8ac6f2;
       pointer-events: none; z-index: 100; font-family: 'Hack', monospace;
       box-shadow: 0 4px 12px rgba(0,0,0,.5);
     }
@@ -119,19 +119,19 @@
     /* Tag pills */
     .tag-pill {
       display: inline-flex; align-items: center; gap: 3px;
-      padding: 2px 8px; border-radius: 20px; font-size: 10px;
+      padding: 2px 8px; border-radius: 20px; font-size: 15px;
       background: rgba(159,202,86,.1); border: 1px solid rgba(159,202,86,.28);
       color: #9fca56; letter-spacing: .3px; cursor: default; white-space: nowrap;
       transition: background .1s;
     }
     .tag-pill:hover { background: rgba(159,202,86,.16); }
-    .tag-pill button { background: none; border: none; color: inherit; cursor: pointer; padding: 0; opacity: .6; font-size: 10px; line-height: 1; }
+    .tag-pill button { background: none; border: none; color: inherit; cursor: pointer; padding: 0; opacity: .6; font-size: 15px; line-height: 1; }
     .tag-pill button:hover { opacity: 1; }
 
     /* Top bar tabs */
     .topbar-tab {
       display: flex; align-items: center; gap: 5px;
-      padding: 0 14px; height: 100%; font-size: 11px;
+      padding: 0 14px; height: 100%; font-size: 15px;
       border: none; border-bottom: 2px solid transparent;
       background: transparent; color: #857b6f; cursor: pointer;
       letter-spacing: .5px; transition: color .12s, background .12s;

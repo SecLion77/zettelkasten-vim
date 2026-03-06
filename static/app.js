@@ -223,7 +223,7 @@ const TagPill = ({tag, onRemove, small, onClick}) => (
     "#"+tag,
     onRemove && React.createElement("span",{
       onClick:e=>{e.stopPropagation();onRemove(tag);},
-      style:{cursor:"pointer",color:W.fgMuted,marginLeft:"1px",fontSize:"11px",lineHeight:1}
+      style:{cursor:"pointer",color:W.fgMuted,marginLeft:"1px",fontSize:"14px",lineHeight:1}
     },"×")
   )
 );
@@ -269,7 +269,7 @@ const TagEditor = ({tags=[], onChange, allTags=[]}) => {
         onBlur:()=>setTimeout(()=>setOpen(false),150),
         placeholder:tags.length?"":"tag toevoegen…",
         style:{border:"none",background:"transparent",outline:"none",
-          fontSize:"10px",color:W.fg,minWidth:"80px",flex:1}
+          fontSize:"14px",color:W.fg,minWidth:"80px",flex:1}
       })
     ),
     open && (suggestions.length>0||input) && React.createElement("div",{
@@ -279,12 +279,12 @@ const TagEditor = ({tags=[], onChange, allTags=[]}) => {
     },
       input && React.createElement("div",{
         onMouseDown:e=>{e.preventDefault();add(input);},
-        style:{padding:"5px 10px",fontSize:"10px",color:W.blue,cursor:"pointer",
+        style:{padding:"5px 10px",fontSize:"14px",color:W.blue,cursor:"pointer",
           borderBottom:`1px solid ${W.splitBg}`}
       },"+ \"",input,"\" toevoegen"),
       ...suggestions.map(t=>React.createElement("div",{
         key:t,onMouseDown:e=>{e.preventDefault();add(t);},
-        style:{padding:"4px 10px",fontSize:"10px",color:W.fg,cursor:"pointer"}
+        style:{padding:"4px 10px",fontSize:"14px",color:W.fg,cursor:"pointer"}
       },"#"+t))
     )
   );
@@ -1254,7 +1254,7 @@ const TagFilterBar = ({tags=[], activeTag, onChange, compact=false, tagColors={}
         style:{
           position:"absolute", right:"5px", top:"50%",
           transform:"translateY(-50%)",
-          fontSize:"10px", color:W.fgMuted, cursor:"pointer",
+          fontSize:"14px", color:W.fgMuted, cursor:"pointer",
           lineHeight:1,
         }
       }, "×")
@@ -1537,7 +1537,7 @@ const Graph = ({notes, pdfNotes, onSelect, selectedId, localMode=false}) => {
             border:`1px solid ${val?"rgba(138,198,242,0.5)":"rgba(255,255,255,0.1)"}`,
             color:val?"#a8d8f0":W.fgMuted,
             borderRadius:"4px",padding:"3px 10px",
-            fontSize:"11px",cursor:"pointer",fontWeight:val?"600":"400",
+            fontSize:"14px",cursor:"pointer",fontWeight:val?"600":"400",
           }
         },label))
       )
@@ -1572,7 +1572,7 @@ const Graph = ({notes, pdfNotes, onSelect, selectedId, localMode=false}) => {
     React.createElement("div",{style:{
       position:"absolute",bottom:"12px",left:"50%",transform:"translateX(-50%)",
       background:"rgba(28,28,28,0.92)",border:`1px solid ${W.splitBg}`,
-      borderRadius:"6px",padding:"5px 14px",fontSize:"10px",color:W.fgMuted,
+      borderRadius:"6px",padding:"5px 14px",fontSize:"14px",color:W.fgMuted,
       display:"flex",gap:"12px",backdropFilter:"blur(8px)",
     }},
       React.createElement("span",null,React.createElement("span",{style:{color:W.yellow}},"● "),selectedId?"geselecteerd":""),
@@ -1856,18 +1856,18 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
     // Main PDF column
     React.createElement("div",{style:{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",minWidth:0}},
       // Toolbar
-      React.createElement("div",{style:{background:W.bg2,borderBottom:`1px solid ${W.splitBg}`,padding:"5px 10px",display:"flex",alignItems:"center",gap:"8px",fontSize:"12px",flexShrink:0,flexWrap:"wrap"}},
-        React.createElement("button",{onClick:()=>fileRef.current.click(),style:{background:W.blue,color:W.bg,border:"none",borderRadius:"4px",padding:"4px 10px",fontSize:"11px",cursor:"pointer",fontWeight:"bold"}},":open PDF"),
-        React.createElement("button",{onClick:()=>setShowLibrary(!showLibrary),style:{background:showLibrary?W.comment:"none",color:showLibrary?W.bg:W.fgMuted,border:`1px solid ${showLibrary?W.comment:W.splitBg}`,borderRadius:"4px",padding:"4px 10px",fontSize:"11px",cursor:"pointer"}},`📚 bibliotheek (${serverPdfs?.length||0})`),
+      React.createElement("div",{style:{background:W.bg2,borderBottom:`1px solid ${W.splitBg}`,padding:"5px 10px",display:"flex",alignItems:"center",gap:"8px",fontSize:"14px",flexShrink:0,flexWrap:"wrap"}},
+        React.createElement("button",{onClick:()=>fileRef.current.click(),style:{background:W.blue,color:W.bg,border:"none",borderRadius:"4px",padding:"4px 10px",fontSize:"14px",cursor:"pointer",fontWeight:"bold"}},":open PDF"),
+        React.createElement("button",{onClick:()=>setShowLibrary(!showLibrary),style:{background:showLibrary?W.comment:"none",color:showLibrary?W.bg:W.fgMuted,border:`1px solid ${showLibrary?W.comment:W.splitBg}`,borderRadius:"4px",padding:"4px 10px",fontSize:"14px",cursor:"pointer"}},`📚 bibliotheek (${serverPdfs?.length||0})`),
         React.createElement("input",{ref:fileRef,type:"file",accept:".pdf",style:{display:"none"},onChange:onFileInput}),
-        !pdfjsReady&&React.createElement("span",{style:{color:W.orange,fontSize:"10px"}},"pdf.js laden…"),
+        !pdfjsReady&&React.createElement("span",{style:{color:W.orange,fontSize:"14px"}},"pdf.js laden…"),
         // AI samenvatten indicator
         summarizing && React.createElement("div",{
           style:{display:"flex",alignItems:"center",gap:"5px",
                  background:"rgba(138,198,242,0.08)",
                  border:"1px solid rgba(138,198,242,0.25)",
                  borderRadius:"10px",padding:"2px 10px",
-                 color:"#a8d8f0",fontSize:"10px",
+                 color:"#a8d8f0",fontSize:"14px",
                  animation:"ai-pulse 1.4s ease-in-out infinite"}
         },
           React.createElement("span",{style:{
@@ -1877,7 +1877,7 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
         ),
         // Foutmelding samenvatting
         summarizeErr && React.createElement("span",{
-          style:{color:W.orange,fontSize:"10px",cursor:"pointer"},
+          style:{color:W.orange,fontSize:"14px",cursor:"pointer"},
           title:summarizeErr,
           onClick:()=>setSummarizeErr(null)
         },"⚠ samenvatten mislukt ×"),
@@ -1892,7 +1892,7 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
           React.createElement("button",{onClick:()=>setScale(s=>Math.min(3,+(s+0.2).toFixed(1))),style:{background:"none",border:"none",color:W.fg,cursor:"pointer",padding:"0 4px",fontSize:"16px"}},"+"),
           React.createElement("span",{style:{color:W.fgMuted}},"│"),
           ...HCOLORS.map(c=>React.createElement("button",{key:c.id,onClick:()=>setActiveColor(c),title:c.label,style:{width:"18px",height:"18px",borderRadius:"4px",background:c.bg,border:`2px solid ${activeColor.id===c.id?c.border:"transparent"}`,cursor:"pointer",padding:0,boxShadow:activeColor.id===c.id?`0 0 6px ${c.border}`:"none"}})),
-          React.createElement("span",{style:{color:W.fgMuted,fontSize:"10px",marginLeft:"4px",maxWidth:"160px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},pdfFile?.name),
+          React.createElement("span",{style:{color:W.fgMuted,fontSize:"14px",marginLeft:"4px",maxWidth:"160px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},pdfFile?.name),
           pdfFile && onAutoSummarize && React.createElement("button",{
             title:"Maak nu een samenvatting van deze PDF",
             disabled:summarizing,
@@ -1907,7 +1907,7 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
                    border:"1px solid rgba(138,198,242,0.25)",
                    color:summarizing?"#666":"#a8d8f0",
                    borderRadius:"4px",padding:"3px 9px",
-                   fontSize:"10px",cursor:summarizing?"not-allowed":"pointer",
+                   fontSize:"14px",cursor:summarizing?"not-allowed":"pointer",
                    marginLeft:"6px",flexShrink:0,opacity:summarizing?0.5:1}
           }, summarizing ? "⏳…" : "🧠 samenvatten"),
           pdfFile&&React.createElement("button",{
@@ -1922,20 +1922,20 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
             },
             style:{background:"rgba(229,120,109,0.1)",border:"1px solid rgba(229,120,109,0.25)",
                    color:W.orange,borderRadius:"4px",padding:"3px 9px",
-                   fontSize:"10px",cursor:"pointer",marginLeft:"6px",flexShrink:0}
+                   fontSize:"14px",cursor:"pointer",marginLeft:"6px",flexShrink:0}
           },"🗑 verwijder")
         ),
         React.createElement("div",{style:{flex:1}}),
-        pdfDoc&&React.createElement("span",{style:{color:W.comment,fontSize:"10px"}},"① selecteer tekst  ② popup  ③ opslaan")
+        pdfDoc&&React.createElement("span",{style:{color:W.comment,fontSize:"14px"}},"① selecteer tekst  ② popup  ③ opslaan")
       ),
 
       // PDF library dropdown
       showLibrary&&React.createElement("div",{style:{background:W.bg2,borderBottom:`1px solid ${W.splitBg}`,padding:"8px 12px",maxHeight:"200px",overflowY:"auto",flexShrink:0}},
         serverPdfs?.length===0
-          ? React.createElement("div",{style:{color:W.fgMuted,fontSize:"11px",padding:"8px"}},"Nog geen PDF's opgeslagen. Open een PDF om te beginnen.")
+          ? React.createElement("div",{style:{color:W.fgMuted,fontSize:"14px",padding:"8px"}},"Nog geen PDF's opgeslagen. Open een PDF om te beginnen.")
           : (serverPdfs||[]).map(p=>React.createElement("div",{
               key:p.name,
-              style:{padding:"5px 8px",borderRadius:"3px",fontSize:"11px",color:W.fg,
+              style:{padding:"5px 8px",borderRadius:"3px",fontSize:"14px",color:W.fg,
                      display:"flex",alignItems:"center",gap:"6px",
                      borderBottom:`1px solid rgba(255,255,255,0.03)`}
             },
@@ -1962,7 +1962,7 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
                 },
                 style:{background:"rgba(229,120,109,0.1)",border:"1px solid rgba(229,120,109,0.25)",
                        color:W.orange,borderRadius:"3px",padding:"2px 7px",
-                       fontSize:"10px",cursor:"pointer",flexShrink:0}
+                       fontSize:"14px",cursor:"pointer",flexShrink:0}
               },"🗑")
             ))
       ),
@@ -2000,7 +2000,7 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
         !pdfDoc&&!isLoading&&React.createElement("div",{style:{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:"100%",gap:"16px",color:W.fgMuted}},
           React.createElement("div",{style:{fontSize:"56px"}},"📄"),
           React.createElement("div",{style:{fontSize:"14px",color:W.fgDim}},":open PDF of kies uit bibliotheek"),
-          React.createElement("div",{style:{fontSize:"11px",color:W.splitBg,maxWidth:"300px",textAlign:"center",lineHeight:"1.8"}},"PDF's worden opgeslagen in je vault map.\nSelecteer tekst om te annoteren.")
+          React.createElement("div",{style:{fontSize:"14px",color:W.splitBg,maxWidth:"300px",textAlign:"center",lineHeight:"1.8"}},"PDF's worden opgeslagen in je vault map.\nSelecteer tekst om te annoteren.")
         ),
         pdfDoc&&React.createElement("div",{ref:wrapRef,style:{position:"relative",margin:"24px auto",width:"fit-content"}},
           React.createElement("canvas",{ref:canvasRef,style:{display:"block",boxShadow:"0 4px 32px rgba(0,0,0,0.7)"}}),
@@ -2049,19 +2049,19 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
           },"✏ Annoteren"),
           // Selection popup
           pendingSel&&React.createElement("div",{style:{position:"absolute",left:selPos.x,top:selPos.y,background:W.bg3,border:`2px solid ${activeColor.border}`,borderRadius:"8px",padding:"14px 16px",zIndex:500,width:"350px",boxShadow:`0 8px 32px rgba(0,0,0,0.8)`},onMouseUp:e=>e.stopPropagation()},
-            React.createElement("div",{style:{fontSize:"11px",color:W.fgDim,marginBottom:"10px",padding:"7px 10px",background:activeColor.bg,borderRadius:"4px",fontStyle:"italic",lineHeight:"1.6",borderLeft:`4px solid ${activeColor.border}`}},'"',pendingSel.substring(0,100),pendingSel.length>100?"…":"",'"'),
+            React.createElement("div",{style:{fontSize:"14px",color:W.fgDim,marginBottom:"10px",padding:"7px 10px",background:activeColor.bg,borderRadius:"4px",fontStyle:"italic",lineHeight:"1.6",borderLeft:`4px solid ${activeColor.border}`}},'"',pendingSel.substring(0,100),pendingSel.length>100?"…":"",'"'),
             React.createElement("div",{style:{display:"flex",gap:"6px",marginBottom:"10px",alignItems:"center"}},
-              React.createElement("span",{style:{fontSize:"10px",color:W.fgMuted,marginRight:"2px"}},"kleur:"),
+              React.createElement("span",{style:{fontSize:"14px",color:W.fgMuted,marginRight:"2px"}},"kleur:"),
               ...HCOLORS.map(c=>React.createElement("button",{key:c.id,onClick:()=>setActiveColor(c),style:{width:"22px",height:"22px",borderRadius:"4px",background:c.bg,border:`2px solid ${activeColor.id===c.id?c.border:W.splitBg}`,cursor:"pointer",padding:0}}))
             ),
-            React.createElement("textarea",{autoFocus:true,value:quickNote,onChange:e=>setQuickNote(e.target.value),onKeyDown:e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();saveHighlight();}if(e.key==="Escape"){setPendingSel(null);window.getSelection()?.removeAllRanges();}},placeholder:"Notitie — Enter=opslaan · Shift+Enter=nieuwe regel · Esc=sluiten",rows:2,style:{width:"100%",background:W.bg,border:`1px solid ${W.splitBg}`,borderRadius:"4px",padding:"8px 10px",color:W.fg,fontSize:"12px",outline:"none",resize:"none",marginBottom:"8px"}}),
+            React.createElement("textarea",{autoFocus:true,value:quickNote,onChange:e=>setQuickNote(e.target.value),onKeyDown:e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();saveHighlight();}if(e.key==="Escape"){setPendingSel(null);window.getSelection()?.removeAllRanges();}},placeholder:"Notitie — Enter=opslaan · Shift+Enter=nieuwe regel · Esc=sluiten",rows:2,style:{width:"100%",background:W.bg,border:`1px solid ${W.splitBg}`,borderRadius:"4px",padding:"8px 10px",color:W.fg,fontSize:"14px",outline:"none",resize:"none",marginBottom:"8px"}}),
             React.createElement("div",{style:{marginBottom:"12px"}},
-              React.createElement("div",{style:{fontSize:"10px",color:W.fgMuted,marginBottom:"4px"}},"tags:"),
+              React.createElement("div",{style:{fontSize:"14px",color:W.fgMuted,marginBottom:"4px"}},"tags:"),
               React.createElement(TagEditor,{tags:quickTags,onChange:setQuickTags,allTags:[...allTags,...allAnnotTags]})
             ),
             React.createElement("div",{style:{display:"flex",gap:"8px"}},
-              React.createElement("button",{onClick:saveHighlight,style:{background:activeColor.border,color:W.bg,border:"none",borderRadius:"4px",padding:"6px 16px",fontSize:"11px",cursor:"pointer",fontWeight:"bold"}},"✓ Opslaan"),
-              React.createElement("button",{onClick:()=>{setPendingSel(null);window.getSelection()?.removeAllRanges();},style:{background:"none",color:W.fgMuted,border:`1px solid ${W.splitBg}`,borderRadius:"4px",padding:"6px 12px",fontSize:"11px",cursor:"pointer"}},"Esc")
+              React.createElement("button",{onClick:saveHighlight,style:{background:activeColor.border,color:W.bg,border:"none",borderRadius:"4px",padding:"6px 16px",fontSize:"14px",cursor:"pointer",fontWeight:"bold"}},"✓ Opslaan"),
+              React.createElement("button",{onClick:()=>{setPendingSel(null);window.getSelection()?.removeAllRanges();},style:{background:"none",color:W.fgMuted,border:`1px solid ${W.splitBg}`,borderRadius:"4px",padding:"6px 12px",fontSize:"14px",cursor:"pointer"}},"Esc")
             )
           )
         )
@@ -2096,12 +2096,12 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
     }},
       React.createElement("div",{style:{background:W.bg2,borderBottom:`1px solid ${W.splitBg}`,padding:"6px 10px",display:"flex",alignItems:"center",gap:"6px",flexShrink:0}},
         React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:"1px",flex:1}},
-          React.createElement("span",{style:{fontSize:"11px",color:W.statusFg,letterSpacing:"1px"}},"ANNOTATIES"),
+          React.createElement("span",{style:{fontSize:"14px",color:W.statusFg,letterSpacing:"1px"}},"ANNOTATIES"),
           pdfFile&&React.createElement("span",{style:{fontSize:"9px",color:W.fgMuted,maxWidth:"180px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},pdfFile.name)
         ),
-        React.createElement("span",{style:{background:W.blue,color:W.bg,borderRadius:"10px",padding:"0 6px",fontSize:"10px"}},fileHl.length),
+        React.createElement("span",{style:{background:W.blue,color:W.bg,borderRadius:"10px",padding:"0 6px",fontSize:"14px"}},fileHl.length),
         React.createElement("div",{style:{flex:1}}),
-        filterTag&&React.createElement("button",{onClick:()=>setFilterTag(null),style:{background:"rgba(159,202,86,0.15)",color:W.comment,border:`1px solid rgba(159,202,86,0.3)`,borderRadius:"3px",fontSize:"10px",padding:"1px 6px",cursor:"pointer"}},"#",filterTag," ×"),
+        filterTag&&React.createElement("button",{onClick:()=>setFilterTag(null),style:{background:"rgba(159,202,86,0.15)",color:W.comment,border:`1px solid rgba(159,202,86,0.3)`,borderRadius:"3px",fontSize:"14px",padding:"1px 6px",cursor:"pointer"}},"#",filterTag," ×"),
         React.createElement("button",{onClick:()=>setShowAnnotPanel(false),style:{background:"none",border:"none",color:W.fgMuted,fontSize:"16px",cursor:"pointer",padding:"0 2px",lineHeight:1}}, "×")
       ),
       allAnnotTags.length>0&&React.createElement("div",{style:{padding:"5px 8px",borderBottom:`1px solid ${W.splitBg}`,background:"rgba(0,0,0,0.15)",flexShrink:0}},
@@ -2109,12 +2109,12 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
       ),
       React.createElement("div",{style:{flex:1,overflow:"auto"}},
         panelHl.length===0
-          ?React.createElement("div",{style:{padding:"24px 14px",color:W.fgMuted,fontSize:"11px",textAlign:"center",lineHeight:"2"}},
+          ?React.createElement("div",{style:{padding:"24px 14px",color:W.fgMuted,fontSize:"14px",textAlign:"center",lineHeight:"2"}},
               !pdfFile
               ? React.createElement(React.Fragment,null,
                   React.createElement("div",{style:{fontSize:"28px",marginBottom:"8px"}},"📄"),
                   React.createElement("div",{style:{color:W.fgDim,marginBottom:"4px"}},"Geen PDF geopend"),
-                  React.createElement("div",{style:{fontSize:"10px",color:W.splitBg,lineHeight:"1.7"}},
+                  React.createElement("div",{style:{fontSize:"14px",color:W.splitBg,lineHeight:"1.7"}},
                     "Open een PDF via de toolbar.","\n","Annotaties worden hier getoond.")
                 )
               : filterTag
@@ -2122,7 +2122,7 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
                 : React.createElement(React.Fragment,null,
                     React.createElement("div",{style:{fontSize:"20px",marginBottom:"8px"}},"✏"),
                     React.createElement("div",{style:{color:W.fgDim}},"Nog geen annotaties"),
-                    React.createElement("div",{style:{fontSize:"10px",color:W.splitBg,lineHeight:"1.7",marginTop:"4px"}},
+                    React.createElement("div",{style:{fontSize:"14px",color:W.splitBg,lineHeight:"1.7",marginTop:"4px"}},
                       "Selecteer tekst in de PDF","\n","om een annotatie te maken.")
                   ))
           :panelHl.map(h=>{
@@ -2130,8 +2130,8 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
             const isEditing=editingId===h.id;
             return React.createElement("div",{key:h.id,style:{borderBottom:`1px solid ${W.splitBg}`,borderLeft:`3px solid ${col.border}`,background:isEditing?"rgba(255,255,255,0.025)":"transparent"}},
               React.createElement("div",{style:{padding:"8px 10px",cursor:"pointer"},onClick:()=>setEditingId(isEditing?null:h.id)},
-                React.createElement("div",{style:{fontSize:"11px",color:W.string,fontStyle:"italic",lineHeight:"1.5",marginBottom:"3px"}},'"',h.text.substring(0,70),h.text.length>70?"…":"",'"'),
-                h.note&&!isEditing&&React.createElement("div",{style:{fontSize:"11px",color:W.fg,lineHeight:"1.4",marginBottom:"4px"}},h.note.substring(0,60),h.note.length>60?"…":""),
+                React.createElement("div",{style:{fontSize:"14px",color:W.string,fontStyle:"italic",lineHeight:"1.5",marginBottom:"3px"}},'"',h.text.substring(0,70),h.text.length>70?"…":"",'"'),
+                h.note&&!isEditing&&React.createElement("div",{style:{fontSize:"14px",color:W.fg,lineHeight:"1.4",marginBottom:"4px"}},h.note.substring(0,60),h.note.length>60?"…":""),
                 React.createElement("div",{style:{display:"flex",gap:"3px",flexWrap:"wrap",alignItems:"center"}},
                   ...(h.tags||[]).map(t=>React.createElement(TagPill,{key:t,tag:t,small:true})),
                   React.createElement("span",{style:{fontSize:"9px",color:W.fgMuted,marginLeft:"auto"}},"p.",h.page),
@@ -2140,13 +2140,13 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
               ),
               isEditing&&React.createElement("div",{style:{padding:"0 10px 12px",borderTop:`1px solid ${W.splitBg}`}},
                 React.createElement("div",{style:{fontSize:"9px",color:W.fgMuted,margin:"8px 0 4px",letterSpacing:"1px"}},"NOTITIE"),
-                React.createElement("textarea",{value:h.note||"",onChange:e=>updateHighlight(h.id,{note:e.target.value}),rows:3,style:{width:"100%",background:W.bg,border:`1px solid ${W.splitBg}`,borderRadius:"4px",padding:"6px 8px",color:W.fg,fontSize:"11px",outline:"none",resize:"vertical"},placeholder:"Notitie toevoegen…"}),
+                React.createElement("textarea",{value:h.note||"",onChange:e=>updateHighlight(h.id,{note:e.target.value}),rows:3,style:{width:"100%",background:W.bg,border:`1px solid ${W.splitBg}`,borderRadius:"4px",padding:"6px 8px",color:W.fg,fontSize:"14px",outline:"none",resize:"vertical"},placeholder:"Notitie toevoegen…"}),
                 React.createElement("div",{style:{fontSize:"9px",color:W.fgMuted,margin:"8px 0 4px",letterSpacing:"1px"}},"TAGS"),
                 React.createElement(TagEditor,{tags:h.tags||[],onChange:tags=>updateHighlight(h.id,{tags}),allTags:[...allTags,...allAnnotTags]}),
                 React.createElement("div",{style:{display:"flex",gap:"5px",margin:"8px 0"}},...HCOLORS.map(c=>React.createElement("button",{key:c.id,onClick:()=>updateHighlight(h.id,{colorId:c.id}),style:{width:"18px",height:"18px",borderRadius:"3px",background:c.bg,border:`2px solid ${h.colorId===c.id?c.border:W.splitBg}`,cursor:"pointer",padding:0}}))),
                 React.createElement("div",{style:{display:"flex",gap:"6px"}},
-                  React.createElement("button",{onClick:()=>setEditingId(null),style:{background:W.comment,color:W.bg,border:"none",borderRadius:"3px",padding:"3px 10px",fontSize:"10px",cursor:"pointer",fontWeight:"bold"}},"✓ klaar"),
-                  React.createElement("button",{onClick:()=>removeHighlight(h.id),style:{background:"none",color:W.orange,border:`1px solid rgba(229,120,109,0.3)`,borderRadius:"3px",padding:"3px 8px",fontSize:"10px",cursor:"pointer"}},":del")
+                  React.createElement("button",{onClick:()=>setEditingId(null),style:{background:W.comment,color:W.bg,border:"none",borderRadius:"3px",padding:"3px 10px",fontSize:"14px",cursor:"pointer",fontWeight:"bold"}},"✓ klaar"),
+                  React.createElement("button",{onClick:()=>removeHighlight(h.id),style:{background:"none",color:W.orange,border:`1px solid rgba(229,120,109,0.3)`,borderRadius:"3px",padding:"3px 8px",fontSize:"14px",cursor:"pointer"}},":del")
                 )
               )
             );
@@ -2176,37 +2176,37 @@ const VaultSettings = ({vaultPath, onChangeVault, onClose}) => {
   ,onClick:e=>{if(e.target===e.currentTarget)onClose();}},
     React.createElement("div",{style:{background:W.bg2,border:`1px solid ${W.splitBg}`,borderRadius:"8px",width:"500px",overflow:"hidden",boxShadow:"0 16px 64px rgba(0,0,0,0.8)"}},
       React.createElement("div",{style:{background:W.bg2,borderBottom:`1px solid ${W.splitBg}`,padding:"10px 16px",display:"flex",alignItems:"center"}},
-        React.createElement("span",{style:{color:W.statusFg,fontSize:"12px",letterSpacing:"1.5px",fontWeight:"bold"}},":VAULT INSTELLINGEN"),
+        React.createElement("span",{style:{color:W.statusFg,fontSize:"14px",letterSpacing:"1.5px",fontWeight:"bold"}},":VAULT INSTELLINGEN"),
         React.createElement("div",{style:{flex:1}}),
         React.createElement("button",{onClick:onClose,style:{background:"none",border:"none",color:W.fgMuted,fontSize:"18px",cursor:"pointer"}},"×")
       ),
       React.createElement("div",{style:{padding:"20px"}},
-        React.createElement("div",{style:{fontSize:"10px",color:W.comment,letterSpacing:"1.5px",marginBottom:"8px"}},"📁 VAULT MAP"),
-        React.createElement("div",{style:{fontSize:"11px",color:W.fgDim,lineHeight:"1.7",marginBottom:"12px"}},
+        React.createElement("div",{style:{fontSize:"14px",color:W.comment,letterSpacing:"1.5px",marginBottom:"8px"}},"📁 VAULT MAP"),
+        React.createElement("div",{style:{fontSize:"14px",color:W.fgDim,lineHeight:"1.7",marginBottom:"12px"}},
           "De vault map bevat alle notities (.md), PDF bestanden en annotaties.\nVerander het pad om een andere vault te gebruiken."
         ),
-        React.createElement("div",{style:{background:"rgba(0,0,0,0.25)",borderRadius:"4px",padding:"10px 12px",marginBottom:"12px",fontSize:"11px"}},
+        React.createElement("div",{style:{background:"rgba(0,0,0,0.25)",borderRadius:"4px",padding:"10px 12px",marginBottom:"12px",fontSize:"14px"}},
           React.createElement("div",{style:{color:W.fgMuted,marginBottom:"4px"}},"Huidige vault:"),
           React.createElement("div",{style:{color:W.yellow,wordBreak:"break-all"}},vaultPath),
-          React.createElement("div",{style:{color:W.fgMuted,fontSize:"10px",marginTop:"6px"}},"Structuur:"),
-          React.createElement("div",{style:{color:W.fgDim,fontSize:"10px",lineHeight:"1.8",marginTop:"2px"}},
+          React.createElement("div",{style:{color:W.fgMuted,fontSize:"14px",marginTop:"6px"}},"Structuur:"),
+          React.createElement("div",{style:{color:W.fgDim,fontSize:"14px",lineHeight:"1.8",marginTop:"2px"}},
             vaultPath+"/notes/      ← markdown notities\n"+
             vaultPath+"/pdfs/       ← pdf bestanden\n"+
             vaultPath+"/annotations/ ← pdf annotaties\n"+
             vaultPath+"/config.json  ← vault configuratie"
           )
         ),
-        React.createElement("div",{style:{fontSize:"10px",color:W.comment,letterSpacing:"1.5px",marginBottom:"8px"}},"📂 NIEUW PAD"),
+        React.createElement("div",{style:{fontSize:"14px",color:W.comment,letterSpacing:"1.5px",marginBottom:"8px"}},"📂 NIEUW PAD"),
         React.createElement("div",{style:{display:"flex",gap:"8px",marginBottom:"10px"}},
           React.createElement("input",{
             value:newPath,onChange:e=>setNewPath(e.target.value),
             placeholder:"/pad/naar/vault of ~/Zettelkasten",
-            style:{flex:1,background:W.bg,border:`1px solid ${W.splitBg}`,borderRadius:"4px",padding:"7px 10px",color:W.fg,fontSize:"12px",outline:"none"}
+            style:{flex:1,background:W.bg,border:`1px solid ${W.splitBg}`,borderRadius:"4px",padding:"7px 10px",color:W.fg,fontSize:"14px",outline:"none"}
           }),
-          React.createElement("button",{onClick:apply,style:{background:W.blue,color:W.bg,border:"none",borderRadius:"4px",padding:"7px 16px",fontSize:"11px",cursor:"pointer",fontWeight:"bold"}},"Toepassen")
+          React.createElement("button",{onClick:apply,style:{background:W.blue,color:W.bg,border:"none",borderRadius:"4px",padding:"7px 16px",fontSize:"14px",cursor:"pointer",fontWeight:"bold"}},"Toepassen")
         ),
-        msg&&React.createElement("div",{style:{fontSize:"11px",padding:"6px 10px",background:msg.startsWith("✓")?"rgba(159,202,86,0.1)":"rgba(229,120,109,0.1)",borderRadius:"3px",color:msg.startsWith("✓")?W.comment:W.orange}},msg),
-        React.createElement("div",{style:{marginTop:"16px",fontSize:"10px",color:W.fgMuted,lineHeight:"1.8",background:"rgba(0,0,0,0.15)",borderRadius:"4px",padding:"8px 12px"}},
+        msg&&React.createElement("div",{style:{fontSize:"14px",padding:"6px 10px",background:msg.startsWith("✓")?"rgba(159,202,86,0.1)":"rgba(229,120,109,0.1)",borderRadius:"3px",color:msg.startsWith("✓")?W.comment:W.orange}},msg),
+        React.createElement("div",{style:{marginTop:"16px",fontSize:"14px",color:W.fgMuted,lineHeight:"1.8",background:"rgba(0,0,0,0.15)",borderRadius:"4px",padding:"8px 12px"}},
           "💡 Tip: start de server met een ander vault pad:",React.createElement("br"),
           React.createElement("code",{style:{color:W.string}},"python3 server.py --vault /pad/naar/andere/vault"),
           React.createElement("br"),"of laat de gebruiker de locatie instellen via dit paneel."
@@ -2402,12 +2402,12 @@ const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote, setAiStatu
                padding:"8px 14px",display:"flex",alignItems:"center",
                gap:"10px",flexShrink:0,flexWrap:"wrap"}
       },
-        React.createElement("span",{style:{fontSize:"11px",color:W.statusFg,
+        React.createElement("span",{style:{fontSize:"14px",color:W.statusFg,
           letterSpacing:"1.5px",fontWeight:"bold"}},"AFBEELDINGEN"),
         React.createElement("span",{style:{background:W.blue,color:W.bg,
-          borderRadius:"10px",padding:"0 7px",fontSize:"10px"}}, imgs.length),
+          borderRadius:"10px",padding:"0 7px",fontSize:"14px"}}, imgs.length),
         activeImg && React.createElement("span",{
-          style:{fontSize:"10px",color:W.comment,background:"rgba(159,202,86,0.1)",
+          style:{fontSize:"14px",color:W.comment,background:"rgba(159,202,86,0.1)",
                  border:"1px solid rgba(159,202,86,0.3)",borderRadius:"4px",
                  padding:"2px 8px",maxWidth:"180px",overflow:"hidden",
                  textOverflow:"ellipsis",whiteSpace:"nowrap"}
@@ -2415,15 +2415,15 @@ const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote, setAiStatu
         activeImg && React.createElement("button",{
           onClick:()=>{ setActiveImg(null); setPendingPin(null); },
           style:{background:"none",border:`1px solid ${W.splitBg}`,color:W.fgMuted,
-                 borderRadius:"4px",padding:"2px 8px",fontSize:"10px",cursor:"pointer"}
+                 borderRadius:"4px",padding:"2px 8px",fontSize:"14px",cursor:"pointer"}
         },"× sluiten"),
         React.createElement("div",{style:{flex:1}}),
-        React.createElement("span",{style:{fontSize:"10px",color:W.fgMuted}},
+        React.createElement("span",{style:{fontSize:"14px",color:W.fgMuted}},
           activeImg ? "klik op afbeelding om een annotatie te plaatsen" : "klik ✏ om te annoteren"),
         React.createElement("button",{
           onClick:()=>fileRef.current?.click(),
           style:{background:W.blue,color:W.bg,border:"none",borderRadius:"6px",
-                 padding:"6px 14px",fontSize:"11px",cursor:"pointer",fontWeight:"bold"}
+                 padding:"6px 14px",fontSize:"14px",cursor:"pointer",fontWeight:"bold"}
         },"+ upload"),
         React.createElement("input",{
           ref:fileRef, type:"file", multiple:true, accept:"image/*",
@@ -2451,7 +2451,7 @@ const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote, setAiStatu
         },
           React.createElement("div",{style:{fontSize:"48px"}},"🖼"),
           React.createElement("div",{style:{fontSize:"15px",color:W.fgDim}},"Nog geen afbeeldingen"),
-          React.createElement("div",{style:{fontSize:"12px",textAlign:"center",lineHeight:"1.7"}},
+          React.createElement("div",{style:{fontSize:"14px",textAlign:"center",lineHeight:"1.7"}},
             "Sleep afbeeldingen hierheen of klik '+ upload'.\n",
             React.createElement("br"),
             "De AI maakt automatisch een beschrijving en een notitie aan."
@@ -2460,7 +2460,7 @@ const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote, setAiStatu
             onClick:()=>fileRef.current?.click(),
             style:{marginTop:"8px",background:"rgba(138,198,242,0.1)",
                    border:"1px solid rgba(138,198,242,0.3)",color:"#a8d8f0",
-                   borderRadius:"8px",padding:"10px 24px",fontSize:"13px",cursor:"pointer"}
+                   borderRadius:"8px",padding:"10px 24px",fontSize:"14px",cursor:"pointer"}
           },"+ afbeelding kiezen")
         ),
 
@@ -2508,7 +2508,7 @@ const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote, setAiStatu
                        boxShadow:"0 8px 32px rgba(0,0,0,0.8)"}
               },
                 // Notitietekst
-                React.createElement("div",{style:{fontSize:"11px",color:W.fgDim,
+                React.createElement("div",{style:{fontSize:"14px",color:W.fgDim,
                   marginBottom:"8px",padding:"6px 8px",background:col.bg,
                   borderRadius:"4px",fontStyle:"italic",lineHeight:"1.5",
                   borderLeft:`4px solid ${col.border}`}},
@@ -2522,7 +2522,7 @@ const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote, setAiStatu
                   placeholder:"Notitie…",
                   style:{width:"100%",background:W.bg,border:`1px solid ${W.splitBg}`,
                          borderRadius:"4px",padding:"6px 8px",color:W.fg,
-                         fontSize:"11px",outline:"none",resize:"none",marginBottom:"6px"}
+                         fontSize:"14px",outline:"none",resize:"none",marginBottom:"6px"}
                 }),
                 // Tags
                 React.createElement("div",{style:{fontSize:"9px",color:W.fgMuted,
@@ -2543,13 +2543,13 @@ const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote, setAiStatu
                   React.createElement("button",{
                     onClick:()=>setEditingId(null),
                     style:{background:W.comment,color:W.bg,border:"none",borderRadius:"3px",
-                           padding:"3px 10px",fontSize:"10px",cursor:"pointer",fontWeight:"bold"}
+                           padding:"3px 10px",fontSize:"14px",cursor:"pointer",fontWeight:"bold"}
                   },"✓ klaar"),
                   React.createElement("button",{
                     onClick:()=>removeAnnotation(a.id),
                     style:{background:"none",color:W.orange,
                            border:`1px solid rgba(229,120,109,0.3)`,
-                           borderRadius:"3px",padding:"3px 8px",fontSize:"10px",cursor:"pointer"}
+                           borderRadius:"3px",padding:"3px 8px",fontSize:"14px",cursor:"pointer"}
                   },":del")
                 )
               )
@@ -2603,30 +2603,30 @@ const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote, setAiStatu
                 isBusy && React.createElement("div",{
                   style:{position:"absolute",inset:0,background:"rgba(0,0,0,0.5)",
                          display:"flex",alignItems:"center",justifyContent:"center",
-                         color:"#a8d8f0",fontSize:"12px",gap:"6px"}
+                         color:"#a8d8f0",fontSize:"14px",gap:"6px"}
                 },"⏳ AI verwerkt…"),
                 // Annotatie-teller badge
                 annotCount>0 && React.createElement("div",{
                   style:{position:"absolute",top:"6px",right:"6px",
                          background:"rgba(229,120,109,0.85)",color:"white",
-                         borderRadius:"10px",padding:"1px 7px",fontSize:"10px",
+                         borderRadius:"10px",padding:"1px 7px",fontSize:"14px",
                          fontWeight:"bold",backdropFilter:"blur(4px)"}
                 },"📌 "+annotCount)
               ),
               // Info
               React.createElement("div",{style:{padding:"10px 12px",flex:1,
                 display:"flex",flexDirection:"column",gap:"6px"}},
-                React.createElement("div",{style:{fontSize:"11px",color:W.fg,
+                React.createElement("div",{style:{fontSize:"14px",color:W.fg,
                   fontWeight:"bold",overflow:"hidden",textOverflow:"ellipsis",
                   whiteSpace:"nowrap"}}, img.name),
                 desc
-                  ? React.createElement("div",{style:{fontSize:"11px",color:W.fgDim,
+                  ? React.createElement("div",{style:{fontSize:"14px",color:W.fgDim,
                       lineHeight:"1.55",flex:1}}, desc)
                   : React.createElement("button",{
                       onClick:()=>describeImage(img.name), disabled:!!busy,
                       style:{background:"rgba(138,198,242,0.07)",
                              border:"1px solid rgba(138,198,242,0.2)",color:"#a8d8f0",
-                             borderRadius:"4px",padding:"4px 10px",fontSize:"10px",
+                             borderRadius:"4px",padding:"4px 10px",fontSize:"14px",
                              cursor:busy?"not-allowed":"pointer",opacity:busy?0.5:1}
                     },"🧠 AI beschrijving genereren"),
                 // Acties
@@ -2635,14 +2635,14 @@ const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote, setAiStatu
                     onClick:()=>setLightbox(img.name),
                     style:{flex:1,background:"none",border:`1px solid ${W.splitBg}`,
                            color:W.fgMuted,borderRadius:"4px",padding:"4px",
-                           fontSize:"10px",cursor:"pointer"}
+                           fontSize:"14px",cursor:"pointer"}
                   },"🔍"),
                   React.createElement("button",{
                     onClick:()=>{ setActiveImg(img.name); setPendingPin(null); setEditingId(null); setFilterTag(null); },
                     style:{flex:1,background:"rgba(229,120,109,0.08)",
                            border:`1px solid rgba(229,120,109,0.2)`,
                            color:W.orange,borderRadius:"4px",padding:"4px",
-                           fontSize:"10px",cursor:"pointer"}
+                           fontSize:"14px",cursor:"pointer"}
                   },"✏ "+(annotCount>0?annotCount+" ann.":"annoteren")),
                   desc && onAddNote && React.createElement("button",{
                     onClick:async()=>{
@@ -2656,13 +2656,13 @@ const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote, setAiStatu
                     },
                     style:{flex:1,background:"rgba(138,198,242,0.08)",
                            border:"1px solid rgba(138,198,242,0.2)",color:"#a8d8f0",
-                           borderRadius:"4px",padding:"4px",fontSize:"10px",cursor:"pointer"}
+                           borderRadius:"4px",padding:"4px",fontSize:"14px",cursor:"pointer"}
                   },"📝"),
                   React.createElement("button",{
                     onClick:()=>deleteImg(img.name),
                     style:{background:"rgba(229,120,109,0.08)",
                            border:"1px solid rgba(229,120,109,0.2)",color:W.orange,
-                           borderRadius:"4px",padding:"4px 8px",fontSize:"10px",cursor:"pointer"}
+                           borderRadius:"4px",padding:"4px 8px",fontSize:"14px",cursor:"pointer"}
                   },"🗑")
                 )
               )
@@ -2702,20 +2702,20 @@ const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote, setAiStatu
         borderBottom:`1px solid ${W.splitBg}`,padding:"6px 10px",
         display:"flex",alignItems:"center",gap:"6px",flexShrink:0}},
         React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:"1px",flex:1}},
-          React.createElement("span",{style:{fontSize:"11px",color:W.statusFg,
+          React.createElement("span",{style:{fontSize:"14px",color:W.statusFg,
             letterSpacing:"1px"}},"ANNOTATIES"),
           React.createElement("span",{style:{fontSize:"9px",color:W.fgMuted,
             maxWidth:"180px",overflow:"hidden",textOverflow:"ellipsis",
             whiteSpace:"nowrap"}}, activeImg)
         ),
         React.createElement("span",{style:{background:W.blue,color:W.bg,
-          borderRadius:"10px",padding:"0 6px",fontSize:"10px"}}, fileAnnots.length),
+          borderRadius:"10px",padding:"0 6px",fontSize:"14px"}}, fileAnnots.length),
         React.createElement("div",{style:{flex:1}}),
         filterTag && React.createElement("button",{
           onClick:()=>setFilterTag(null),
           style:{background:"rgba(159,202,86,0.15)",color:W.comment,
                  border:`1px solid rgba(159,202,86,0.3)`,
-                 borderRadius:"3px",fontSize:"10px",padding:"1px 6px",cursor:"pointer"}
+                 borderRadius:"3px",fontSize:"14px",padding:"1px 6px",cursor:"pointer"}
         },"#",filterTag," ×"),
         React.createElement("button",{
           onClick:()=>setShowAnnotPanel(false),
@@ -2734,7 +2734,7 @@ const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote, setAiStatu
           letterSpacing:"1px",marginBottom:"8px",fontWeight:"bold"}},"📌 NIEUWE ANNOTATIE"),
         React.createElement("div",{style:{display:"flex",gap:"5px",
           marginBottom:"8px",alignItems:"center"}},
-          React.createElement("span",{style:{fontSize:"10px",color:W.fgMuted,
+          React.createElement("span",{style:{fontSize:"14px",color:W.fgMuted,
             marginRight:"2px"}},"kleur:"),
           ...HCOLORS.map(c=>React.createElement("button",{key:c.id,
             onClick:()=>setActiveColor(c),
@@ -2754,7 +2754,7 @@ const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote, setAiStatu
           rows:2,
           style:{width:"100%",background:W.bg,border:`1px solid ${W.splitBg}`,
                  borderRadius:"4px",padding:"6px 8px",color:W.fg,
-                 fontSize:"11px",outline:"none",resize:"none",marginBottom:"6px"}
+                 fontSize:"14px",outline:"none",resize:"none",marginBottom:"6px"}
         }),
         React.createElement(TagEditor,{tags:quickTags,onChange:setQuickTags,
           allTags:[...(allTags||[]),...allAnnotTags]}),
@@ -2762,13 +2762,13 @@ const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote, setAiStatu
           React.createElement("button",{
             onClick:addAnnotation,
             style:{background:activeColor.border,color:W.bg,border:"none",
-                   borderRadius:"4px",padding:"5px 14px",fontSize:"11px",
+                   borderRadius:"4px",padding:"5px 14px",fontSize:"14px",
                    cursor:"pointer",fontWeight:"bold"}
           },"✓ Opslaan"),
           React.createElement("button",{
             onClick:()=>setPendingPin(null),
             style:{background:"none",color:W.fgMuted,border:`1px solid ${W.splitBg}`,
-                   borderRadius:"4px",padding:"5px 10px",fontSize:"11px",cursor:"pointer"}
+                   borderRadius:"4px",padding:"5px 10px",fontSize:"14px",cursor:"pointer"}
           },"✕ Annuleren")
         )
       ),
@@ -2780,13 +2780,13 @@ const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote, setAiStatu
       React.createElement("div",{style:{flex:1,overflow:"auto"}},
         panelAnnots.length===0
           ? React.createElement("div",{style:{padding:"24px 14px",color:W.fgMuted,
-              fontSize:"11px",textAlign:"center",lineHeight:"2"}},
+              fontSize:"14px",textAlign:"center",lineHeight:"2"}},
               filterTag
                 ? `Geen annotaties met #${filterTag}`
                 : React.createElement(React.Fragment,null,
                     React.createElement("div",{style:{fontSize:"20px",marginBottom:"8px"}},"📌"),
                     React.createElement("div",{style:{color:W.fgDim}},"Nog geen annotaties"),
-                    React.createElement("div",{style:{fontSize:"10px",color:W.splitBg,
+                    React.createElement("div",{style:{fontSize:"14px",color:W.splitBg,
                       lineHeight:"1.7",marginTop:"4px"}},
                       "Klik op de afbeelding\nom een pin te plaatsen.")
                   ))
@@ -2802,7 +2802,7 @@ const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote, setAiStatu
                   style:{padding:"8px 10px",cursor:"pointer"},
                   onClick:()=>setEditingId(isEditing?null:a.id)
                 },
-                  React.createElement("div",{style:{fontSize:"11px",color:W.fg,
+                  React.createElement("div",{style:{fontSize:"14px",color:W.fg,
                     lineHeight:"1.5",marginBottom:"3px"}},
                     a.note||(React.createElement("span",{style:{color:W.fgMuted,fontStyle:"italic"}},"(geen notitie)"))),
                   React.createElement("div",{style:{display:"flex",gap:"3px",
@@ -2824,7 +2824,7 @@ const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote, setAiStatu
                     rows:3,
                     style:{width:"100%",background:W.bg,border:`1px solid ${W.splitBg}`,
                            borderRadius:"4px",padding:"6px 8px",color:W.fg,
-                           fontSize:"11px",outline:"none",resize:"vertical"},
+                           fontSize:"14px",outline:"none",resize:"vertical"},
                     placeholder:"Notitie toevoegen…"
                   }),
                   React.createElement("div",{style:{fontSize:"9px",color:W.fgMuted,
@@ -2843,13 +2843,13 @@ const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote, setAiStatu
                     React.createElement("button",{
                       onClick:()=>setEditingId(null),
                       style:{background:W.comment,color:W.bg,border:"none",borderRadius:"3px",
-                             padding:"3px 10px",fontSize:"10px",cursor:"pointer",fontWeight:"bold"}
+                             padding:"3px 10px",fontSize:"14px",cursor:"pointer",fontWeight:"bold"}
                     },"✓ klaar"),
                     React.createElement("button",{
                       onClick:()=>removeAnnotation(a.id),
                       style:{background:"none",color:W.orange,
                              border:`1px solid rgba(229,120,109,0.3)`,
-                             borderRadius:"3px",padding:"3px 8px",fontSize:"10px",cursor:"pointer"}
+                             borderRadius:"3px",padding:"3px 8px",fontSize:"14px",cursor:"pointer"}
                     },":del")
                   )
                 )
@@ -2880,7 +2880,7 @@ const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote, setAiStatu
       React.createElement("div",{
         style:{position:"absolute",bottom:"16px",left:"50%",
                transform:"translateX(-50%)",color:"rgba(255,255,255,0.7)",
-               fontSize:"12px",background:"rgba(0,0,0,0.5)",padding:"4px 12px",
+               fontSize:"14px",background:"rgba(0,0,0,0.5)",padding:"4px 12px",
                borderRadius:"12px"}
       }, lightbox)
     )
@@ -2968,14 +2968,14 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages}) => {
       padding:"10px 16px", display:"flex", alignItems:"center",
       gap:"10px", flexShrink:0, flexWrap:"wrap"
     }},
-      React.createElement("span",{style:{fontSize:"11px",color:W.statusFg,
+      React.createElement("span",{style:{fontSize:"14px",color:W.statusFg,
         letterSpacing:"1.5px",fontWeight:"bold"}},"🌐 WEB IMPORT"),
-      React.createElement("span",{style:{fontSize:"10px",color:W.fgMuted}}),
+      React.createElement("span",{style:{fontSize:"14px",color:W.fgMuted}}),
       React.createElement("div",{style:{flex:1}}),
       preview && !saved && React.createElement("button",{
         onClick:reset,
         style:{background:"none",border:`1px solid ${W.splitBg}`,color:W.fgMuted,
-               borderRadius:"4px",padding:"4px 10px",fontSize:"10px",cursor:"pointer"}
+               borderRadius:"4px",padding:"4px 10px",fontSize:"14px",cursor:"pointer"}
       },"+ nieuwe import")
     ),
 
@@ -2990,7 +2990,7 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages}) => {
         textAlign:"center",lineHeight:"1.6",maxWidth:"460px"}},
         "Plak een URL om de inhoud te importeren als Zettelkasten-notitie.",
         React.createElement("br"),
-        React.createElement("span",{style:{fontSize:"12px",color:W.fgMuted}},
+        React.createElement("span",{style:{fontSize:"14px",color:W.fgMuted}},
           "De AI verwijdert navigatie, advertenties en rommel — zoals Instapaper.")),
 
       // URL invoer
@@ -3015,13 +3015,13 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages}) => {
           disabled:busy||!url.trim(),
           style:{background:W.blue, color:W.bg, border:"none",
                  borderRadius:"6px", padding:"10px 22px",
-                 fontSize:"13px", fontWeight:"bold", cursor:"pointer",
+                 fontSize:"14px", fontWeight:"bold", cursor:"pointer",
                  opacity:busy||!url.trim()?0.5:1, whiteSpace:"nowrap"}
         }, busy ? "⏳ ophalen…" : "→ Importeren")
       ),
 
       error && React.createElement("div",{style:{
-        color:W.orange, fontSize:"12px", background:"rgba(229,120,109,0.08)",
+        color:W.orange, fontSize:"14px", background:"rgba(229,120,109,0.08)",
         border:`1px solid rgba(229,120,109,0.25)`, borderRadius:"6px",
         padding:"10px 16px", maxWidth:"560px", width:"100%"
       }}, "⚠ "+error)
@@ -3050,7 +3050,7 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages}) => {
             onChange:e=>setEditTitle(e.target.value),
             style:{background:W.bg, border:`1px solid ${W.splitBg}`,
                    borderRadius:"4px", padding:"6px 10px", color:W.fg,
-                   fontSize:"13px", outline:"none", fontWeight:"bold"}
+                   fontSize:"14px", outline:"none", fontWeight:"bold"}
           }),
           React.createElement("div",{style:{fontSize:"9px",color:W.fgMuted,
             letterSpacing:"1px",marginTop:"4px"}},"TAGS"),
@@ -3071,7 +3071,7 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages}) => {
             onChange:e=>setEditMd(e.target.value),
             spellCheck:false,
             style:{flex:1, background:W.bg, border:"none", padding:"14px 16px",
-                   color:W.fg, fontSize:"12px", lineHeight:"1.7",
+                   color:W.fg, fontSize:"14px", lineHeight:"1.7",
                    outline:"none", resize:"none", fontFamily:"'Hack','Courier New',monospace"}
           })
         )
@@ -3085,7 +3085,7 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages}) => {
       }},
         React.createElement("div",{style:{fontSize:"9px",color:W.fgMuted,
           letterSpacing:"1px"}},"BRON"),
-        React.createElement("div",{style:{fontSize:"11px",color:W.blue,
+        React.createElement("div",{style:{fontSize:"14px",color:W.blue,
           wordBreak:"break-all",lineHeight:"1.5"}}, preview.url),
 
         // Afbeeldingen selecteren
@@ -3175,7 +3175,7 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages}) => {
 
         React.createElement("div",{style:{fontSize:"9px",color:W.fgMuted,
           letterSpacing:"1px"}},"STATISTIEKEN"),
-        React.createElement("div",{style:{fontSize:"11px",color:W.fgDim,lineHeight:"1.8"}},
+        React.createElement("div",{style:{fontSize:"14px",color:W.fgDim,lineHeight:"1.8"}},
           "📝 "+editMd.length+" tekens",
           React.createElement("br"),
           "📄 "+editMd.split("\n").filter(Boolean).length+" regels",
@@ -3188,7 +3188,7 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages}) => {
         React.createElement("button",{
           onClick:saveNote,
           style:{background:W.comment, color:W.bg, border:"none",
-                 borderRadius:"6px", padding:"10px 0", fontSize:"12px",
+                 borderRadius:"6px", padding:"10px 0", fontSize:"14px",
                  fontWeight:"bold", cursor:"pointer", width:"100%"}
         },"✓ Opslaan als notitie"),
 
@@ -3196,7 +3196,7 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages}) => {
           onClick:reset,
           style:{background:"none", color:W.fgMuted,
                  border:`1px solid ${W.splitBg}`,
-                 borderRadius:"6px", padding:"8px 0", fontSize:"11px",
+                 borderRadius:"6px", padding:"8px 0", fontSize:"14px",
                  cursor:"pointer", width:"100%"}
         },"✕ Annuleren")
       )
@@ -3211,13 +3211,13 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages}) => {
       React.createElement("div",{style:{fontSize:"48px"}},"✓"),
       React.createElement("div",{style:{fontSize:"16px",color:W.comment,fontWeight:"bold"}},
         "Opgeslagen als notitie"),
-      React.createElement("div",{style:{fontSize:"12px",color:W.fgDim}},
+      React.createElement("div",{style:{fontSize:"14px",color:W.fgDim}},
         editTitle),
       React.createElement("div",{style:{display:"flex",gap:"10px",marginTop:"8px"}},
         React.createElement("button",{
           onClick:reset,
           style:{background:W.blue,color:W.bg,border:"none",borderRadius:"6px",
-                 padding:"8px 20px",fontSize:"12px",fontWeight:"bold",cursor:"pointer"}
+                 padding:"8px 20px",fontSize:"14px",fontWeight:"bold",cursor:"pointer"}
         },"+ nieuw importeren")
       )
     )
@@ -3553,19 +3553,19 @@ const MermaidPreviewBlock = ({ code, onEdit }) => {
       background:"rgba(159,202,86,0.06)",
       borderBottom:`1px solid rgba(159,202,86,0.2)`
     }},
-      React.createElement("span",{style:{fontSize:"11px",color:W.comment,
+      React.createElement("span",{style:{fontSize:"14px",color:W.comment,
         fontWeight:"600",letterSpacing:"1px"}},"🌿 MINDMAP"),
       React.createElement("div",{style:{flex:1}}),
       React.createElement("button",{
         onClick:()=>setExpanded(v=>!v),
         style:{background:"none",border:"none",color:W.fgMuted,
-               fontSize:"10px",cursor:"pointer",padding:"2px 6px"}
+               fontSize:"14px",cursor:"pointer",padding:"2px 6px"}
       }, expanded ? "⊟ inklappen" : "⊞ uitvouwen"),
       onEdit && React.createElement("button",{
         onClick: onEdit,
         style:{background:"rgba(138,198,242,0.1)",
                border:"1px solid rgba(138,198,242,0.3)",
-               color:W.blue,borderRadius:"4px",fontSize:"10px",
+               color:W.blue,borderRadius:"4px",fontSize:"14px",
                cursor:"pointer",padding:"2px 8px"}
       }, "✏ bewerken")
     ),
@@ -4238,7 +4238,7 @@ const MermaidEditor = ({ initialText="", onSave, onCancel, notes=[], serverPdfs=
         placeholder:"Zoeken…",
         style:{width:"100%", background:"rgba(255,255,255,0.06)",
                border:`1px solid ${W.splitBg}`, borderRadius:"5px",
-               padding:"5px 9px", color:W.fg, fontSize:"12px",
+               padding:"5px 9px", color:W.fg, fontSize:"14px",
                outline:"none", fontFamily:"inherit"}
       })
     ),
@@ -4262,7 +4262,7 @@ const MermaidEditor = ({ initialText="", onSave, onCancel, notes=[], serverPdfs=
                    borderBottom:`1px solid rgba(255,255,255,0.03)`,
                    display:"flex", flexDirection:"column", gap:"1px"}
           },
-            React.createElement("span",{style:{fontSize:"12px",color:W.fg,
+            React.createElement("span",{style:{fontSize:"14px",color:W.fg,
               overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},n.title),
             (n.tags||[]).length>0 && React.createElement("span",{
               style:{fontSize:"9px",color:W.comment}},(n.tags||[]).map(t=>"#"+t).join("  "))
@@ -4286,8 +4286,8 @@ const MermaidEditor = ({ initialText="", onSave, onCancel, notes=[], serverPdfs=
                    borderBottom:`1px solid rgba(255,255,255,0.03)`,
                    display:"flex", alignItems:"center", gap:"8px"}
           },
-            React.createElement("span",{style:{fontSize:"13px"}},"📄"),
-            React.createElement("span",{style:{fontSize:"12px",color:W.fgDim,
+            React.createElement("span",{style:{fontSize:"14px"}},"📄"),
+            React.createElement("span",{style:{fontSize:"14px",color:W.fgDim,
               overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1}},p.name)
           ))
         );
@@ -4309,8 +4309,8 @@ const MermaidEditor = ({ initialText="", onSave, onCancel, notes=[], serverPdfs=
                    borderBottom:`1px solid rgba(255,255,255,0.03)`,
                    display:"flex", alignItems:"center", gap:"8px"}
           },
-            React.createElement("span",{style:{fontSize:"13px"}},"🖼"),
-            React.createElement("span",{style:{fontSize:"12px",color:W.fgDim,
+            React.createElement("span",{style:{fontSize:"14px"}},"🖼"),
+            React.createElement("span",{style:{fontSize:"14px",color:W.fgDim,
               overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1}},img.name)
           ))
         );
@@ -4319,7 +4319,7 @@ const MermaidEditor = ({ initialText="", onSave, onCancel, notes=[], serverPdfs=
       [notes, serverPdfs, serverImages].every(arr =>
         !arr.filter(x => !linkSearch || (x.title||x.name||"").toLowerCase().includes(linkSearch.toLowerCase())).length
       ) && React.createElement("div",{style:{padding:"20px",color:W.fgMuted,
-        fontSize:"11px",textAlign:"center"}},"Geen resultaten")
+        fontSize:"14px",textAlign:"center"}},"Geen resultaten")
     )
   );
 
@@ -4359,7 +4359,7 @@ const MermaidEditor = ({ initialText="", onSave, onCancel, notes=[], serverPdfs=
           border: `1px solid ${editorMode==="INSERT" ? W.comment : W.splitBg}`,
           borderRadius:"6px", padding:"4px 10px",
           color: editorMode==="INSERT" ? W.comment : W.fgMuted,
-          fontSize:"11px", cursor:"pointer", flexShrink:0,
+          fontSize:"14px", cursor:"pointer", flexShrink:0,
         }
       }, "✏ bewerken"),
 
@@ -4373,7 +4373,7 @@ const MermaidEditor = ({ initialText="", onSave, onCancel, notes=[], serverPdfs=
             border:`1px solid ${showLink?"rgba(138,198,242,0.4)":W.splitBg}`,
             borderRadius:"6px", padding:"4px 10px",
             color: showLink?W.blue:W.fgMuted,
-            fontSize:"11px", cursor:"pointer", flexShrink:0,
+            fontSize:"14px", cursor:"pointer", flexShrink:0,
           }
         }, "🔗 koppelen"),
         linkDropdown
@@ -4386,7 +4386,7 @@ const MermaidEditor = ({ initialText="", onSave, onCancel, notes=[], serverPdfs=
         style:{
           background:"none", border:`1px solid ${W.splitBg}`,
           borderRadius:"6px", padding:"4px 10px",
-          color:W.fgMuted, fontSize:"11px",
+          color:W.fgMuted, fontSize:"14px",
           cursor:"pointer", flexShrink:0,
         }
       }, "✦ nieuw"),
@@ -4400,7 +4400,7 @@ const MermaidEditor = ({ initialText="", onSave, onCancel, notes=[], serverPdfs=
           border:`1px solid ${showPreview?"rgba(138,198,242,0.35)":W.splitBg}`,
           borderRadius:"6px", padding:"4px 10px",
           color: showPreview?W.blue:W.fgMuted,
-          fontSize:"11px", cursor:"pointer", flexShrink:0,
+          fontSize:"14px", cursor:"pointer", flexShrink:0,
         }
       }, showPreview ? "⊟ preview" : "⊞ preview"),
 
@@ -4410,13 +4410,13 @@ const MermaidEditor = ({ initialText="", onSave, onCancel, notes=[], serverPdfs=
         style:{
           background:W.comment, border:`1px solid ${W.comment}`,
           borderRadius:"6px", padding:"4px 10px",
-          color:W.bg, fontSize:"11px", fontWeight:"bold",
+          color:W.bg, fontSize:"14px", fontWeight:"bold",
           cursor:saving?"default":"pointer", flexShrink:0,
         }
       }, saving ? "⏳…" : "✓ opslaan"),
 
       saveMsg && React.createElement("span",{style:{
-        fontSize:"10px", flexShrink:0,
+        fontSize:"14px", flexShrink:0,
         color:saveMsg.startsWith("✓")?W.comment:W.orange,
       }}, saveMsg),
 
@@ -4426,7 +4426,7 @@ const MermaidEditor = ({ initialText="", onSave, onCancel, notes=[], serverPdfs=
         style:{
           background:"none", border:`1px solid ${W.splitBg}`,
           borderRadius:"6px", padding:"4px 10px",
-          color:W.fgMuted, fontSize:"11px",
+          color:W.fgMuted, fontSize:"14px",
           cursor:"pointer", flexShrink:0,
         }
       }, "✕ sluiten"),
@@ -5291,7 +5291,7 @@ const MindMap = ({notes, allTags, onSelectNote, aiMindmap, onAddNote, serverPdfs
                      : opt.id==="ai" ? (aiMode&&mmView==="canvas")
                      : (!aiMode&&mmView==="canvas"))
                 ? "#a8d8f0" : W.fgMuted,
-              borderRadius:"4px",padding:"3px 6px",fontSize:"10px",cursor:"pointer"
+              borderRadius:"4px",padding:"3px 6px",fontSize:"14px",cursor:"pointer"
             }
           },opt.label)
         )
@@ -5323,21 +5323,21 @@ const MindMap = ({notes, allTags, onSelectNote, aiMindmap, onAddNote, serverPdfs
               : "linear-gradient(135deg,rgba(159,202,86,0.22),rgba(159,202,86,0.12))",
             border:`1px solid rgba(159,202,86,${saving?0.15:0.45})`,
             borderRadius:"5px", color:saving?W.fgMuted:W.comment,
-            fontSize:"11px", fontWeight:"600", cursor:saving?"default":"pointer",
+            fontSize:"14px", fontWeight:"600", cursor:saving?"default":"pointer",
             display:"flex", alignItems:"center", justifyContent:"center", gap:"5px",
             transition:"all 0.15s",
           }
         },
           saving
             ? React.createElement(React.Fragment,null,
-                React.createElement("span",{style:{fontSize:"12px"}},"⏳"),
+                React.createElement("span",{style:{fontSize:"14px"}},"⏳"),
                 "Opslaan…")
             : React.createElement(React.Fragment,null,
-                React.createElement("span",{style:{fontSize:"12px"}},"💾"),
+                React.createElement("span",{style:{fontSize:"14px"}},"💾"),
                 "Opslaan als notitie")
         ),
         saveMsg && React.createElement("div",{style:{
-          marginTop:"5px", fontSize:"10px", textAlign:"center",
+          marginTop:"5px", fontSize:"14px", textAlign:"center",
           color: saveMsg.startsWith("✓") ? W.comment : W.orange,
         }}, saveMsg)
       ),
@@ -5349,7 +5349,7 @@ const MindMap = ({notes, allTags, onSelectNote, aiMindmap, onAddNote, serverPdfs
             style:{background:mode===m.id?"rgba(138,198,242,0.18)":"none",
                    border:`1px solid ${mode===m.id?"rgba(138,198,242,0.5)":W.splitBg}`,
                    color:mode===m.id?"#a8d8f0":W.fgMuted,
-                   borderRadius:"4px",padding:"2px 8px",fontSize:"10px",cursor:"pointer"}
+                   borderRadius:"4px",padding:"2px 8px",fontSize:"14px",cursor:"pointer"}
           },m.label))
       ),
 
@@ -5364,7 +5364,7 @@ const MindMap = ({notes, allTags, onSelectNote, aiMindmap, onAddNote, serverPdfs
               style:{background:layout===l.id?"rgba(138,198,242,0.18)":"none",
                      border:`1px solid ${layout===l.id?"rgba(138,198,242,0.5)":W.splitBg}`,
                      color:layout===l.id?"#a8d8f0":W.fgMuted,
-                     borderRadius:"4px",padding:"2px 10px",fontSize:"12px",cursor:"pointer"}
+                     borderRadius:"4px",padding:"2px 10px",fontSize:"14px",cursor:"pointer"}
             },l.label))
         ),
         // Weergave (tags/notities toggle alleen zinvol in vault-modus)
@@ -5375,7 +5375,7 @@ const MindMap = ({notes, allTags, onSelectNote, aiMindmap, onAddNote, serverPdfs
               style:{background:val?"rgba(138,198,242,0.12)":"none",
                      border:`1px solid ${val?"rgba(138,198,242,0.4)":W.splitBg}`,
                      color:val?"#a8d8f0":W.fgMuted,
-                     borderRadius:"4px",padding:"2px 9px",fontSize:"10px",cursor:"pointer"}
+                     borderRadius:"4px",padding:"2px 9px",fontSize:"14px",cursor:"pointer"}
             },val?"✓ "+label:"○ "+label))
         ),
         // Tag filter: alleen in vault-modus
@@ -5394,16 +5394,16 @@ const MindMap = ({notes, allTags, onSelectNote, aiMindmap, onAddNote, serverPdfs
         React.createElement("button",{onClick:addCustomNode,
           style:{background:"rgba(138,198,242,0.1)",border:`1px solid rgba(138,198,242,0.3)`,
                  color:"#a8d8f0",borderRadius:"4px",padding:"3px 9px",
-                 fontSize:"10px",cursor:"pointer"}
+                 fontSize:"14px",cursor:"pointer"}
         },"+ knoop"),
         selId&&selId!=="root"&&React.createElement("button",{onClick:deleteSelected,
           style:{background:"rgba(229,120,109,0.08)",border:`1px solid rgba(229,120,109,0.25)`,
                  color:W.orange,borderRadius:"4px",padding:"3px 9px",
-                 fontSize:"10px",cursor:"pointer"}
+                 fontSize:"14px",cursor:"pointer"}
         },"✕ verwijder"),
         React.createElement("button",{onClick:()=>aiMode?buildAiLayout():buildLayout(),
           style:{background:"none",border:`1px solid ${W.splitBg}`,color:W.fgMuted,
-                 borderRadius:"4px",padding:"3px 9px",fontSize:"10px",cursor:"pointer"}
+                 borderRadius:"4px",padding:"3px 9px",fontSize:"14px",cursor:"pointer"}
         },"↺ reset"),
         React.createElement("div",{style:{fontSize:"9px",color:W.fgMuted,
           width:"100%",marginTop:"2px"}},"dubbelklik = hernoemen · sleep = verplaatsen")
@@ -5421,7 +5421,7 @@ const MindMap = ({notes, allTags, onSelectNote, aiMindmap, onAddNote, serverPdfs
       },"−"),
       React.createElement("span",{
         onClick:()=>{setZoom(1);setPan({x:0,y:0});},
-        style:{fontSize:"10px",color:W.fgMuted,cursor:"pointer",minWidth:"38px",textAlign:"center"}
+        style:{fontSize:"14px",color:W.fgMuted,cursor:"pointer",minWidth:"38px",textAlign:"center"}
       },Math.round(zoom*100)+"%"),
       React.createElement("button",{onClick:()=>setZoom(z=>Math.min(3,z*1.2)),
         style:{background:W.bg2,border:`1px solid ${W.splitBg}`,color:W.fg,
@@ -5436,17 +5436,17 @@ const MindMap = ({notes, allTags, onSelectNote, aiMindmap, onAddNote, serverPdfs
              borderRadius:"8px",padding:"10px 14px",maxWidth:"220px",
              backdropFilter:"blur(6px)"}
     },
-      React.createElement("div",{style:{fontSize:"10px",color:selNode.color||W.fgMuted,
+      React.createElement("div",{style:{fontSize:"14px",color:selNode.color||W.fgMuted,
         letterSpacing:"1px",marginBottom:"4px"}},
         selNode.type==="root"?"ROOT":selNode.type==="tag"?"TAG":"NOTITIE"),
-      React.createElement("div",{style:{fontSize:"12px",color:W.fg,
+      React.createElement("div",{style:{fontSize:"14px",color:W.fg,
         fontWeight:"bold",wordBreak:"break-word",marginBottom:"6px"}},
         selNode.fullLabel||selNode.label),
       selNode.type==="note"&&selNode.noteId&&React.createElement("button",{
         onClick:()=>onSelectNote?.(selNode.noteId),
         style:{background:"rgba(138,198,242,0.1)",border:"1px solid rgba(138,198,242,0.3)",
                color:"#a8d8f0",borderRadius:"4px",padding:"4px 10px",
-               fontSize:"10px",cursor:"pointer",width:"100%"}
+               fontSize:"14px",cursor:"pointer",width:"100%"}
       },"→ open notitie")
     ),
 
@@ -5464,7 +5464,7 @@ const MindMap = ({notes, allTags, onSelectNote, aiMindmap, onAddNote, serverPdfs
                display:"flex",flexDirection:"column",gap:"10px",
                minWidth:"260px",boxShadow:"0 8px 32px rgba(0,0,0,0.7)"}
       },
-        React.createElement("div",{style:{fontSize:"11px",color:"rgba(138,198,242,0.6)",
+        React.createElement("div",{style:{fontSize:"14px",color:"rgba(138,198,242,0.6)",
           letterSpacing:"1.5px"}},"LABEL BEWERKEN"),
         React.createElement("input",{
           ref:editRef,
@@ -5483,12 +5483,12 @@ const MindMap = ({notes, allTags, onSelectNote, aiMindmap, onAddNote, serverPdfs
             style:{flex:1,background:"rgba(138,198,242,0.15)",
                    border:"1px solid rgba(138,198,242,0.4)",
                    color:"#a8d8f0",borderRadius:"5px",padding:"6px",
-                   fontSize:"12px",cursor:"pointer",fontWeight:"bold"}
+                   fontSize:"14px",cursor:"pointer",fontWeight:"bold"}
           },"✓ opslaan"),
           React.createElement("button",{onClick:()=>setEditingId(null),
             style:{background:"none",border:`1px solid ${W.splitBg}`,
                    color:W.fgMuted,borderRadius:"5px",padding:"6px 12px",
-                   fontSize:"12px",cursor:"pointer"}
+                   fontSize:"14px",cursor:"pointer"}
           },"Esc")
         )
       )
@@ -5498,7 +5498,7 @@ const MindMap = ({notes, allTags, onSelectNote, aiMindmap, onAddNote, serverPdfs
     React.createElement("div",{
       style:{position:"absolute",bottom:"14px",left:"50%",transform:"translateX(-50%)",
              background:"rgba(28,28,28,0.85)",border:`1px solid ${W.splitBg}`,
-             borderRadius:"6px",padding:"5px 14px",fontSize:"10px",color:W.fgMuted,
+             borderRadius:"6px",padding:"5px 14px",fontSize:"14px",color:W.fgMuted,
              display:"flex",gap:"14px",backdropFilter:"blur(8px)"}
     },
       React.createElement("span",null,"⊙ root"),
@@ -5847,7 +5847,7 @@ const LLMNotebook = ({notes, pdfNotes, serverPdfs, serverImages, allTags, onAddN
                padding:"10px 12px",flexShrink:0}
       },
         React.createElement("div", {style:{display:"flex",alignItems:"center",gap:"8px",marginBottom:"8px"}},
-          React.createElement("span", {style:{fontSize:"11px",fontWeight:"bold",
+          React.createElement("span", {style:{fontSize:"14px",fontWeight:"bold",
             color:W.statusFg,letterSpacing:"1.5px",flex:1}}, "KENNISCONTEXT"),
           isMobileView && React.createElement("button", {
             onClick:()=>setShowContext(false),
@@ -5859,12 +5859,12 @@ const LLMNotebook = ({notes, pdfNotes, serverPdfs, serverImages, allTags, onAddN
           React.createElement("button", {
             onClick:selectAllNotes,
             style:{background:"rgba(138,198,242,0.1)",border:`1px solid rgba(138,198,242,0.25)`,
-                   color:"#a8d8f0",borderRadius:"4px",padding:"3px 8px",fontSize:"10px",cursor:"pointer"}
+                   color:"#a8d8f0",borderRadius:"4px",padding:"3px 8px",fontSize:"14px",cursor:"pointer"}
           }, "✓ alle notities"),
           React.createElement("button", {
             onClick:selectNone,
             style:{background:"rgba(229,120,109,0.08)",border:`1px solid rgba(229,120,109,0.2)`,
-                   color:W.orange,borderRadius:"4px",padding:"3px 8px",fontSize:"10px",cursor:"pointer"}
+                   color:W.orange,borderRadius:"4px",padding:"3px 8px",fontSize:"14px",cursor:"pointer"}
           }, "✕ wis alles")
         ),
         allNoteTags.length > 0 && React.createElement("div",{style:{marginTop:"8px"}},
@@ -5905,7 +5905,7 @@ const LLMNotebook = ({notes, pdfNotes, serverPdfs, serverImages, allTags, onAddN
                      display:"flex",alignItems:"center",justifyContent:"center"}
             }, sel && React.createElement("span",{style:{fontSize:"9px",color:"#a8d8f0",lineHeight:1}},"✓")),
             React.createElement("div", {style:{minWidth:0}},
-              React.createElement("div",{style:{fontSize:"11px",color:sel?W.fg:W.fgDim,
+              React.createElement("div",{style:{fontSize:"14px",color:sel?W.fg:W.fgDim,
                 lineHeight:"1.3",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}, n.title),
               (n.tags||[]).length>0 && React.createElement("div",{style:{marginTop:"2px",display:"flex",gap:"3px",flexWrap:"wrap"}},
                 (n.tags||[]).slice(0,3).map(t=>React.createElement("span",{key:t,
@@ -5950,7 +5950,7 @@ const LLMNotebook = ({notes, pdfNotes, serverPdfs, serverImages, allTags, onAddN
               React.createElement("img",{src:img.url,alt:img.name,
                 style:{width:"28px",height:"28px",objectFit:"cover",borderRadius:"3px",
                        flexShrink:0,background:W.lineNrBg}}),
-              React.createElement("div",{style:{minWidth:0,fontSize:"11px",
+              React.createElement("div",{style:{minWidth:0,fontSize:"14px",
                 color:sel?W.fg:W.fgDim,overflow:"hidden",
                 textOverflow:"ellipsis",whiteSpace:"nowrap"}},img.name)
             );
@@ -5987,7 +5987,7 @@ const LLMNotebook = ({notes, pdfNotes, serverPdfs, serverImages, allTags, onAddN
                        display:"flex",alignItems:"center",justifyContent:"center"}
               }, sel && React.createElement("span",{style:{fontSize:"9px",color:W.orange,lineHeight:1}},"✓")),
               React.createElement("div",{style:{minWidth:0}},
-                React.createElement("div",{style:{fontSize:"11px",color:sel?W.fg:W.fgDim,
+                React.createElement("div",{style:{fontSize:"14px",color:sel?W.fg:W.fgDim,
                   overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}, "📄 "+p.name),
                 React.createElement("div",{style:{fontSize:"9px",color:W.fgMuted,marginTop:"2px"}},
                   p.annotCount > 0
@@ -6017,17 +6017,17 @@ const LLMNotebook = ({notes, pdfNotes, serverPdfs, serverImages, allTags, onAddN
           style:{background:showContext?"rgba(138,198,242,0.15)":"none",
                  border:`1px solid ${showContext?"rgba(138,198,242,0.4)":W.splitBg}`,
                  color:showContext?"#a8d8f0":W.fgMuted,
-                 borderRadius:"5px",padding:"4px 10px",fontSize:"11px",cursor:"pointer"}
+                 borderRadius:"5px",padding:"4px 10px",fontSize:"14px",cursor:"pointer"}
         }, showContext ? "◀ context" : "▶ context"),
 
         // Context badge
         contextSummary && React.createElement("span", {
-          style:{fontSize:"10px",color:"#a8d8f0",background:"rgba(138,198,242,0.1)",
+          style:{fontSize:"14px",color:"#a8d8f0",background:"rgba(138,198,242,0.1)",
                  border:"1px solid rgba(138,198,242,0.25)",borderRadius:"10px",
                  padding:"2px 8px"}
         }, "📚 "+contextSummary),
         !contextSummary && React.createElement("span",{
-          style:{fontSize:"10px",color:W.fgMuted}
+          style:{fontSize:"14px",color:W.fgMuted}
         },"geen context geselecteerd"),
 
         React.createElement("div",{style:{flex:1}}),
@@ -6037,7 +6037,7 @@ const LLMNotebook = ({notes, pdfNotes, serverPdfs, serverImages, allTags, onAddN
           ? React.createElement("select", {
               value:model, onChange:e=>setModel(e.target.value),
               style:{background:W.bg,color:W.fg,border:`1px solid ${W.splitBg}`,
-                     borderRadius:"4px",padding:"3px 6px",fontSize:"11px",cursor:"pointer"}
+                     borderRadius:"4px",padding:"3px 6px",fontSize:"14px",cursor:"pointer"}
             },
               availModels.map(m => React.createElement("option",{key:m,value:m},m))
             )
@@ -6045,7 +6045,7 @@ const LLMNotebook = ({notes, pdfNotes, serverPdfs, serverImages, allTags, onAddN
               value:model, onChange:e=>setModel(e.target.value),
               placeholder:"model naam (bijv. llama3)",
               style:{background:W.bg,color:W.fg,border:`1px solid ${W.splitBg}`,
-                     borderRadius:"4px",padding:"3px 8px",fontSize:"11px",width:"140px",outline:"none"}
+                     borderRadius:"4px",padding:"3px 8px",fontSize:"14px",width:"140px",outline:"none"}
             }),
 
         // Ollama status
@@ -6056,14 +6056,14 @@ const LLMNotebook = ({notes, pdfNotes, serverPdfs, serverImages, allTags, onAddN
         },
           React.createElement("div",{style:{width:"7px",height:"7px",borderRadius:"50%",
             background:statusDot.color,flexShrink:0}}),
-          React.createElement("span",{style:{fontSize:"10px",color:W.fgMuted}}, statusDot.label)
+          React.createElement("span",{style:{fontSize:"14px",color:W.fgMuted}}, statusDot.label)
         ),
 
         // Install button als Ollama niet bereikbaar
         (ollamaStatus==="fout"||ollamaStatus==="geen-modellen") && React.createElement("button",{
           onClick:()=>setShowInstall(p=>!p),
           style:{background:"none",border:`1px solid ${W.orange}`,color:W.orange,
-                 borderRadius:"4px",padding:"3px 8px",fontSize:"10px",cursor:"pointer"}
+                 borderRadius:"4px",padding:"3px 8px",fontSize:"14px",cursor:"pointer"}
         },"? installatie"),
 
         // Mindmap knop
@@ -6072,7 +6072,7 @@ const LLMNotebook = ({notes, pdfNotes, serverPdfs, serverImages, allTags, onAddN
           style:{background:"rgba(138,198,242,0.08)",
                  border:"1px solid rgba(138,198,242,0.25)",
                  color:mmPending?W.fgMuted:"#a8d8f0",
-                 borderRadius:"4px",padding:"3px 10px",fontSize:"10px",cursor:"pointer"}
+                 borderRadius:"4px",padding:"3px 10px",fontSize:"14px",cursor:"pointer"}
         }, mmPending?"🗺 genereren…":"🗺 mindmap"),
 
         // Analyse → notitie
@@ -6081,24 +6081,24 @@ const LLMNotebook = ({notes, pdfNotes, serverPdfs, serverImages, allTags, onAddN
           style:{background:"rgba(159,202,86,0.08)",
                  border:"1px solid rgba(159,202,86,0.25)",
                  color:savingNote?W.fgMuted:W.comment,
-                 borderRadius:"4px",padding:"3px 10px",fontSize:"10px",cursor:"pointer"}
+                 borderRadius:"4px",padding:"3px 10px",fontSize:"14px",cursor:"pointer"}
         }, savingNote?"💾 opslaan…":"💾 → notitie"),
 
         // Clear
         messages.length > 0 && React.createElement("button", {
           onClick:clearChat,
           style:{background:"none",border:`1px solid ${W.splitBg}`,color:W.fgMuted,
-                 borderRadius:"4px",padding:"3px 8px",fontSize:"10px",cursor:"pointer"}
+                 borderRadius:"4px",padding:"3px 8px",fontSize:"14px",cursor:"pointer"}
         }, "✕ wis chat")
       ),
 
       // Installatie instructies
       showInstall && React.createElement("div", {
         style:{background:"rgba(229,120,109,0.06)",borderBottom:`1px solid rgba(229,120,109,0.2)`,
-               padding:"14px 16px",fontSize:"12px",flexShrink:0}
+               padding:"14px 16px",fontSize:"14px",flexShrink:0}
       },
         React.createElement("div",{style:{color:W.orange,fontWeight:"bold",marginBottom:"10px",
-          fontSize:"13px"}},"Ollama installatie"),
+          fontSize:"14px"}},"Ollama installatie"),
         React.createElement("div",{style:{color:W.fgDim,marginBottom:"10px",lineHeight:"1.7"}},
           "Ollama draait lokale LLM modellen op je eigen machine. Geen internet vereist, volledig privé."
         ),
@@ -6108,24 +6108,24 @@ const LLMNotebook = ({notes, pdfNotes, serverPdfs, serverImages, allTags, onAddN
           { label:"2. Start de server",   code:"ollama serve" },
           { label:"3. Download een model (kies één):", code:null },
         ].map(({label,code},i) => React.createElement("div",{key:i,style:{marginBottom:"8px"}},
-          React.createElement("div",{style:{fontSize:"11px",color:W.fgMuted,marginBottom:"3px"}},label),
+          React.createElement("div",{style:{fontSize:"14px",color:W.fgMuted,marginBottom:"3px"}},label),
           code && React.createElement("code",{style:{display:"block",background:"#1a1a1a",
-            color:"#cae682",padding:"6px 10px",borderRadius:"4px",fontFamily:"'Hack',monospace",fontSize:"11px"}},code)
+            color:"#cae682",padding:"6px 10px",borderRadius:"4px",fontFamily:"'Hack',monospace",fontSize:"14px"}},code)
         )),
         // Model opties
         React.createElement("div",{style:{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:"6px",marginTop:"8px"}},
           SUGGESTED_MODELS.map(m => React.createElement("div",{key:m.id,
             style:{background:"rgba(0,0,0,0.2)",border:`1px solid ${W.splitBg}`,
                    borderRadius:"5px",padding:"7px 10px"}},
-            React.createElement("code",{style:{color:"#cae682",fontSize:"11px",fontFamily:"'Hack',monospace"}},
+            React.createElement("code",{style:{color:"#cae682",fontSize:"14px",fontFamily:"'Hack',monospace"}},
               "ollama pull "+m.id),
-            React.createElement("div",{style:{fontSize:"10px",color:W.fgMuted,marginTop:"3px"}},m.label+" — "+m.desc)
+            React.createElement("div",{style:{fontSize:"14px",color:W.fgMuted,marginTop:"3px"}},m.label+" — "+m.desc)
           ))
         ),
         React.createElement("button",{
           onClick:checkOllama,
           style:{marginTop:"12px",background:W.blue,color:W.bg,border:"none",
-                 borderRadius:"5px",padding:"6px 16px",fontSize:"11px",cursor:"pointer",fontWeight:"bold"}
+                 borderRadius:"5px",padding:"6px 16px",fontSize:"14px",cursor:"pointer",fontWeight:"bold"}
         },"🔄 Opnieuw verbinden")
       ),
 
@@ -6144,7 +6144,7 @@ const LLMNotebook = ({notes, pdfNotes, serverPdfs, serverImages, allTags, onAddN
           React.createElement("div",{style:{fontSize:"48px"}},"🧠"),
           React.createElement("div",{style:{fontSize:"16px",color:W.fgDim,fontWeight:"bold"}},
             "Notebook LLM"),
-          React.createElement("div",{style:{fontSize:"13px",maxWidth:"420px",lineHeight:"1.8"}},
+          React.createElement("div",{style:{fontSize:"14px",maxWidth:"420px",lineHeight:"1.8"}},
             "Stel vragen over je notities en PDF-annotaties. " +
             "Selecteer context in het linkerpaneel om de LLM kennis te geven over je zettelkasten."
           ),
@@ -6160,7 +6160,7 @@ const LLMNotebook = ({notes, pdfNotes, serverPdfs, serverImages, allTags, onAddN
               onClick:()=>{ setInput(s); setTimeout(()=>inputRef.current?.focus(),0); },
               style:{background:"rgba(138,198,242,0.07)",border:"1px solid rgba(138,198,242,0.2)",
                      color:"rgba(168,216,240,0.8)",borderRadius:"16px",padding:"6px 14px",
-                     fontSize:"11px",cursor:"pointer",WebkitTapHighlightColor:"transparent"}
+                     fontSize:"14px",cursor:"pointer",WebkitTapHighlightColor:"transparent"}
             },s))
           )
         ),
@@ -6191,18 +6191,18 @@ const LLMNotebook = ({notes, pdfNotes, serverPdfs, serverImages, allTags, onAddN
               : msg.error ? "1px solid rgba(229,120,109,0.3)" : `1px solid ${W.splitBg}`,
             borderRadius: msg.role==="user" ? "12px 12px 3px 12px" : "3px 12px 12px 12px",
             padding:"10px 14px",
-            fontSize:"13px",
+            fontSize:"14px",
             lineHeight:"1.7",
             color: msg.error ? W.orange : W.fg,
           }},
             msg.error
               ? React.createElement("div",null,
                   React.createElement("div",{style:{fontWeight:"bold",marginBottom:"5px"}},"⚠ Fout"),
-                  React.createElement("div",{style:{fontSize:"12px"}},msg.error),
+                  React.createElement("div",{style:{fontSize:"14px"}},msg.error),
                   React.createElement("button",{onClick:checkOllama,
                     style:{marginTop:"8px",background:"none",border:`1px solid ${W.orange}`,
                            color:W.orange,borderRadius:"4px",padding:"3px 8px",
-                           fontSize:"10px",cursor:"pointer"}},"Ollama status controleren")
+                           fontSize:"14px",cursor:"pointer"}},"Ollama status controleren")
                 )
               : msg.role==="user"
                 ? React.createElement("div",null,msg.content)
@@ -6233,7 +6233,7 @@ const LLMNotebook = ({notes, pdfNotes, serverPdfs, serverImages, allTags, onAddN
             style:{
               flex:1,background:W.bg2,border:`1px solid ${W.splitBg}`,
               borderRadius:"8px",padding:"10px 14px",color:W.fg,
-              fontSize:"13px",outline:"none",resize:"none",
+              fontSize:"14px",outline:"none",resize:"none",
               lineHeight:"1.5",maxHeight:"120px",overflowY:"auto",
               WebkitAppearance:"none",
               opacity: (streaming||ollamaStatus==="laden") ? 0.6 : 1,
@@ -6250,7 +6250,7 @@ const LLMNotebook = ({notes, pdfNotes, serverPdfs, serverImages, allTags, onAddN
             style:{
               background: streaming ? W.fgMuted : W.blue,
               color:W.bg,border:"none",borderRadius:"8px",
-              padding:"10px 16px",fontSize:"13px",cursor: streaming?"not-allowed":"pointer",
+              padding:"10px 16px",fontSize:"14px",cursor: streaming?"not-allowed":"pointer",
               fontWeight:"bold",flexShrink:0,alignSelf:"flex-end",
               height:"40px",minWidth:"64px",
               opacity: (!input.trim()||ollamaStatus!=="ok") ? 0.5 : 1,
@@ -6513,11 +6513,11 @@ const App = () => {
   },
     React.createElement("div", {style:{fontSize:"36px"}}, "⚠️"),
     React.createElement("div", {style:{fontSize:"15px",color:W.orange}}, "Server niet bereikbaar"),
-    React.createElement("pre", {style:{fontSize:"12px",color:W.fgMuted,
+    React.createElement("pre", {style:{fontSize:"14px",color:W.fgMuted,
       background:W.bg2,padding:"16px",borderRadius:"8px",
       border:`1px solid ${W.splitBg}`,lineHeight:"1.8",maxWidth:"400px",
       whiteSpace:"pre-wrap",textAlign:"left"}}, error),
-    React.createElement("div", {style:{fontSize:"11px",color:W.fgDim}},
+    React.createElement("div", {style:{fontSize:"14px",color:W.fgDim}},
       "Zorg dat server.py draait, ververs dan de pagina.")
   );
 
@@ -6539,7 +6539,7 @@ const App = () => {
         style:{display:"flex",justifyContent:"space-between",
                alignItems:"center",marginBottom:"6px"}
       },
-        React.createElement("span", {style:{fontSize:"11px",fontWeight:"bold",
+        React.createElement("span", {style:{fontSize:"14px",fontWeight:"bold",
           letterSpacing:"1.5px",color:W.statusFg}}, "NOTITIES"),
         React.createElement("button", {
           onClick:()=>setSidebarOpen(false),
@@ -6551,7 +6551,7 @@ const App = () => {
       React.createElement("button", {
         onClick:newNote,
         style:{background:W.blue,color:W.bg,border:"none",
-               borderRadius:"6px",padding:"8px 12px",fontSize:"12px",
+               borderRadius:"6px",padding:"8px 12px",fontSize:"14px",
                cursor:"pointer",fontWeight:"bold",letterSpacing:"0.5px",
                width:"100%",marginBottom:"7px",
                display:"flex",alignItems:"center",justifyContent:"center",gap:"6px"}
@@ -6566,7 +6566,7 @@ const App = () => {
         style:{width:"100%",background:W.bg,
                border:`1px solid ${search?W.blue:W.splitBg}`,
                borderRadius:"6px",padding:"6px 9px",color:W.fg,
-               fontSize:"12px",outline:"none",
+               fontSize:"14px",outline:"none",
                WebkitAppearance:"none",transition:"border-color 0.15s",
                boxSizing:"border-box"}
       })
@@ -6601,7 +6601,7 @@ const App = () => {
     React.createElement("div", {style:{flex:1,overflowY:"auto",WebkitOverflowScrolling:"touch"}},
       filtered.length===0
         ? React.createElement("div",{style:{padding:"24px 12px",color:W.fgMuted,
-            fontSize:"11px",textAlign:"center",lineHeight:"1.8"}},
+            fontSize:"14px",textAlign:"center",lineHeight:"1.8"}},
             search||tagFilter ? "Geen resultaten" : "Nog geen notities")
         : filtered.map(n => {
             const sel = n.id === selId;
@@ -6614,7 +6614,7 @@ const App = () => {
                      minHeight:"46px"}
             },
               React.createElement("div", {
-                style:{fontSize:"12px",color:sel?W.statusFg:W.fg,
+                style:{fontSize:"14px",color:sel?W.statusFg:W.fg,
                        lineHeight:"1.35",marginBottom:"3px",fontWeight:sel?"bold":"normal",
                        overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}
               }, n.title || "–"),
@@ -6649,7 +6649,7 @@ const App = () => {
     React.createElement("div", {
       style:{background:"transparent",color:W.statusFg,padding:"0 20px",
              height:"100%",display:"flex",alignItems:"center",
-             fontWeight:"700",fontSize:"12px",letterSpacing:"3px",
+             fontWeight:"700",fontSize:"14px",letterSpacing:"3px",
              flexShrink:0,borderRight:`1px solid ${W.splitBg}`}
     }, "ZETTELKASTEN"),
     // Sidebar toggle op tablet
@@ -6683,7 +6683,7 @@ const App = () => {
                background:"rgba(138,198,242,0.1)",
                border:"1px solid rgba(138,198,242,0.3)",
                borderRadius:"20px",padding:"3px 11px",
-               color:"#a8d8f0",fontSize:"10px",
+               color:"#a8d8f0",fontSize:"14px",
                animation:"ai-pulse 1.4s ease-in-out infinite",
                marginRight:"4px"}
       },
@@ -6743,9 +6743,9 @@ const App = () => {
           transition:"background 0.12s, border 0.12s",
         }
       },
-        React.createElement("span",{style:{fontSize:"12px",lineHeight:1,flexShrink:0}},"📁"),
+        React.createElement("span",{style:{fontSize:"14px",lineHeight:1,flexShrink:0}},"📁"),
         React.createElement("span",{style:{
-          fontSize:"10px", color:"rgba(138,198,242,0.75)",
+          fontSize:"14px", color:"rgba(138,198,242,0.75)",
           overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap",
           letterSpacing:"0.2px", fontWeight:"500"
         }}, vaultPath.split("/").slice(-2).join("/"))
@@ -6771,7 +6771,7 @@ const App = () => {
         transition: "all 0.15s",
       }
     },
-      React.createElement("span",{style:{fontSize:"13px"}}, splitMode ? "⊟" : "⊞"),
+      React.createElement("span",{style:{fontSize:"14px"}}, splitMode ? "⊟" : "⊞"),
       "split"
     ),
     // Instellingen knop
@@ -6790,7 +6790,7 @@ const App = () => {
         transition: "all 0.15s",
       }
     },
-      React.createElement("span",{style:{fontSize:"13px"}},"⚙"),
+      React.createElement("span",{style:{fontSize:"14px"}},"⚙"),
       "instellingen"
     )
   );
@@ -6809,11 +6809,11 @@ const App = () => {
              fontSize:"18px",padding:"4px 10px",cursor:"pointer"}
     }, "☰"),
     React.createElement("div", {
-      style:{flex:1,fontWeight:"bold",fontSize:"13px",
+      style:{flex:1,fontWeight:"bold",fontSize:"14px",
              letterSpacing:"1.5px",color:W.statusFg}
     }, "ZETTELKASTEN"),
     aiStatus && React.createElement("div",{
-      style:{fontSize:"10px",color:"#a8d8f0",
+      style:{fontSize:"14px",color:"#a8d8f0",
              background:"rgba(138,198,242,0.1)",
              border:"1px solid rgba(138,198,242,0.2)",
              borderRadius:"10px",padding:"2px 8px",
@@ -6845,7 +6845,7 @@ const App = () => {
              paddingTop:"6px"}
     },
       React.createElement("span", null, icon),
-      React.createElement("span", {style:{fontSize:"10px",letterSpacing:"0.5px"}}, label)
+      React.createElement("span", {style:{fontSize:"14px",letterSpacing:"0.5px"}}, label)
     ))
   );
 
@@ -6952,7 +6952,7 @@ const App = () => {
             placeholder:"Zoeken…",
             style:{width:"100%",background:"rgba(255,255,255,0.06)",
                    border:`1px solid ${W.splitBg}`,borderRadius:"5px",
-                   padding:"5px 9px",color:W.fg,fontSize:"12px",outline:"none",fontFamily:"inherit"}
+                   padding:"5px 9px",color:W.fg,fontSize:"14px",outline:"none",fontFamily:"inherit"}
           })
         ),
         // Resultatenlijst
@@ -6980,7 +6980,7 @@ const App = () => {
                        borderBottom:`1px solid rgba(255,255,255,0.03)`,
                        display:"flex",flexDirection:"column",gap:"1px"}
               },
-                React.createElement("span",{style:{fontSize:"12px",color:W.fg,
+                React.createElement("span",{style:{fontSize:"14px",color:W.fg,
                   overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},n.title),
                 (n.tags||[]).length>0&&React.createElement("span",{
                   style:{fontSize:"9px",color:W.comment}},(n.tags||[]).map(t=>"#"+t).join("  "))
@@ -7009,8 +7009,8 @@ const App = () => {
                        borderBottom:`1px solid rgba(255,255,255,0.03)`,
                        display:"flex",alignItems:"center",gap:"8px"}
               },
-                React.createElement("span",{style:{fontSize:"13px"}},"📄"),
-                React.createElement("span",{style:{fontSize:"12px",color:W.fgDim,
+                React.createElement("span",{style:{fontSize:"14px"}},"📄"),
+                React.createElement("span",{style:{fontSize:"14px",color:W.fgDim,
                   overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1}},p.name)
               ))
             );
@@ -7037,8 +7037,8 @@ const App = () => {
                        borderBottom:`1px solid rgba(255,255,255,0.03)`,
                        display:"flex",alignItems:"center",gap:"8px"}
               },
-                React.createElement("span",{style:{fontSize:"13px"}},"🖼"),
-                React.createElement("span",{style:{fontSize:"12px",color:W.fgDim,
+                React.createElement("span",{style:{fontSize:"14px"}},"🖼"),
+                React.createElement("span",{style:{fontSize:"14px",color:W.fgDim,
                   overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1}},img.name)
               ))
             );
@@ -7048,7 +7048,7 @@ const App = () => {
            (serverPdfs||[]).filter(p=>!linkSearch||p.name.toLowerCase().includes(linkSearch.toLowerCase())).length,
            (serverImages||[]).filter(i=>!linkSearch||i.name.toLowerCase().includes(linkSearch.toLowerCase())).length
           ].every(c=>c===0) && React.createElement("div",{style:{padding:"20px",color:W.fgMuted,
-            fontSize:"11px",textAlign:"center"}},"Geen resultaten")
+            fontSize:"14px",textAlign:"center"}},"Geen resultaten")
         )
       )
     )
@@ -7059,7 +7059,7 @@ const App = () => {
            alignItems:"center",flexWrap:"wrap"}
   },
     React.createElement("span", {
-      style:{fontSize:"10px",color:W.fgMuted}
+      style:{fontSize:"14px",color:W.fgMuted}
     }, selNote.id),
     ...(selNote.tags||[]).map(t => React.createElement(TagPill, {
       key:t, tag:t,
@@ -7096,7 +7096,7 @@ const App = () => {
       style:{background:"none",color:W.orange,
              border:`1px solid rgba(229,120,109,0.2)`,
              borderRadius:"6px",padding:"5px 10px",
-             fontSize:"11px",cursor:"pointer"}
+             fontSize:"14px",cursor:"pointer"}
     }, "🗑 del")
   );
 
@@ -7110,7 +7110,7 @@ const App = () => {
         width:"18px", flexShrink:0, background:W.bg2,
         borderLeft:`1px solid ${W.splitBg}`,
         border:"none", cursor:"pointer", color:W.fgMuted,
-        fontSize:"10px", padding:0, display:"flex",
+        fontSize:"14px", padding:0, display:"flex",
         alignItems:"center", justifyContent:"center",
         writingMode:"vertical-rl",
         letterSpacing:"1px",
@@ -7122,10 +7122,10 @@ const App = () => {
       className:"meta-panel",
       style:{width:"178px",flexShrink:0,background:W.bg2,
              borderLeft:`1px solid ${W.splitBg}`,
-             padding:"14px 12px",fontSize:"11px",overflowY:"auto"}
+             padding:"14px 12px",fontSize:"14px",overflowY:"auto"}
     },
       React.createElement("div",{style:{color:W.fgMuted,fontSize:"9px",marginBottom:"4px",letterSpacing:"1px"}},"ID"),
-      React.createElement("div",{style:{color:W.comment,wordBreak:"break-all",marginBottom:"14px",fontSize:"10px"}},selNote.id),
+      React.createElement("div",{style:{color:W.comment,wordBreak:"break-all",marginBottom:"14px",fontSize:"14px"}},selNote.id),
       React.createElement("div",{style:{color:W.fgMuted,fontSize:"9px",marginBottom:"6px",letterSpacing:"1px"}},"TAGS"),
       React.createElement("div",{style:{display:"flex",flexWrap:"wrap",gap:"4px",marginBottom:"10px"}},
         ...(selNote.tags||[]).map(t => React.createElement(TagPill,{key:t,tag:t,
@@ -7134,7 +7134,7 @@ const App = () => {
             const saved=await api.put("/notes/"+selId,updated);
             setNotes(prev=>prev.map(n=>n.id===selId?saved:n));
           }})),
-        !(selNote.tags||[]).length && React.createElement("span",{style:{fontSize:"10px",color:W.splitBg}},"geen")
+        !(selNote.tags||[]).length && React.createElement("span",{style:{fontSize:"14px",color:W.splitBg}},"geen")
       ),
       React.createElement("div",{style:{fontSize:"9px",color:W.splitBg,lineHeight:"2",marginBottom:"14px",padding:"6px 8px",background:"rgba(0,0,0,0.2)",borderRadius:"3px"}},
         [":tag naam1 naam2",":tag+ naam",":tag- naam",":goyo focus",":spell en/nl","Ctrl+J snippet"].map((t,i)=>
@@ -7145,13 +7145,13 @@ const App = () => {
         extractLinks(selNote.content).map(id=>{
           const n=notes.find(x=>x.id===id);
           return React.createElement("div",{key:id,onClick:()=>n&&setSelId(n.id),
-            style:{fontSize:"10px",color:n?W.keyword:W.fgMuted,cursor:n?"pointer":"default",
+            style:{fontSize:"14px",color:n?W.keyword:W.fgMuted,cursor:n?"pointer":"default",
                    padding:"3px 0",borderBottom:`1px solid ${W.splitBg}`,marginBottom:"2px"}
           },"→ ",n?n.title:id);
         })
       ),
       React.createElement("div",{style:{marginTop:"14px",color:W.fgMuted,fontSize:"9px",letterSpacing:"1px",marginBottom:"4px"}},"GEWIJZIGD"),
-      React.createElement("div",{style:{fontSize:"10px",color:W.fgDim}},
+      React.createElement("div",{style:{fontSize:"14px",color:W.fgDim}},
         selNote.modified?new Date(selNote.modified).toLocaleString("nl-NL"):"—")
     )
   );
@@ -7212,14 +7212,14 @@ const App = () => {
                   style:{marginTop:"40px",paddingTop:"14px",
                          borderTop:`1px solid ${W.splitBg}`}
                 },
-                  React.createElement("div",{style:{fontSize:"10px",color:W.fgMuted,letterSpacing:"1.5px",marginBottom:"8px"}},"BACKLINKS"),
+                  React.createElement("div",{style:{fontSize:"14px",color:W.fgMuted,letterSpacing:"1.5px",marginBottom:"8px"}},"BACKLINKS"),
                   backlinks.map(n=>React.createElement("div",{key:n.id,
                     onClick:()=>setSelId(n.id),
                     style:{padding:"8px 10px",cursor:"pointer",
                            background:"rgba(138,198,242,0.06)",
                            border:`1px solid rgba(138,198,242,0.12)`,
                            borderRadius:"6px",marginBottom:"6px",
-                           fontSize:"13px",color:W.keyword,
+                           fontSize:"14px",color:W.keyword,
                            WebkitTapHighlightColor:"transparent"}},"← ",n.title))
                 )
               ),
@@ -7361,7 +7361,7 @@ const App = () => {
                   style:{background:splitTab===id?W.bg:"none",
                          border:"none",borderBottom:splitTab===id?`2px solid ${W.yellow}`:"2px solid transparent",
                          color:splitTab===id?W.statusFg:W.fgMuted,
-                         padding:"0 14px",height:"100%",fontSize:"11px",
+                         padding:"0 14px",height:"100%",fontSize:"14px",
                          cursor:"pointer",letterSpacing:"0.5px",flexShrink:0}
                 },icon," ",label))
               ),
