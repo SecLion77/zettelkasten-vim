@@ -738,7 +738,16 @@ class ZKHandler(BaseHTTPRequestHandler):
                 self.text_chunks = []
                 self.title       = ""
                 self._in_title   = False
-                self.img_srcs    = []   # alle <img src="..."> in artikel
+                self.img_srcs    = []   # alle gevonden afbeelding-URLs (gededupliceerd)
+                self._img_seen   = set()
+                self.og_image    = ""   # Open Graph hoofdafbeelding
+
+            def _add_img(self, src):
+                """Voeg src toe als het geldig en nog niet gezien is."""
+                if not src or src.startswith("data:") or src in self._img_seen:
+                    return
+                self._img_seen.add(src)
+                self.img_srcs.append(src)
 
             def handle_starttag(self, tag, attrs):
                 attr_d = dict(attrs)
@@ -746,11 +755,49 @@ class ZKHandler(BaseHTTPRequestHandler):
                 if tag in self.SKIP_TAGS: self.skip_depth += 1
                 if tag in self.BLOCK_TAGS and self.text_chunks:
                     self.text_chunks.append("\n")
-                # Verzamel afbeeldingen buiten skip-zones
-                if tag == "img" and self.skip_depth == 0:
-                    src = attr_d.get("src","") or attr_d.get("data-src","") or attr_d.get("data-lazy-src","")
-                    if src and not src.startswith("data:"):
-                        self.img_srcs.append(src)
+
+                # Open Graph afbeelding (staat vaak in <head> buiten artikel)
+                if tag == "meta":
+                    prop = attr_d.get("property","") or attr_d.get("name","")
+                    if prop in ("og:image","og:image:secure_url","twitter:image"):
+                        content = attr_d.get("content","").strip()
+                        if content and not content.startswith("data:"):
+                            self.og_image = content
+
+                # Alle <img> tags — ook binnen nav/header voor volledigheid,
+                # want redactionele afbeeldingen zitten soms in "article > header"
+                if tag == "img":
+                    # Prioriteit: src → data-src → data-lazy-src → data-original
+                    # → data-src-medium → data-full-url → srcset (eerste URL)
+                    candidates = [
+                        attr_d.get("src",""),
+                        attr_d.get("data-src",""),
+                        attr_d.get("data-lazy-src",""),
+                        attr_d.get("data-original",""),
+                        attr_d.get("data-original-src",""),
+                        attr_d.get("data-full-url",""),
+                        attr_d.get("data-hi-res-src",""),
+                        attr_d.get("data-src-medium",""),
+                        attr_d.get("data-echo",""),
+                    ]
+                    for c in candidates:
+                        if c and not c.startswith("data:"):
+                            self._add_img(c)
+                            break   # eerste geldige volstaat
+                    # srcset: pak de hoogste-resolutie URL (laatste in lijst)
+                    srcset = attr_d.get("srcset","") or attr_d.get("data-srcset","")
+                    if srcset:
+                        parts = [p.strip().split()[0] for p in srcset.split(",") if p.strip()]
+                        if parts:
+                            self._add_img(parts[-1])  # hoogste resolutie
+
+                # <source> binnen <picture>
+                if tag == "source":
+                    srcset = attr_d.get("srcset","") or attr_d.get("data-srcset","")
+                    if srcset:
+                        parts = [p.strip().split()[0] for p in srcset.split(",") if p.strip()]
+                        if parts:
+                            self._add_img(parts[-1])
 
             def handle_endtag(self, tag):
                 if tag == "title": self._in_title = False
@@ -782,7 +829,15 @@ class ZKHandler(BaseHTTPRequestHandler):
                             "spacer","blank","transparent","spinner","loading")
         saved_images = []   # [{name, url_path}]
 
-        for raw_src in parser.img_srcs[:20]:  # max 20 afbeeldingen
+        # Voeg og:image toe als eerste (meest representatieve afbeelding van pagina)
+        all_img_srcs = []
+        if parser.og_image:
+            all_img_srcs.append(parser.og_image)
+        for s in parser.img_srcs:
+            if s != parser.og_image:
+                all_img_srcs.append(s)
+
+        for raw_src in all_img_srcs[:40]:  # max 40 proberen (na filtering blijven er minder over)
             try:
                 # Maak absolute URL
                 if raw_src.startswith("//"):
@@ -810,7 +865,7 @@ class ZKHandler(BaseHTTPRequestHandler):
                 # Filter op MIME
                 if img_ct not in IMAGE_MIME_TYPES and not img_ct.startswith("image/"):
                     continue
-                if len(img_bytes) < 2000:   # kleiner dan 2 KB = waarschijnlijk icon
+                if len(img_bytes) < 800:    # kleiner dan 800 bytes = waarschijnlijk icon
                     continue
 
                 # Bestandsnaam
@@ -832,13 +887,20 @@ class ZKHandler(BaseHTTPRequestHandler):
         # ── Laat LLM opschonen en structureren als Markdown ──────────────────
         # Geen afbeeldingen in de markdown — die kiest de gebruiker zelf via de selectie-UI
         prompt = (
-            "Converteer de onderstaande webpagina-tekst naar nette Markdown, "
+            "Converteer de onderstaande webpagina-tekst naar goed gestructureerde Markdown, "
             "als een leesbaar artikel (Instapaper-stijl). "
-            "Behoud de hoofdstructuur en alle relevante inhoud. "
-            "Verwijder navigatie, advertenties, cookieteksten en irrelevante herhalingen. "
-            "Gebruik ## voor secties, - voor lijsten, **vet** voor sleutelwoorden. "
-            "Schrijf een korte intro na de titel. "
-            "Geef ALLEEN de Markdown terug, geen uitleg.\n\n"
+            "Volg deze opmaakregels precies:\n"
+            "- Begin met # Titel (de paginatitel)\n"
+            "- Schrijf direct daarna 2-3 zinnen als inleidende samenvatting\n"
+            "- Gebruik ## voor hoofdsecties, ### voor subsecties\n"
+            "- Gebruik **vetgedrukt** voor kernbegrippen en sleutelcijfers\n"
+            "- Gebruik *cursief* voor definities en technische termen\n"
+            "- Gebruik - voor opsommingen, 1. voor genummerde stappen\n"
+            "- Gebruik > voor citaten en uitspraken\n"
+            "- Gebruik --- als scheiding tussen grote secties\n"
+            "- Sluit af met een ## Conclusie of ## Samenvatting sectie als de tekst dat toelaat\n"
+            "Verwijder navigatie, advertenties, cookieteksten en herhalingen. "
+            "Geef ALLEEN de Markdown terug, geen uitleg, geen ```markdown blokken.\n\n"
             f"TITEL: {page_title}\nURL: {url}\n\n"
             "TEKST:\n" + raw_text
         )

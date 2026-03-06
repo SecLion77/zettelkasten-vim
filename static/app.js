@@ -2903,6 +2903,7 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages}) => {
   const [editTitle,  setEditTitle] = useState("");
   const [tags,       setTags]      = useState([]);
   const [saved,      setSaved]     = useState(false);
+  const [renderMode, setRenderMode] = useState(true);   // true = render, false = broncode
   const [selectedImages, setSelectedImages] = useState(new Set()); // geselecteerde afbeeldingen
   const urlRef = useRef(null);
 
@@ -3057,23 +3058,55 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages}) => {
           React.createElement(TagEditor,{tags, onChange:setTags,
             allTags:[...(allTags||[]),"import","artikel","onderzoek","referentie"]})
         ),
-        // Markdown editor
+        // Markdown editor met render/broncode toggle
         React.createElement("div",{style:{
           flex:1, display:"flex", flexDirection:"column", overflow:"hidden"
         }},
           React.createElement("div",{style:{
-            fontSize:"9px",color:W.fgMuted,letterSpacing:"1px",
-            padding:"6px 14px 4px",borderBottom:`1px solid ${W.splitBg}`,
-            background:"rgba(0,0,0,0.1)", flexShrink:0
-          }},"INHOUD (bewerkbaar)"),
-          React.createElement("textarea",{
-            value:editMd,
-            onChange:e=>setEditMd(e.target.value),
-            spellCheck:false,
-            style:{flex:1, background:W.bg, border:"none", padding:"14px 16px",
-                   color:W.fg, fontSize:"14px", lineHeight:"1.7",
-                   outline:"none", resize:"none", fontFamily:"'Hack','Courier New',monospace"}
-          })
+            padding:"5px 14px", borderBottom:`1px solid ${W.splitBg}`,
+            background:"rgba(0,0,0,0.12)", flexShrink:0,
+            display:"flex", alignItems:"center", justifyContent:"space-between"
+          }},
+            React.createElement("span",{style:{fontSize:"14px",color:W.fgMuted,letterSpacing:"1px"}},
+              "INHOUD"),
+            React.createElement("div",{style:{display:"flex",gap:"4px"}},
+              React.createElement("button",{
+                onClick:()=>setRenderMode(true),
+                style:{
+                  background: renderMode ? "rgba(138,198,242,0.12)" : "none",
+                  border:`1px solid ${renderMode ? "rgba(138,198,242,0.4)" : W.splitBg}`,
+                  color: renderMode ? W.blue : W.fgMuted,
+                  borderRadius:"4px", padding:"2px 9px", fontSize:"14px",
+                  cursor:"pointer", transition:"all .12s"
+                }
+              },"🎨 weergave"),
+              React.createElement("button",{
+                onClick:()=>setRenderMode(false),
+                style:{
+                  background: !renderMode ? "rgba(138,198,242,0.12)" : "none",
+                  border:`1px solid ${!renderMode ? "rgba(138,198,242,0.4)" : W.splitBg}`,
+                  color: !renderMode ? W.blue : W.fgMuted,
+                  borderRadius:"4px", padding:"2px 9px", fontSize:"14px",
+                  cursor:"pointer", transition:"all .12s"
+                }
+              },"✏ bewerken")
+            )
+          ),
+          renderMode
+            ? React.createElement("div",{
+                className:"mdv",
+                style:{flex:1, overflowY:"auto", padding:"20px 28px",
+                       lineHeight:"1.85", background:W.bg},
+                dangerouslySetInnerHTML:{__html: renderMd(editMd)}
+              })
+            : React.createElement("textarea",{
+                value:editMd,
+                onChange:e=>setEditMd(e.target.value),
+                spellCheck:false,
+                style:{flex:1, background:W.bg, border:"none", padding:"14px 16px",
+                       color:W.fg, fontSize:"14px", lineHeight:"1.7",
+                       outline:"none", resize:"none", fontFamily:"'Hack','Courier New',monospace"}
+              })
         )
       ),
 
