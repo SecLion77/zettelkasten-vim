@@ -3581,273 +3581,530 @@ const MermaidPreviewBlock = ({ code, onEdit }) => {
   );
 };
 
-// ── MermaidCodeEditor — textarea met syntax highlighting overlay ───────────────
-// Gebruikt de overlay-techniek: een div met gekleurde spans eronder,
-// een transparante textarea erboven. Tekst en cursor blijven volledig bewerkbaar.
-// Kleuren komen exact overeen met het canvas-kleurenpalet.
-const MermaidCodeEditor = ({ value, onChange, editorRef }) => {
-  const taRef        = React.useRef(null);
-  const backdropRef  = React.useRef(null);
+// ── MermaidCodeEditor — canvas-based editor, identiek gedrag aan VimEditor ────
+// Volledig VIM-modes (INSERT/NORMAL/COMMAND/SEARCH), cursorline+cursorcolumn,
+// syntax highlighting per regel via canvas drawLine, statusbalk met mode-badge.
+const MermaidCodeEditor = ({ value, onChange, editorRef, noteTags=[], onTagsChange=()=>{}, allTags=[] }) => {
+  const { useState, useEffect, useRef, useCallback } = React;
 
-  // Expose insertAtCursor via editorRef — zelfde patroon als VimEditor's onEditorRef
-  React.useEffect(() => {
+  const FONT_SZ = 13;
+  const LINE_H2 = 22;
+  const PAD_L   = 6;
+
+  // ── PALETTE voor syntax kleuring (zelfde als highlight()-functie hierboven) ─
+  const MM_PALETTE = [W.blue, W.comment, W.orange, W.purple,
+                      W.string, W.type, W.keyword, "#e8d44d"];
+
+  // ── React state (alleen voor statusbalk re-render) ────────────────────────
+  const [mode,      setModeState] = useState("INSERT");
+  const [cmdBuf,    setCmdBuf]    = useState("");
+  const [statusMsg, setStatus]    = useState("");
+
+  // ── Alle editor-staat in één ref ─────────────────────────────────────────
+  const S = useRef({
+    lines:   value.split("\n"),
+    cur:     {row:0, col:0},
+    scroll:  0,
+    mode:    "INSERT",
+    cmdBuf:  "",
+    undo:    [value.split("\n")],
+    undoIdx: 0,
+    yank:    "",
+    search:  "",
+    matches: [],
+    matchIdx:0,
+    charW:   7.8,
+    visRows: 20,
+  });
+
+  const cvRef      = useRef(null);
+  const inputRef   = useRef(null);
+  const rafRef     = useRef(null);
+  const blinkRef   = useRef(null);
+  const blinkOn    = useRef(true);
+  const undoTimer  = useRef(null);
+  const prevValue  = useRef(value);
+
+  const setMode = useCallback((m) => {
+    S.current.mode = m;
+    setModeState(m);
+    blinkOn.current = true;
+  }, []);
+
+  // ── Externe value sync ───────────────────────────────────────────────────
+  useEffect(() => {
+    if (value !== prevValue.current) {
+      prevValue.current = value;
+      S.current.lines = value.split("\n");
+      clamp();
+      draw();
+    }
+  }, [value]);
+
+  // ── editorRef API (focus + insertAtCursor) ───────────────────────────────
+  useEffect(() => {
     if (!editorRef) return;
     editorRef.current = {
-      focus: () => taRef.current?.focus(),
+      focus: () => inputRef.current?.focus(),
       insertAtCursor: (text) => {
-        const ta = taRef.current;
-        if (!ta) { onChange(value + text); return; }
-        const s  = ta.selectionStart;
-        const e  = ta.selectionEnd;
-        const nv = value.slice(0, s) + text + value.slice(e);
-        onChange(nv);
-        requestAnimationFrame(() => {
-          ta.selectionStart = ta.selectionEnd = s + text.length;
-          ta.focus();
+        const s = S.current;
+        setMode("INSERT");
+        text.split("\n").forEach((part, i) => {
+          for (const ch of part) insertChar(s, ch);
+          if (i < text.split("\n").length - 1) {
+            const {row,col} = s.cur;
+            const before = s.lines[row].slice(0,col);
+            const after  = s.lines[row].slice(col);
+            s.lines[row] = before;
+            s.lines.splice(row+1, 0, after);
+            s.cur.row++; s.cur.col=0;
+          }
         });
+        emit(s); scrollToCursor(s); draw();
+        inputRef.current?.focus();
       },
     };
   });
 
-  const PALETTE = [W.blue, W.comment, W.orange, W.purple,
-                   W.string, W.type, W.keyword, "#e8d44d"];
+  // ── Canvas setup ──────────────────────────────────────────────────────────
+  useEffect(() => {
+    const cv  = cvRef.current;
+    const inp = inputRef.current;
+    if (!cv) return;
+    const ctx = cv.getContext("2d");
+    ctx.font  = `${FONT_SZ}px 'Hack','Courier New',monospace`;
+    S.current.charW = ctx.measureText("M").width;
 
-  // Sync scroll tussen textarea en backdrop
-  const syncScroll = () => {
-    if (taRef.current && backdropRef.current) {
-      backdropRef.current.scrollTop  = taRef.current.scrollTop;
-      backdropRef.current.scrollLeft = taRef.current.scrollLeft;
-    }
-  };
+    const resize = () => {
+      const dpr = window.devicePixelRatio || 1;
+      const pw  = cv.parentElement.clientWidth;
+      const ph  = cv.parentElement.clientHeight;
+      cv.width  = pw * dpr;
+      cv.height = ph * dpr;
+      cv.style.width  = pw + "px";
+      cv.style.height = ph + "px";
+      ctx.scale(dpr, dpr);
+      S.current.visRows = Math.floor((ph - LINE_H2) / LINE_H2);
+      draw();
+    };
+    resize();
+    const ro = new ResizeObserver(resize);
+    ro.observe(cv.parentElement);
 
-  // Bouw de gekleurd-gerenderde HTML op basis van inspringing
-  const highlight = (text) => {
-    const lines = text.split("\n");
+    blinkRef.current = setInterval(() => { blinkOn.current = !blinkOn.current; draw(); }, 530);
 
-    // ── Stap 1: bepaal tak-kleur per regel ───────────────────────────────────
-    let branchIdx = 0;
-    let branchDepth = null;
-    const lineBranchIdx = [];
+    const onMouseDown = (e) => {
+      const r  = cv.getBoundingClientRect();
+      const s  = S.current;
+      const cw = s.charW;
+      const row = Math.min(s.lines.length-1, Math.max(0, Math.floor((e.clientY-r.top)/LINE_H2)+s.scroll));
+      const col = Math.min(s.lines[row].length, Math.max(0, Math.round((e.clientX-r.left-PAD_L)/cw)));
+      s.cur = {row,col};
+      setMode("INSERT");
+      scrollToCursor(s);
+      inp.focus();
+      draw();
+    };
+    cv.addEventListener("mousedown", onMouseDown);
 
-    lines.forEach((line) => {
-      const trimmed = line.trimEnd();
-      if (!trimmed || trimmed.toLowerCase().startsWith("mindmap")) {
-        lineBranchIdx.push(-2); return;
-      }
-      const depth = Math.floor((line.match(/^( *)/)[1].length) / 2);
-      if (depth === 1) {
-        lineBranchIdx.push(-1); branchIdx = 0; branchDepth = null;
-      } else if (depth === 2) {
-        if (branchDepth !== null) branchIdx++;
-        branchDepth = 2; lineBranchIdx.push(branchIdx);
-      } else {
-        lineBranchIdx.push(branchDepth !== null ? branchIdx : 0);
-      }
-    });
-
-    // ── Stap 2: bouw per tak-index de kleur op ───────────────────────────────
-    // branchColors[i] = PALETTE[i % len] voor tak i
-    const branchColors = {};
-    lineBranchIdx.forEach(idx => {
-      if (idx >= 0 && !(idx in branchColors))
-        branchColors[idx] = PALETTE[idx % PALETTE.length];
-    });
-
-    // ── Stap 3: render elke regel ─────────────────────────────────────────────
-    return lines.map((line, li) => {
-      const idx = lineBranchIdx[li];
-      const raw = line
-        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-
-      // ── Header "mindmap" ──────────────────────────────────────────────────
-      if (idx === -2) {
-        return `<span style="color:${W.fgMuted};font-style:italic">${raw}</span>`;
-      }
-
-      const spaces = (line.match(/^( *)/)[1].length);
-      const depth  = Math.floor(spaces / 2);
-      const rest   = raw.slice(spaces); // tekst na inspringing
-
-      // ── Indent guides: één verticale lijn per inspring-niveau ─────────────
-      // De lijn direct voor de tekst (lvl === depth-1) krijgt de tak-kleur.
-      // Bovenliggende lijnen krijgen een steeds zwakkere neutrale kleur.
-      let indentHtml = "";
-      for (let lvl = 0; lvl < depth; lvl++) {
-        const isLast = lvl === depth - 1;
-        const branchCol = branchColors[idx] || W.fgMuted;
-
-        // Laatste lijn: tak-kleur, helder genoeg om op te vallen
-        // Oudere lijnen: neutraal grijs, steeds verder vervaagd
-        const lineCol = isLast
-          ? branchCol + "66"
-          : `rgba(255,255,255,${Math.max(0.04, 0.12 - lvl * 0.03)})`;
-
-        indentHtml +=
-          `<span style="display:inline-block;width:1ch;` +
-          `border-left:1.5px solid ${lineCol};` +
-          `box-sizing:border-box"> </span>` +
-          `<span style="display:inline-block;width:1ch"> </span>`;
-      }
-
-      // ── Root node ────────────────────────────────────────────────────────
-      if (idx === -1) {
-        const highlighted = rest
-          .replace(/^(root)(\(\()(.*)(\)\))/, (_, kw, op, lbl, cl) =>
-            `<span style="color:${W.fgMuted}">${kw}</span>` +
-            `<span style="color:rgba(255,255,255,0.3)">${op}</span>` +
-            `<span style="color:${W.blue};font-weight:bold">${lbl}</span>` +
-            `<span style="color:rgba(255,255,255,0.3)">${cl}</span>`);
-        const colored = highlighted !== rest ? highlighted
-          : `<span style="color:${W.blue};font-weight:bold">${rest}</span>`;
-        return indentHtml + colored;
-      }
-
-      // ── Tak / sub-node ────────────────────────────────────────────────────
-      const col = PALETTE[idx % PALETTE.length];
-      const opacity = depth === 2 ? "ff"
-                    : depth === 3 ? "cc"
-                    : depth === 4 ? "99"
-                    : "77";
-
-      const coloredRest = rest
-        .replace(/^(\(\()(.*)(\)\))/, (_, op, lbl, cl) =>
-          `<span style="color:rgba(255,255,255,0.3)">${op}</span>` +
-          `<span style="color:${col}${opacity};font-weight:bold">${lbl}</span>` +
-          `<span style="color:rgba(255,255,255,0.3)">${cl}</span>`)
-        .replace(/^(\()(.*)(\))/, (_, op, lbl, cl) =>
-          `<span style="color:rgba(255,255,255,0.3)">${op}</span>` +
-          `<span style="color:${col}${opacity}">${lbl}</span>` +
-          `<span style="color:rgba(255,255,255,0.3)">${cl}</span>`)
-        .replace(/^(\[)(.*)(\])/, (_, op, lbl, cl) =>
-          `<span style="color:rgba(255,255,255,0.3)">${op}</span>` +
-          `<span style="color:${col}${opacity}">${lbl}</span>` +
-          `<span style="color:rgba(255,255,255,0.3)">${cl}</span>`);
-
-      const colored = coloredRest !== rest ? coloredRest
-        : `<span style="color:${col}${opacity};font-weight:${depth<=2?"bold":"normal"}">${rest}</span>`;
-
-      return indentHtml + colored;
-    }).join("\n");
-  };
-
-  // ── Cursor-positie bijhouden voor statusbalk ─────────────────────────────
-  const [curPos, setCurPos] = React.useState({ln:1, col:1});
-
-  const updateCurPos = () => {
-    const ta = taRef.current;
-    if (!ta) return;
-    const before = ta.value.slice(0, ta.selectionStart);
-    const lines  = before.split("\n");
-    setCurPos({ ln: lines.length, col: lines[lines.length-1].length + 1 });
-  };
-
-  const SHARED_STYLE = {
-    position:    "absolute",
-    top:         0, left: 0, right: 0, bottom: 0,
-    margin:      0,
-    padding:     "10px 14px",
-    border:      "none",
-    outline:     "none",
-    fontSize:    "13px",
-    fontFamily:  "'Hack','Courier New',monospace",
-    lineHeight:  "1.65",
-    tabSize:     2,
-    whiteSpace:  "pre",
-    overflowWrap:"normal",
-    wordWrap:    "normal",
-    overflow:    "auto",
-    letterSpacing: "0",
-    wordSpacing:   "0",
-  };
-
-  const handleKeyDown = (e) => {
-    if (e.key === "Tab") {
+    const onWheel = (e) => {
       e.preventDefault();
-      const ta  = e.target;
-      const s   = ta.selectionStart;
-      const end = ta.selectionEnd;
-      const nv  = value.slice(0, s) + "  " + value.slice(end);
-      onChange(nv);
-      requestAnimationFrame(() => {
-        ta.selectionStart = ta.selectionEnd = s + 2;
-        updateCurPos();
-      });
+      const s = S.current;
+      s.scroll = Math.max(0, Math.min(s.lines.length-1, s.scroll + (e.deltaY>0?3:-3)));
+      draw();
+    };
+    cv.addEventListener("wheel", onWheel, {passive:false});
+
+    return () => {
+      ro.disconnect();
+      clearInterval(blinkRef.current);
+      cancelAnimationFrame(rafRef.current);
+      cv.removeEventListener("mousedown", onMouseDown);
+      cv.removeEventListener("wheel", onWheel);
+    };
+  }, []);
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
+  const clamp = () => {
+    const s = S.current;
+    s.cur.row = Math.max(0, Math.min(s.lines.length-1, s.cur.row));
+    s.cur.col = Math.max(0, Math.min(s.lines[s.cur.row].length, s.cur.col));
+  };
+  const scrollToCursor = (s) => {
+    if (s.cur.row < s.scroll) s.scroll = s.cur.row;
+    if (s.cur.row >= s.scroll + s.visRows) s.scroll = s.cur.row - s.visRows + 1;
+    s.scroll = Math.max(0, s.scroll);
+  };
+  const emit = (s) => {
+    const v = s.lines.join("\n");
+    prevValue.current = v;
+    onChange(v);
+  };
+  const pushUndo = (s) => {
+    const cut = s.undo.slice(0, s.undoIdx+1);
+    cut.push(s.lines.slice());
+    s.undo = cut; s.undoIdx = cut.length-1;
+  };
+  const scheduleUndo = (s) => {
+    clearTimeout(undoTimer.current);
+    undoTimer.current = setTimeout(()=>pushUndo(s), 600);
+  };
+  const insertChar = (s, ch) => {
+    const {row,col} = s.cur;
+    s.lines[row] = s.lines[row].slice(0,col) + ch + s.lines[row].slice(col);
+    s.cur.col += ch.length;
+  };
+
+  // ── Zoeken ────────────────────────────────────────────────────────────────
+  const buildMatches = (s, term) => {
+    s.search=term; s.matches=[]; s.matchIdx=0;
+    if (!term) return;
+    s.lines.forEach((line,r)=>{
+      let i=0;
+      while((i=line.indexOf(term,i))>=0){ s.matches.push({row:r,col:i}); i+=term.length; }
+    });
+  };
+  const jumpMatch = (s, dir) => {
+    if (!s.matches.length) return;
+    s.matchIdx=((s.matchIdx+dir)+s.matches.length)%s.matches.length;
+    const m=s.matches[s.matchIdx]; s.cur={row:m.row,col:m.col}; scrollToCursor(s);
+  };
+
+  // ── Command handler (incl. :tag) ──────────────────────────────────────────
+  const runCmd = useCallback((s, cmd) => {
+    cmd = cmd.trim();
+    if (/^tag\+/.test(cmd))  { const t=cmd.replace(/^tag\+\s*/,"").replace(/^#/,"").trim(); if(t) onTagsChange([...new Set([...noteTags,t])]); setStatus(`+tag: ${t}`); return; }
+    if (/^tag-/.test(cmd))   { const t=cmd.replace(/^tag-\s*/,"").replace(/^#/,"").trim(); onTagsChange(noteTags.filter(x=>x!==t)); setStatus(`-tag: ${t}`); return; }
+    if (/^tag\s/.test(cmd))  { const ts=cmd.slice(4).split(/[\s,]+/).map(t=>t.replace(/^#/,"")).filter(Boolean); onTagsChange([...new Set(ts)]); setStatus("tags: "+ts.join(" ")); return; }
+    if (cmd==="tags")         { setStatus("tags: "+noteTags.join(" ")); return; }
+    if (cmd==="w")            { setStatus("✓ gebruik '💾 opslaan' in toolbar"); return; }
+    setStatus(`onbekend: :${cmd}`);
+  }, [noteTags, onTagsChange]);
+
+  // ── Keyboard handler ──────────────────────────────────────────────────────
+  const handleKey = useCallback((e) => {
+    const s = S.current;
+    const m = s.mode;
+
+    // ── INSERT ───────────────────────────────────────────────────────────────
+    if (m === "INSERT") {
+      if (e.key === "Escape") { e.preventDefault(); setMode("NORMAL"); setStatus(""); draw(); return; }
+      if (e.ctrlKey && e.key==="s") { e.preventDefault(); setStatus("gebruik '💾 opslaan' in toolbar"); draw(); return; }
+
+      if (e.key==="ArrowLeft")  { e.preventDefault(); s.cur.col=Math.max(0,s.cur.col-1); scrollToCursor(s); draw(); return; }
+      if (e.key==="ArrowRight") { e.preventDefault(); s.cur.col=Math.min(s.lines[s.cur.row].length,s.cur.col+1); scrollToCursor(s); draw(); return; }
+      if (e.key==="ArrowUp")    { e.preventDefault(); if(s.cur.row>0){s.cur.row--;s.cur.col=Math.min(s.cur.col,s.lines[s.cur.row].length);} scrollToCursor(s); draw(); return; }
+      if (e.key==="ArrowDown")  { e.preventDefault(); if(s.cur.row<s.lines.length-1){s.cur.row++;s.cur.col=Math.min(s.cur.col,s.lines[s.cur.row].length);} scrollToCursor(s); draw(); return; }
+      if (e.key==="Home")       { e.preventDefault(); s.cur.col=0; draw(); return; }
+      if (e.key==="End")        { e.preventDefault(); s.cur.col=s.lines[s.cur.row].length; draw(); return; }
+
+      if (e.key==="Tab") {
+        e.preventDefault();
+        insertChar(s,"  "); emit(s); scrollToCursor(s); draw(); return;
+      }
+      if (e.key==="Enter") {
+        e.preventDefault();
+        const {row,col}=s.cur; const line=s.lines[row];
+        // Behoud inspringing (belangrijk voor mermaid-hiërachie)
+        const indent=line.match(/^( *)/)[1];
+        const after=line.slice(col);
+        s.lines[row]=line.slice(0,col);
+        s.lines.splice(row+1,0,indent+after);
+        s.cur.row++; s.cur.col=indent.length;
+        scheduleUndo(s); emit(s); scrollToCursor(s); draw(); return;
+      }
+      if (e.key==="Backspace") {
+        e.preventDefault();
+        const {row,col}=s.cur;
+        if (col>0){ s.lines[row]=s.lines[row].slice(0,col-1)+s.lines[row].slice(col); s.cur.col--; }
+        else if (row>0){ const prev=s.lines[row-1]; s.cur.col=prev.length; s.lines[row-1]=prev+s.lines[row]; s.lines.splice(row,1); s.cur.row--; }
+        scheduleUndo(s); emit(s); scrollToCursor(s); draw(); return;
+      }
+      if (e.key==="Delete") {
+        e.preventDefault();
+        const {row,col}=s.cur;
+        if(col<s.lines[row].length){ s.lines[row]=s.lines[row].slice(0,col)+s.lines[row].slice(col+1); }
+        else if(row<s.lines.length-1){ s.lines[row]=s.lines[row]+s.lines[row+1]; s.lines.splice(row+1,1); }
+        scheduleUndo(s); emit(s); draw(); return;
+      }
+      if (e.key.length===1 && !e.ctrlKey && !e.metaKey) {
+        e.preventDefault();
+        insertChar(s,e.key); scheduleUndo(s); emit(s); scrollToCursor(s); draw(); return;
+      }
+      return;
+    }
+
+    // ── COMMAND ──────────────────────────────────────────────────────────────
+    if (m==="COMMAND") {
+      e.preventDefault();
+      if (e.key==="Escape") { setMode("NORMAL"); s.cmdBuf=""; setCmdBuf(""); setStatus(""); draw(); return; }
+      if (e.key==="Enter")  { runCmd(s,s.cmdBuf); setMode("NORMAL"); s.cmdBuf=""; setCmdBuf(""); draw(); return; }
+      if (e.key==="Backspace"){ s.cmdBuf=s.cmdBuf.slice(0,-1); setCmdBuf(s.cmdBuf); draw(); return; }
+      if (e.key==="Tab") {
+        const tm=s.cmdBuf.match(/^(tag[+-]?\s+)(\S*)$/);
+        if(tm){ const p=tm[2].replace(/^#/,""); const hit=allTags.find(t=>t.startsWith(p)&&t!==p); if(hit){s.cmdBuf=tm[1]+hit; setCmdBuf(s.cmdBuf);} }
+        draw(); return;
+      }
+      if (e.key.length===1){ s.cmdBuf+=e.key; setCmdBuf(s.cmdBuf); draw(); return; }
+      return;
+    }
+
+    // ── SEARCH ───────────────────────────────────────────────────────────────
+    if (m==="SEARCH") {
+      e.preventDefault();
+      if (e.key==="Escape") { setMode("NORMAL"); s.cmdBuf=""; setCmdBuf(""); buildMatches(s,""); draw(); return; }
+      if (e.key==="Enter")  { buildMatches(s,s.cmdBuf); jumpMatch(s,0); setMode("NORMAL"); s.cmdBuf=""; setCmdBuf(""); draw(); return; }
+      if (e.key==="Backspace"){ s.cmdBuf=s.cmdBuf.slice(0,-1); setCmdBuf(s.cmdBuf); draw(); return; }
+      if (e.key.length===1)   { s.cmdBuf+=e.key; setCmdBuf(s.cmdBuf); draw(); return; }
+      return;
+    }
+
+    // ── NORMAL ───────────────────────────────────────────────────────────────
+    e.preventDefault();
+    const {row,col}=s.cur; const line=s.lines[row];
+
+    switch(e.key) {
+      case "i": setMode("INSERT"); break;
+      case "I": setMode("INSERT"); s.cur.col=0; break;
+      case "a": setMode("INSERT"); s.cur.col=Math.min(col+1,line.length); break;
+      case "A": setMode("INSERT"); s.cur.col=line.length; break;
+      case "o": s.lines.splice(row+1,0,"  ".repeat(Math.floor((line.match(/^( *)/)[1].length)/2))); s.cur.row++; s.cur.col=s.lines[s.cur.row].length; setMode("INSERT"); break;
+      case "O": s.lines.splice(row,0,"  ".repeat(Math.floor((line.match(/^( *)/)[1].length)/2))); s.cur.col=s.lines[row].length; setMode("INSERT"); break;
+      case ":": setMode("COMMAND"); s.cmdBuf=""; setCmdBuf(""); break;
+      case "/": setMode("SEARCH");  s.cmdBuf=""; setCmdBuf(""); break;
+      case "h": case "ArrowLeft":  s.cur.col=Math.max(0,col-1); break;
+      case "l": case "ArrowRight": s.cur.col=Math.min(line.length,col+1); break;
+      case "j": case "ArrowDown":  if(row<s.lines.length-1){s.cur.row++;s.cur.col=Math.min(col,s.lines[s.cur.row].length);} break;
+      case "k": case "ArrowUp":    if(row>0){s.cur.row--;s.cur.col=Math.min(col,s.lines[s.cur.row].length);} break;
+      case "w": { const rest=line.slice(col+1); const m2=rest.search(/\b\w/); if(m2>=0)s.cur.col=col+1+m2; else if(row<s.lines.length-1){s.cur.row++;s.cur.col=0;} break; }
+      case "b": { const before=line.slice(0,col); const m2=before.search(/\w+$/); if(m2>=0)s.cur.col=m2; else if(row>0){s.cur.row--;s.cur.col=s.lines[s.cur.row].length;} break; }
+      case "0": s.cur.col=0; break;
+      case "$": s.cur.col=line.length; break;
+      case "g": s.cur.row=0; s.cur.col=0; break;
+      case "G": s.cur.row=s.lines.length-1; s.cur.col=0; break;
+      case "n": jumpMatch(s,1); break;
+      case "N": jumpMatch(s,-1); break;
+      // Tab in NORMAL: inspringen (mermaid-specifiek)
+      case "Tab":
+        { const ind=line.match(/^( *)/)[1]; s.lines[row]="  "+line; s.cur.col+=2; scheduleUndo(s); emit(s); break; }
+      // Shift+Tab: uitspringen
+      case "S":
+        if(e.shiftKey){ const ind=line.slice(0,2)==="  "?line.slice(2):line; s.lines[row]=ind; s.cur.col=Math.max(0,col-2); scheduleUndo(s); emit(s); } break;
+      case "x": if(col<line.length){s.yank=line[col]; pushUndo(s); s.lines[row]=line.slice(0,col)+line.slice(col+1); emit(s);} break;
+      case "d": s.yank=line; pushUndo(s); s.lines.splice(row,1); if(s.lines.length===0)s.lines=[""]; clamp(); emit(s); break;
+      case "D": pushUndo(s); s.lines[row]=line.slice(0,col); emit(s); break;
+      case "y": s.yank=line; setStatus("gekopieerd"); break;
+      case "p": pushUndo(s); s.lines.splice(row+1,0,s.yank); s.cur.row++; s.cur.col=0; emit(s); break;
+      case "P": pushUndo(s); s.lines.splice(row,0,s.yank); s.cur.col=0; emit(s); break;
+      case "u": if(s.undoIdx>0){s.undoIdx--;s.lines=s.undo[s.undoIdx].slice();clamp();emit(s);setStatus("undo");} break;
+      case "r": if(e.ctrlKey&&s.undoIdx<s.undo.length-1){s.undoIdx++;s.lines=s.undo[s.undoIdx].slice();clamp();emit(s);setStatus("redo");} break;
+      case " ": setStatus(""); buildMatches(s,""); break;
+      case "Escape": setStatus(""); break;
+    }
+    clamp(); scrollToCursor(s); draw();
+  }, [allTags, noteTags, onTagsChange, runCmd]);
+
+  const handlePaste = useCallback((e) => {
+    e.preventDefault();
+    const s=S.current; if(s.mode!=="INSERT") return;
+    const text=e.clipboardData.getData("text");
+    text.split("\n").forEach((ln,i)=>{
+      if(i===0){ insertChar(s,ln); }
+      else {
+        const {row,col}=s.cur; const rest=s.lines[row].slice(col);
+        s.lines[row]=s.lines[row].slice(0,col); s.lines.splice(row+1,0,ln);
+        s.cur.row++; s.cur.col=ln.length;
+        if(i===text.split("\n").length-1) s.lines[s.cur.row]+=rest;
+      }
+    });
+    scheduleUndo(s); emit(s); scrollToCursor(s); draw();
+  }, []);
+
+  // ── Draw ──────────────────────────────────────────────────────────────────
+  const draw = useCallback(() => {
+    cancelAnimationFrame(rafRef.current);
+    rafRef.current = requestAnimationFrame(drawFrame);
+  }, []);
+
+  // Bouw per-regel kleurinformatie (tak-index) voor canvas drawLine
+  const buildLineColors = (lines) => {
+    let bi=0, bd=null; const lbi=[];
+    lines.forEach(line=>{
+      const t=line.trimEnd();
+      if(!t||t.toLowerCase().startsWith("mindmap")){lbi.push(-2);return;}
+      const depth=Math.floor((line.match(/^( *)/)[1].length)/2);
+      if(depth===1){lbi.push(-1);bi=0;bd=null;}
+      else if(depth===2){if(bd!==null)bi++;bd=2;lbi.push(bi);}
+      else{lbi.push(bd!==null?bi:0);}
+    });
+    return lbi;
+  };
+
+  // Teken één regel met syntax kleuring op canvas
+  const drawMermaidLine = (ctx, line, x, y, cw, isCur, branchIdx, lineColors) => {
+    if (!line) return;
+    const depth  = Math.floor((line.match(/^( *)/)[1].length)/2);
+    const rest   = line.slice(depth*2);
+    const idx    = branchIdx;
+
+    // Indent guides — verticale lijnen (zelfde logica als highlight())
+    for (let lvl=0; lvl<depth; lvl++) {
+      const isLast = lvl===depth-1;
+      const branchCol = idx>=0 ? MM_PALETTE[idx%MM_PALETTE.length] : W.fgMuted;
+      const lineCol = isLast ? branchCol+"99" : "rgba(255,255,255,0.08)";
+      ctx.fillStyle = lineCol;
+      ctx.fillRect(x + lvl*2*cw, y, 1, LINE_H2);
+    }
+
+    const drawSpan = (text, color, bold=false, sx) => {
+      ctx.fillStyle = color;
+      ctx.font = bold ? `bold ${FONT_SZ}px 'Hack','Courier New',monospace`
+                      : `${FONT_SZ}px 'Hack','Courier New',monospace`;
+      ctx.fillText(text, sx, y+4);
+      ctx.font = `${FONT_SZ}px 'Hack','Courier New',monospace`;
+    };
+
+    const tx = x + depth*2*cw; // tekst-x na inspring
+
+    if (idx===-2) {
+      // mindmap header
+      drawSpan(line, W.fgMuted, false, x);
+      return;
+    }
+    if (idx===-1) {
+      // root node
+      const rootM = rest.match(/^(root)(\(\()(.*)(\)\))(.*)$/);
+      if (rootM) {
+        let cx = tx;
+        drawSpan(rootM[1], W.fgMuted, false, cx); cx+=rootM[1].length*cw;
+        drawSpan(rootM[2], "rgba(255,255,255,0.3)", false, cx); cx+=rootM[2].length*cw;
+        drawSpan(rootM[3], W.blue, true, cx); cx+=rootM[3].length*cw;
+        drawSpan(rootM[4], "rgba(255,255,255,0.3)", false, cx); cx+=rootM[4].length*cw;
+        if(rootM[5]) drawSpan(rootM[5], W.fg, false, cx);
+      } else {
+        drawSpan(rest, W.blue, true, tx);
+      }
+      return;
+    }
+
+    // tak/sub-node
+    const col = MM_PALETTE[idx%MM_PALETTE.length];
+    const opHex = depth===2?"ff":depth===3?"cc":depth===4?"99":"77";
+    const finalCol = col+opHex;
+
+    const bracM = rest.match(/^(\(\()(.*)(\)\))(.*)$/) ||
+                  rest.match(/^(\()(.*)(\))(.*)$/)      ||
+                  rest.match(/^(\[)(.*)(\])(.*)$/);
+    if (bracM) {
+      let cx=tx;
+      drawSpan(bracM[1], "rgba(255,255,255,0.3)", false, cx); cx+=bracM[1].length*cw;
+      drawSpan(bracM[2], finalCol, depth<=2, cx); cx+=bracM[2].length*cw;
+      drawSpan(bracM[3], "rgba(255,255,255,0.3)", false, cx); cx+=bracM[3].length*cw;
+      if(bracM[4]) drawSpan(bracM[4], W.fgDim, false, cx);
+    } else {
+      drawSpan(rest, finalCol, depth<=2, tx);
     }
   };
 
-  // ── Statusbalk — identiek aan VimEditor ──────────────────────────────────
-  const statusBar = React.createElement("div", {
-    style:{
-      position:"absolute", bottom:0, left:0, right:0, height:"22px",
-      background:W.statusBg, display:"flex", alignItems:"center",
-      zIndex:3, userSelect:"none", pointerEvents:"none",
-    }
-  },
-    React.createElement("div", {style:{
-      background:W.comment, color:W.bg,
-      padding:"0 8px", height:"100%",
-      display:"flex", alignItems:"center",
-      fontSize:"11px", fontWeight:"bold",
-      fontFamily:"'Hack','Courier New',monospace",
-      letterSpacing:"0.5px", flexShrink:0,
-    }}, " INSERT "),
-    React.createElement("span", {style:{
-      fontSize:"11px", color:W.fgMuted,
-      fontFamily:"'Hack','Courier New',monospace",
-      marginLeft:"8px", overflow:"hidden",
-      textOverflow:"ellipsis", whiteSpace:"nowrap", flex:1,
-    }}, "  Tab=inspring  \u2014  🔗 koppelen = link invoegen op cursorpositie"),
-    React.createElement("span", {style:{
-      fontSize:"11px", color:W.fgDim,
-      fontFamily:"'Hack','Courier New',monospace",
-      marginRight:"10px", flexShrink:0,
-    }}, curPos.ln+":"+curPos.col)
-  );
+  const drawFrame = useCallback(() => {
+    const cv=cvRef.current; if(!cv) return;
+    const ctx=cv.getContext("2d");
+    const dpr=window.devicePixelRatio||1;
+    const CW=cv.width/dpr; const CH=cv.height/dpr;
+    const s=S.current;
+    const cw=s.charW;
+    const {row:curRow,col:curCol}=s.cur;
 
-  return React.createElement("div", {
-    style:{ flex:1, position:"relative", overflow:"hidden", background:W.bg }
+    ctx.font=`${FONT_SZ}px 'Hack','Courier New',monospace`;
+    ctx.textBaseline="top";
+
+    // Achtergrond
+    ctx.fillStyle=W.bg; ctx.fillRect(0,0,CW,CH);
+
+    // ── Cursorline (horizontaal) + cursorcolumn (verticaal) ────────────────
+    const cyPos=(curRow-s.scroll)*LINE_H2;
+    const cxPos=PAD_L+curCol*cw;
+    if(curRow>=s.scroll && curRow<s.scroll+s.visRows+1){
+      ctx.fillStyle="rgba(255,255,255,0.055)";
+      ctx.fillRect(0, cyPos, CW, LINE_H2);
+    }
+    ctx.fillStyle="rgba(255,255,255,0.035)";
+    ctx.fillRect(cxPos, 0, cw, CH-LINE_H2);
+
+    // ── Regels ────────────────────────────────────────────────────────────
+    const lineColors = buildLineColors(s.lines);
+    for(let i=0; i<=s.visRows; i++){
+      const li=i+s.scroll;
+      if(li>=s.lines.length) break;
+      const y=i*LINE_H2;
+      const line=s.lines[li];
+
+      // Zoek-highlights
+      if(s.search && s.matches.length){
+        s.matches.filter(m=>m.row===li).forEach((m,mi)=>{
+          const isActive=mi===s.matchIdx&&s.matches[s.matchIdx].row===li;
+          ctx.fillStyle=isActive?"rgba(234,231,136,0.5)":"rgba(138,198,242,0.2)";
+          ctx.fillRect(PAD_L+m.col*cw, y, s.search.length*cw, LINE_H2);
+        });
+      }
+
+      drawMermaidLine(ctx, line, PAD_L, y, cw, li===curRow, lineColors[li], lineColors);
+    }
+
+    // ── Cursor ─────────────────────────────────────────────────────────────
+    if(curRow>=s.scroll && curRow<s.scroll+s.visRows+1){
+      const cx=PAD_L+curCol*cw;
+      const cy=(curRow-s.scroll)*LINE_H2;
+      if(s.mode==="INSERT"){
+        if(blinkOn.current){ ctx.fillStyle=W.cursorBg; ctx.fillRect(cx-1,cy+2,2,LINE_H2-4); }
+      } else {
+        const bColor=s.mode==="COMMAND"?W.orange:s.mode==="SEARCH"?W.purple:W.cursorBg;
+        ctx.globalAlpha=blinkOn.current?0.9:0.4;
+        ctx.fillStyle=bColor; ctx.fillRect(cx,cy,cw,LINE_H2);
+        ctx.globalAlpha=1;
+        const ch=(s.lines[curRow]||"")[curCol]||" ";
+        ctx.fillStyle=W.bg; ctx.fillText(ch,cx,cy+4);
+      }
+    }
+
+    // ── Statusbalk — identiek aan VimEditor ───────────────────────────────
+    const sbY=CH-LINE_H2;
+    ctx.fillStyle=W.statusBg; ctx.fillRect(0,sbY,CW,LINE_H2);
+
+    const modeLabel=` ${s.mode} `;
+    const modeColor=s.mode==="INSERT"?W.comment:s.mode==="COMMAND"?W.orange:s.mode==="SEARCH"?W.purple:W.blue;
+    const badgeW=modeLabel.length*cw+4;
+    ctx.fillStyle=modeColor; ctx.fillRect(0,sbY,badgeW,LINE_H2);
+    ctx.fillStyle=W.bg;
+    ctx.font=`bold ${FONT_SZ}px 'Hack','Courier New',monospace`;
+    ctx.fillText(modeLabel,2,sbY+4);
+    ctx.font=`${FONT_SZ}px 'Hack','Courier New',monospace`;
+
+    let stxt="";
+    if(s.mode==="COMMAND") stxt=":"+s.cmdBuf+"█";
+    else if(s.mode==="SEARCH") stxt="/"+s.cmdBuf+"█";
+    else if(statusMsg) stxt="  "+statusMsg;
+    else if(s.mode==="INSERT") stxt="  -- INSERT --  Esc=NORMAL  Tab=inspringing  Enter=nieuwe regel";
+    else stxt=`  ${s.lines.length}L  |  i=INSERT  :tag+=naam  :tag-=naam  /=zoeken  dd=delete  u=undo`;
+
+    ctx.fillStyle=W.fgMuted; ctx.fillText(stxt,badgeW+6,sbY+4);
+    const posStr=`${curRow+1}:${curCol+1}`;
+    ctx.textAlign="right"; ctx.fillStyle=W.fgDim; ctx.fillText(posStr,CW-6,sbY+4);
+    ctx.textAlign="left";
+  }, [statusMsg]);
+
+  return React.createElement("div",{
+    style:{flex:1, position:"relative", overflow:"hidden", background:W.bg}
   },
-    // Scroll-wrapper: houdt 22px vrij voor statusbalk
-    React.createElement("div", {
-      style:{ position:"absolute", top:0, left:0, right:0, bottom:"22px", overflow:"hidden" }
-    },
-      // Backdrop: syntax highlighting (niet interactief)
-      React.createElement("div", {
-        ref: backdropRef,
-        "aria-hidden": "true",
-        style:{
-          ...SHARED_STYLE,
-          color:         W.fg,
-          background:    "transparent",
-          pointerEvents: "none",
-          userSelect:    "none",
-          zIndex:        1,
-        },
-        dangerouslySetInnerHTML:{ __html: highlight(value) + "\n" }
-      }),
-      // Textarea: transparante tekst, cursor wél zichtbaar
-      React.createElement("textarea", {
-        ref:            taRef,
-        value,
-        onChange:       e => { onChange(e.target.value); syncScroll(); updateCurPos(); },
-        onScroll:       syncScroll,
-        onKeyDown:      handleKeyDown,
-        onClick:        updateCurPos,
-        onKeyUp:        updateCurPos,
-        spellCheck:     false,
-        autoCapitalize: "off",
-        autoCorrect:    "off",
-        style:{
-          ...SHARED_STYLE,
-          background:  "transparent",
-          color:       "transparent",
-          caretColor:  W.fg,
-          resize:      "none",
-          zIndex:      2,
-        }
-      })
-    ),
-    statusBar
+    React.createElement("canvas",{ref:cvRef, style:{display:"block"}}),
+    React.createElement("input",{
+      ref:inputRef, onKeyDown:handleKey, onPaste:handlePaste,
+      readOnly:true,
+      style:{position:"absolute",top:0,left:0,width:"1px",height:"1px",
+             opacity:0,border:"none",outline:"none",padding:0,
+             fontSize:"1px",pointerEvents:"none"},
+      tabIndex:0,
+    })
   );
 };
 
@@ -4145,6 +4402,9 @@ const MermaidEditor = ({ initialText="", onSave, onCancel, notes=[], serverPdfs=
           value: code,
           onChange: setCode,
           editorRef,
+          noteTags: tags,
+          onTagsChange: setTags,
+          allTags: ["mindmap","ai","overzicht","notitie","pdf","import"],
         })
       ),
 
