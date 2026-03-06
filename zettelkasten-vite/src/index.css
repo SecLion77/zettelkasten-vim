@@ -1,0 +1,197 @@
+@import url('https://cdn.jsdelivr.net/npm/hack-font@3/build/web/hack.css');
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Wombat Kleurenschema als shadcn CSS-variabelen ──────────────────────── */
+:root {
+  --background:      36 8% 14%;   /* #242424 */
+  --foreground:      40 10% 88%;  /* #e3e0d7 */
+  --card:            0 0% 11%;    /* #1c1c1c */
+  --card-foreground: 40 10% 88%;
+  --popover:         0 0% 11%;
+  --popover-foreground: 40 10% 88%;
+  --primary:         200 72% 74%; /* #8ac6f2 blauw */
+  --primary-foreground: 36 8% 14%;
+  --secondary:       0 0% 18%;    /* #2d2d2d */
+  --secondary-foreground: 40 10% 88%;
+  --muted:           0 0% 18%;
+  --muted-foreground: 25 7% 49%;  /* #857b6f */
+  --accent:          0 0% 22%;    /* #383838 */
+  --accent-foreground: 40 10% 88%;
+  --destructive:     5 68% 66%;   /* #e5786d oranje/rood */
+  --destructive-foreground: 0 0% 100%;
+  --border:          214 10% 24%; /* #3a4046 */
+  --input:           214 10% 24%;
+  --ring:            200 72% 74%;
+  --radius:          0.5rem;
+}
+
+/* ── Base reset ──────────────────────────────────────────────────────────── */
+* { box-sizing: border-box; margin: 0; padding: 0; }
+canvas { touch-action: none; }
+.textLayer, .textLayer * { touch-action: auto !important; }
+button { touch-action: manipulation; }
+
+html, body, #root {
+  height: 100%; width: 100%;
+  overflow: hidden;
+  background: #1c1c1c;
+  color: #e3e0d7;
+  font-family: 'DM Sans', system-ui, sans-serif;
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── Scrollbars ──────────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #3a4046; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #4a5058; }
+
+/* ── PDF Text Layer ──────────────────────────────────────────────────────── */
+.textLayer {
+  position: absolute !important; inset: 0 !important;
+  overflow: hidden !important; opacity: 1 !important;
+  line-height: 1 !important;
+  user-select: text !important;
+  -webkit-user-select: text !important;
+  cursor: text !important;
+  pointer-events: auto !important;
+  touch-action: auto !important;
+  -webkit-touch-callout: default !important;
+}
+.textLayer span, .textLayer br {
+  color: transparent !important; position: absolute !important;
+  white-space: pre !important; cursor: text !important;
+  transform-origin: 0% 0% !important;
+  user-select: text !important;
+  -webkit-user-select: text !important;
+  pointer-events: auto !important;
+}
+.textLayer ::selection { background: rgba(234,231,136,0.5) !important; color: transparent !important; }
+
+/* ── Goyo / Focus mode ───────────────────────────────────────────────────── */
+.goyo-mode .sidebar,
+.goyo-mode .meta-panel,
+.goyo-mode .top-bar-tabs { display: none !important; }
+.goyo-mode .editor-wrap  { max-width: 680px; margin: 0 auto; padding: 40px 60px; }
+
+/* ── Markdown renderer ───────────────────────────────────────────────────── */
+.mdv h1 { font-size: 1.25rem; font-weight: 600; color: #ffffd7; margin: 0 0 14px; border-bottom: 1px solid #3a4046; padding-bottom: 6px; font-family: 'DM Sans', sans-serif; }
+.mdv h2 { font-size: 1.05rem; font-weight: 600; color: #cae682; margin: 18px 0 8px; font-family: 'DM Sans', sans-serif; }
+.mdv h3 { font-size: 0.9rem;  font-weight: 500; color: #e3e0d7; margin: 14px 0 6px; font-family: 'DM Sans', sans-serif; }
+.mdv p  { color: #d8d5cc; line-height: 1.85; margin: 0 0 10px; font-size: 0.875rem; }
+.mdv ul, .mdv ol { padding-left: 22px; margin: 6px 0 10px; }
+.mdv li { color: #d8d5cc; line-height: 1.8; font-size: 0.875rem; margin-bottom: 3px; }
+.mdv strong { color: #ffffd7; font-weight: 600; }
+.mdv em { color: #a0a8b0; font-style: italic; }
+.mdv code { background: rgba(255,255,255,0.07); padding: 1px 6px; border-radius: 4px; font-size: 0.8rem; color: #cae682; font-family: 'Hack', monospace; border: 1px solid rgba(255,255,255,0.06); }
+.mdv pre { background: rgba(0,0,0,0.35); padding: 12px 14px; border-radius: 6px; margin: 10px 0; overflow-x: auto; border-left: 3px solid #3a4046; border: 1px solid rgba(255,255,255,0.06); }
+.mdv pre code { background: none; padding: 0; font-size: 0.8rem; color: #cae682; border: none; }
+.mdv blockquote { border-left: 3px solid #e5786d; padding: 4px 12px; margin: 10px 0; background: rgba(229,120,109,0.07); color: #a0a8b0; font-style: italic; border-radius: 0 4px 4px 0; }
+.mdv table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: 0.8rem; }
+.mdv th { background: rgba(255,255,255,0.06); color: #8ac6f2; padding: 6px 10px; border: 1px solid #3a4046; text-align: left; font-weight: 500; font-family: 'DM Sans', sans-serif; }
+.mdv td { padding: 5px 10px; border: 1px solid #3a4046; }
+.mdv tr:nth-child(even) td { background: rgba(255,255,255,0.02); }
+.mdv hr { border: none; border-top: 1px solid #3a4046; margin: 18px 0; }
+.zlink { color: #8ac6f2; cursor: pointer; text-decoration: underline; text-decoration-color: rgba(138,198,242,0.35); font-size: 0.875rem; transition: color 0.12s; }
+.zlink:hover { color: #ffffd7; }
+.taghl { color: #9fca56; font-size: 0.875rem; }
+.spell-error { border-bottom: 2px solid #e5786d; cursor: help; }
+
+/* ── Input / textarea placeholders ──────────────────────────────────────── */
+textarea::placeholder, input::placeholder { color: #5a524a; }
+input, textarea, button, select { font-family: 'DM Sans', system-ui, sans-serif; }
+
+/* ── Animaties ───────────────────────────────────────────────────────────── */
+@keyframes ai-pulse { 0%,100% { opacity:1; } 50% { opacity:0.6; } }
+@keyframes ai-dot   { 0%,100% { transform:scale(1); } 50% { transform:scale(0.7); } }
+@keyframes fadeIn   { from { opacity:0; transform:translateY(-3px); } to { opacity:1; transform:translateY(0); } }
+@keyframes slideUp  { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:translateY(0); } }
+
+.animate-ai-pulse { animation: ai-pulse 1.4s ease-in-out infinite; }
+.animate-fade-in  { animation: fadeIn 0.18s ease-out; }
+.animate-slide-up { animation: slideUp 0.22s cubic-bezier(0.16,1,0.3,1); }
+
+/* ── Modern button base (extra polish bovenop shadcn) ────────────────────── */
+.btn-wombat {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 4px 11px; border-radius: 6px; font-size: 11px;
+  border: 1px solid #3a4046; background: transparent;
+  color: #857b6f; cursor: pointer; transition: all 0.12s;
+  font-family: 'DM Sans', sans-serif; letter-spacing: 0.2px;
+  white-space: nowrap; flex-shrink: 0;
+  user-select: none;
+}
+.btn-wombat:hover { color: #e3e0d7; border-color: #4a5258; background: rgba(255,255,255,0.04); }
+.btn-wombat:active { transform: scale(0.97); }
+.btn-wombat.active { color: #8ac6f2; border-color: rgba(138,198,242,0.4); background: rgba(138,198,242,0.08); }
+.btn-wombat.primary { color: #242424; border-color: #9fca56; background: #9fca56; font-weight: 600; }
+.btn-wombat.primary:hover { background: #b2d96a; border-color: #b2d96a; }
+.btn-wombat.danger { color: #e5786d; border-color: rgba(229,120,109,0.35); }
+.btn-wombat.danger:hover { background: rgba(229,120,109,0.1); }
+
+/* ── Sidebar items ───────────────────────────────────────────────────────── */
+.note-item {
+  padding: 8px 12px; cursor: pointer; border-radius: 6px;
+  transition: background 0.1s; border: 1px solid transparent;
+  margin: 1px 4px;
+}
+.note-item:hover { background: rgba(255,255,255,0.04); border-color: rgba(255,255,255,0.04); }
+.note-item.selected { background: rgba(138,198,242,0.1); border-color: rgba(138,198,242,0.2); }
+
+/* ── Tag pills ───────────────────────────────────────────────────────────── */
+.tag-pill {
+  display: inline-flex; align-items: center; gap: 3px;
+  padding: 2px 8px; border-radius: 20px; font-size: 10px;
+  background: rgba(159,202,86,0.12); border: 1px solid rgba(159,202,86,0.3);
+  color: #9fca56; font-family: 'DM Sans', sans-serif;
+  letter-spacing: 0.3px; cursor: default; white-space: nowrap;
+  transition: background 0.1s;
+}
+.tag-pill:hover { background: rgba(159,202,86,0.18); }
+.tag-pill button { background: none; border: none; color: inherit; cursor: pointer; padding: 0; opacity: 0.6; font-size: 10px; line-height: 1; }
+.tag-pill button:hover { opacity: 1; }
+
+/* ── Top bar ─────────────────────────────────────────────────────────────── */
+.topbar-tab {
+  display: flex; align-items: center; gap: 5px;
+  padding: 0 14px; height: 100%; font-size: 11px;
+  border: none; border-bottom: 2px solid transparent;
+  background: transparent; color: #857b6f; cursor: pointer;
+  letter-spacing: 0.5px; transition: color 0.12s, background 0.12s;
+  white-space: nowrap; flex-shrink: 0;
+  font-family: 'DM Sans', sans-serif;
+}
+.topbar-tab:hover { color: #e3e0d7; background: rgba(255,255,255,0.03); }
+.topbar-tab.active { color: #ffffd7; border-bottom-color: #eae788; background: rgba(255,255,255,0.05); }
+
+/* ── Stats badges ────────────────────────────────────────────────────────── */
+.stat-badge {
+  display: flex; align-items: baseline; gap: 3px;
+  padding: 4px 10px; border-radius: 6px;
+  font-family: 'DM Sans', sans-serif;
+}
+
+/* ── Dropdown ────────────────────────────────────────────────────────────── */
+.wombat-dropdown {
+  background: #1c1c1c; border: 1px solid #3a4046; border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.75), 0 2px 8px rgba(0,0,0,0.4);
+  animation: fadeIn 0.14s ease-out;
+}
+
+/* ── Divider ─────────────────────────────────────────────────────────────── */
+.wombat-divider { width: 1px; background: #3a4046; align-self: stretch; margin: 6px 0; }
+
+/* ── Snippet hints ───────────────────────────────────────────────────────── */
+.snippet-hint {
+  position: absolute; background: #2d2d2d; border: 1px solid #3a4046;
+  border-radius: 5px; padding: 4px 8px; font-size: 11px; color: #8ac6f2;
+  pointer-events: none; z-index: 100; font-family: 'Hack', monospace;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+}
+
+/* ── iOS safe area ───────────────────────────────────────────────────────── */
+.scroll-ios { -webkit-overflow-scrolling: touch; overflow-y: auto; }

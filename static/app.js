@@ -1,8 +1,8 @@
 // ─── WOMBAT COLOR SCHEME ────────────────────────────────────────────────────────
 const W = {
-  bg:"#242424",bg2:"#1c1c1c",bg3:"#2d2d2d",
-  statusBg:"#444444",visualBg:"#554d4b",cursorBg:"#eae788",
-  splitBg:"#3a4046",lineNrBg:"#303030",
+  bg:"#242424",bg2:"#1c1c1c",bg3:"#2a2a2a",
+  statusBg:"#2a2a2a",visualBg:"#554d4b",cursorBg:"#eae788",
+  splitBg:"#3a4046",lineNrBg:"#222222",
   fg:"#e3e0d7",fgMuted:"#857b6f",fgDim:"#a0a8b0",
   statusFg:"#ffffd7",
   comment:"#9fca56",string:"#cae682",keyword:"#8ac6f2",
@@ -1519,14 +1519,14 @@ const Graph = ({notes, pdfNotes, onSelect, selectedId, localMode=false}) => {
       maxWidth:"260px",
     }},
       React.createElement("div",{style:{fontSize:"9px",color:"rgba(138,198,242,0.5)",
-        letterSpacing:"2px",marginBottom:"2px"}},"FILTER OP TAG"),
+        letterSpacing:"1.5px",marginBottom:"2px"}},"FILTER OP TAG"),
       React.createElement(TagFilterBar,{
         tags:allGraphTags, activeTag:filterTag,
         onChange:setFilterTag, tagColors, compact:true, maxVisible:6
       }),
       React.createElement("div",{style:{height:"1px",background:"rgba(255,255,255,0.06)",margin:"2px 0"}}),
       React.createElement("div",{style:{fontSize:"9px",color:"rgba(138,198,242,0.5)",
-        letterSpacing:"2px",marginBottom:"2px"}},"WEERGAVE"),
+        letterSpacing:"1.5px",marginBottom:"2px"}},"WEERGAVE"),
       React.createElement("div",{style:{display:"flex",gap:"5px",flexWrap:"wrap"}},
         [{label:"lokaal",val:showLocal,set:setShowLocal},
          {label:"orphans",val:orphansOnly,set:setOrphansOnly}]
@@ -1856,7 +1856,7 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
     // Main PDF column
     React.createElement("div",{style:{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",minWidth:0}},
       // Toolbar
-      React.createElement("div",{style:{background:W.statusBg,borderBottom:`1px solid ${W.splitBg}`,padding:"5px 10px",display:"flex",alignItems:"center",gap:"8px",fontSize:"12px",flexShrink:0,flexWrap:"wrap"}},
+      React.createElement("div",{style:{background:W.bg2,borderBottom:`1px solid ${W.splitBg}`,padding:"5px 10px",display:"flex",alignItems:"center",gap:"8px",fontSize:"12px",flexShrink:0,flexWrap:"wrap"}},
         React.createElement("button",{onClick:()=>fileRef.current.click(),style:{background:W.blue,color:W.bg,border:"none",borderRadius:"4px",padding:"4px 10px",fontSize:"11px",cursor:"pointer",fontWeight:"bold"}},":open PDF"),
         React.createElement("button",{onClick:()=>setShowLibrary(!showLibrary),style:{background:showLibrary?W.comment:"none",color:showLibrary?W.bg:W.fgMuted,border:`1px solid ${showLibrary?W.comment:W.splitBg}`,borderRadius:"4px",padding:"4px 10px",fontSize:"11px",cursor:"pointer"}},`📚 bibliotheek (${serverPdfs?.length||0})`),
         React.createElement("input",{ref:fileRef,type:"file",accept:".pdf",style:{display:"none"},onChange:onFileInput}),
@@ -2094,7 +2094,7 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
         boxShadow:"-4px 0 20px rgba(0,0,0,0.5)"
       } : {}),
     }},
-      React.createElement("div",{style:{background:W.statusBg,borderBottom:`1px solid ${W.splitBg}`,padding:"6px 10px",display:"flex",alignItems:"center",gap:"6px",flexShrink:0}},
+      React.createElement("div",{style:{background:W.bg2,borderBottom:`1px solid ${W.splitBg}`,padding:"6px 10px",display:"flex",alignItems:"center",gap:"6px",flexShrink:0}},
         React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:"1px",flex:1}},
           React.createElement("span",{style:{fontSize:"11px",color:W.statusFg,letterSpacing:"1px"}},"ANNOTATIES"),
           pdfFile&&React.createElement("span",{style:{fontSize:"9px",color:W.fgMuted,maxWidth:"180px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},pdfFile.name)
@@ -2175,13 +2175,13 @@ const VaultSettings = ({vaultPath, onChangeVault, onClose}) => {
     style:{position:"fixed",inset:0,background:"rgba(0,0,0,0.75)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000}
   ,onClick:e=>{if(e.target===e.currentTarget)onClose();}},
     React.createElement("div",{style:{background:W.bg2,border:`1px solid ${W.splitBg}`,borderRadius:"8px",width:"500px",overflow:"hidden",boxShadow:"0 16px 64px rgba(0,0,0,0.8)"}},
-      React.createElement("div",{style:{background:W.statusBg,borderBottom:`1px solid ${W.splitBg}`,padding:"10px 16px",display:"flex",alignItems:"center"}},
-        React.createElement("span",{style:{color:W.statusFg,fontSize:"12px",letterSpacing:"2px",fontWeight:"bold"}},":VAULT INSTELLINGEN"),
+      React.createElement("div",{style:{background:W.bg2,borderBottom:`1px solid ${W.splitBg}`,padding:"10px 16px",display:"flex",alignItems:"center"}},
+        React.createElement("span",{style:{color:W.statusFg,fontSize:"12px",letterSpacing:"1.5px",fontWeight:"bold"}},":VAULT INSTELLINGEN"),
         React.createElement("div",{style:{flex:1}}),
         React.createElement("button",{onClick:onClose,style:{background:"none",border:"none",color:W.fgMuted,fontSize:"18px",cursor:"pointer"}},"×")
       ),
       React.createElement("div",{style:{padding:"20px"}},
-        React.createElement("div",{style:{fontSize:"10px",color:W.comment,letterSpacing:"2px",marginBottom:"8px"}},"📁 VAULT MAP"),
+        React.createElement("div",{style:{fontSize:"10px",color:W.comment,letterSpacing:"1.5px",marginBottom:"8px"}},"📁 VAULT MAP"),
         React.createElement("div",{style:{fontSize:"11px",color:W.fgDim,lineHeight:"1.7",marginBottom:"12px"}},
           "De vault map bevat alle notities (.md), PDF bestanden en annotaties.\nVerander het pad om een andere vault te gebruiken."
         ),
@@ -2196,7 +2196,7 @@ const VaultSettings = ({vaultPath, onChangeVault, onClose}) => {
             vaultPath+"/config.json  ← vault configuratie"
           )
         ),
-        React.createElement("div",{style:{fontSize:"10px",color:W.comment,letterSpacing:"2px",marginBottom:"8px"}},"📂 NIEUW PAD"),
+        React.createElement("div",{style:{fontSize:"10px",color:W.comment,letterSpacing:"1.5px",marginBottom:"8px"}},"📂 NIEUW PAD"),
         React.createElement("div",{style:{display:"flex",gap:"8px",marginBottom:"10px"}},
           React.createElement("input",{
             value:newPath,onChange:e=>setNewPath(e.target.value),
@@ -2398,12 +2398,12 @@ const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote, setAiStatu
 
       // Toolbar
       React.createElement("div",{
-        style:{background:W.statusBg,borderBottom:`1px solid ${W.splitBg}`,
+        style:{background:W.bg2,borderBottom:`1px solid ${W.splitBg}`,
                padding:"8px 14px",display:"flex",alignItems:"center",
                gap:"10px",flexShrink:0,flexWrap:"wrap"}
       },
         React.createElement("span",{style:{fontSize:"11px",color:W.statusFg,
-          letterSpacing:"2px",fontWeight:"bold"}},"AFBEELDINGEN"),
+          letterSpacing:"1.5px",fontWeight:"bold"}},"AFBEELDINGEN"),
         React.createElement("span",{style:{background:W.blue,color:W.bg,
           borderRadius:"10px",padding:"0 7px",fontSize:"10px"}}, imgs.length),
         activeImg && React.createElement("span",{
@@ -2969,7 +2969,7 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages}) => {
       gap:"10px", flexShrink:0, flexWrap:"wrap"
     }},
       React.createElement("span",{style:{fontSize:"11px",color:W.statusFg,
-        letterSpacing:"2px",fontWeight:"bold"}},"🌐 WEB IMPORT"),
+        letterSpacing:"1.5px",fontWeight:"bold"}},"🌐 WEB IMPORT"),
       React.createElement("span",{style:{fontSize:"10px",color:W.fgMuted}}),
       React.createElement("div",{style:{flex:1}}),
       preview && !saved && React.createElement("button",{
@@ -4254,7 +4254,7 @@ const MermaidEditor = ({ initialText="", onSave, onCancel, notes=[], serverPdfs=
         return React.createElement(React.Fragment,null,
           linkType==="all" && React.createElement("div",{style:{
             padding:"5px 12px 3px", fontSize:"9px", color:W.fgMuted,
-            letterSpacing:"2px", background:"rgba(0,0,0,0.2)"
+            letterSpacing:"1.5px", background:"rgba(0,0,0,0.2)"
           }},"NOTITIES"),
           ns.map(n => React.createElement("div",{key:n.id,
             onMouseDown: e => { e.preventDefault(); insertLink("[["+n.title+"]]"); },
@@ -4278,7 +4278,7 @@ const MermaidEditor = ({ initialText="", onSave, onCancel, notes=[], serverPdfs=
         return React.createElement(React.Fragment,null,
           linkType==="all" && React.createElement("div",{style:{
             padding:"5px 12px 3px", fontSize:"9px", color:W.orange,
-            letterSpacing:"2px", background:"rgba(0,0,0,0.2)"
+            letterSpacing:"1.5px", background:"rgba(0,0,0,0.2)"
           }},"PDF"),
           ps.map(p => React.createElement("div",{key:p.name,
             onMouseDown: e => { e.preventDefault(); insertLink("[[pdf:"+p.name+"]]"); },
@@ -4301,7 +4301,7 @@ const MermaidEditor = ({ initialText="", onSave, onCancel, notes=[], serverPdfs=
         return React.createElement(React.Fragment,null,
           linkType==="all" && React.createElement("div",{style:{
             padding:"5px 12px 3px", fontSize:"9px", color:W.blue,
-            letterSpacing:"2px", background:"rgba(0,0,0,0.2)"
+            letterSpacing:"1.5px", background:"rgba(0,0,0,0.2)"
           }},"AFBEELDINGEN"),
           imgs.map(img => React.createElement("div",{key:img.name,
             onMouseDown: e => { e.preventDefault(); insertLink("![[img:"+img.name+"]]"); },
@@ -5343,7 +5343,7 @@ const MindMap = ({notes, allTags, onSelectNote, aiMindmap, onAddNote, serverPdfs
       ),
       React.createElement("div",{style:{display:"flex",gap:"5px",alignItems:"center"}},
         React.createElement("span",{style:{fontSize:"9px",color:"rgba(138,198,242,0.5)",
-          letterSpacing:"2px",flex:1}},"MODUS"),
+          letterSpacing:"1.5px",flex:1}},"MODUS"),
         [{id:"view",label:"👁 bekijk"},{id:"edit",label:"✏ bewerk"}].map(m=>
           React.createElement("button",{key:m.id, onClick:()=>setMode(m.id),
             style:{background:mode===m.id?"rgba(138,198,242,0.18)":"none",
@@ -5358,7 +5358,7 @@ const MindMap = ({notes, allTags, onSelectNote, aiMindmap, onAddNote, serverPdfs
         // Layout
         React.createElement("div",{style:{display:"flex",gap:"5px",alignItems:"center"}},
           React.createElement("span",{style:{fontSize:"9px",color:"rgba(138,198,242,0.5)",
-            letterSpacing:"2px",flex:1}},"LAYOUT"),
+            letterSpacing:"1.5px",flex:1}},"LAYOUT"),
           [{id:"radial",label:"⊙"},{id:"tree",label:"⊤"}].map(l=>
             React.createElement("button",{key:l.id, onClick:()=>setLayout(l.id),
               style:{background:layout===l.id?"rgba(138,198,242,0.18)":"none",
@@ -5381,7 +5381,7 @@ const MindMap = ({notes, allTags, onSelectNote, aiMindmap, onAddNote, serverPdfs
         // Tag filter: alleen in vault-modus
         !aiMode && allTags.length>0 && React.createElement("div",null,
           React.createElement("div",{style:{fontSize:"9px",color:W.fgMuted,
-            letterSpacing:"2px",marginBottom:"4px"}},"TAG FILTER"),
+            letterSpacing:"1.5px",marginBottom:"4px"}},"TAG FILTER"),
           React.createElement(TagFilterBar,{tags:allTags,activeTag:tagFilter,onChange:setTagFilter,compact:true,tagColors:tagColorMap,maxVisible:6})
         )
       ),
@@ -5465,7 +5465,7 @@ const MindMap = ({notes, allTags, onSelectNote, aiMindmap, onAddNote, serverPdfs
                minWidth:"260px",boxShadow:"0 8px 32px rgba(0,0,0,0.7)"}
       },
         React.createElement("div",{style:{fontSize:"11px",color:"rgba(138,198,242,0.6)",
-          letterSpacing:"2px"}},"LABEL BEWERKEN"),
+          letterSpacing:"1.5px"}},"LABEL BEWERKEN"),
         React.createElement("input",{
           ref:editRef,
           value:editLabel,
@@ -5843,12 +5843,12 @@ const LLMNotebook = ({notes, pdfNotes, serverPdfs, serverImages, allTags, onAddN
     },
       // Context header
       React.createElement("div", {
-        style:{background:W.statusBg,borderBottom:`1px solid ${W.splitBg}`,
+        style:{background:W.bg2,borderBottom:`1px solid ${W.splitBg}`,
                padding:"10px 12px",flexShrink:0}
       },
         React.createElement("div", {style:{display:"flex",alignItems:"center",gap:"8px",marginBottom:"8px"}},
           React.createElement("span", {style:{fontSize:"11px",fontWeight:"bold",
-            color:W.statusFg,letterSpacing:"2px",flex:1}}, "KENNISCONTEXT"),
+            color:W.statusFg,letterSpacing:"1.5px",flex:1}}, "KENNISCONTEXT"),
           isMobileView && React.createElement("button", {
             onClick:()=>setShowContext(false),
             style:{background:"none",border:"none",color:W.fgMuted,fontSize:"18px",cursor:"pointer"}
@@ -5879,7 +5879,7 @@ const LLMNotebook = ({notes, pdfNotes, serverPdfs, serverImages, allTags, onAddN
         // Notities sectie
         React.createElement("div", {
           style:{padding:"8px 10px 4px",fontSize:"9px",color:"rgba(138,198,242,0.5)",
-                 letterSpacing:"2px",borderBottom:`1px solid ${W.splitBg}`,
+                 letterSpacing:"1.5px",borderBottom:`1px solid ${W.splitBg}`,
                  display:"flex",alignItems:"center",gap:"6px",background:W.bg}
         },
           React.createElement("span",null,"NOTITIES"),
@@ -5922,7 +5922,7 @@ const LLMNotebook = ({notes, pdfNotes, serverPdfs, serverImages, allTags, onAddN
           React.createElement("div", {
             style:{padding:"8px 10px 4px",fontSize:"9px",
                    color:"rgba(229,193,120,0.6)",
-                   letterSpacing:"2px",borderBottom:`1px solid ${W.splitBg}`,
+                   letterSpacing:"1.5px",borderBottom:`1px solid ${W.splitBg}`,
                    display:"flex",alignItems:"center",gap:"6px",background:W.bg}
           },
             React.createElement("span",null,"AFBEELDINGEN"),
@@ -5961,7 +5961,7 @@ const LLMNotebook = ({notes, pdfNotes, serverPdfs, serverImages, allTags, onAddN
         pdfsWithAnnots.length > 0 && React.createElement(React.Fragment, null,
           React.createElement("div", {
             style:{padding:"8px 10px 4px",fontSize:"9px",color:"rgba(229,120,109,0.6)",
-                   letterSpacing:"2px",borderBottom:`1px solid ${W.splitBg}`,
+                   letterSpacing:"1.5px",borderBottom:`1px solid ${W.splitBg}`,
                    display:"flex",alignItems:"center",gap:"6px",background:W.bg}
           },
             React.createElement("span",null,"PDF'S"),
@@ -6007,7 +6007,7 @@ const LLMNotebook = ({notes, pdfNotes, serverPdfs, serverImages, allTags, onAddN
 
       // Chat toolbar
       React.createElement("div", {
-        style:{background:W.statusBg,borderBottom:`1px solid ${W.splitBg}`,
+        style:{background:W.bg2,borderBottom:`1px solid ${W.splitBg}`,
                padding:"6px 12px",display:"flex",alignItems:"center",
                gap:"8px",flexShrink:0,flexWrap:"wrap"}
       },
@@ -6540,7 +6540,7 @@ const App = () => {
                alignItems:"center",marginBottom:"6px"}
       },
         React.createElement("span", {style:{fontSize:"11px",fontWeight:"bold",
-          letterSpacing:"2px",color:W.statusFg}}, "NOTITIES"),
+          letterSpacing:"1.5px",color:W.statusFg}}, "NOTITIES"),
         React.createElement("button", {
           onClick:()=>setSidebarOpen(false),
           style:{background:"none",border:"none",color:W.fgMuted,
@@ -6641,16 +6641,16 @@ const App = () => {
 
   // ── Top bar (desktop/tablet) ──────────────────────────────────────────────
   const topBar = !isMobile && React.createElement("div", {
-    style:{height:"44px",background:W.statusBg,
+    style:{height:"44px",background:W.bg2,borderBottom:`1px solid ${W.splitBg}`,
            borderBottom:`1px solid ${W.splitBg}`,
            display:"flex",alignItems:"center",flexShrink:0,gap:0}
   },
     // Logo
     React.createElement("div", {
-      style:{background:W.blue,color:W.bg,padding:"0 16px",
+      style:{background:"transparent",color:W.statusFg,padding:"0 20px",
              height:"100%",display:"flex",alignItems:"center",
-             fontWeight:"bold",fontSize:"12px",letterSpacing:"2px",
-             flexShrink:0}
+             fontWeight:"700",fontSize:"12px",letterSpacing:"3px",
+             flexShrink:0,borderRight:`1px solid ${W.splitBg}`}
     }, "ZETTELKASTEN"),
     // Sidebar toggle op tablet
     isTablet && React.createElement("button", {
@@ -6664,20 +6664,9 @@ const App = () => {
     // Tabs met icoon + label
     tabs.map(({id, icon, label}) => React.createElement("button", {
       key:id, onClick:()=>setTab(id),
+      className: `topbar-tab${tab===id?" active":""}`,
       style:{
-        background: tab===id ? "rgba(255,255,255,0.07)" : "transparent",
-        color: tab===id ? W.statusFg : W.fgMuted,
-        border: "none",
-        borderBottom: tab===id ? `2px solid ${W.yellow}` : "2px solid transparent",
         borderRight: `1px solid ${W.splitBg}`,
-        padding: "0 16px",
-        height: "100%",
-        fontSize: "11px",
-        cursor: "pointer",
-        letterSpacing: "0.5px",
-        display: "flex", alignItems: "center", gap: "5px",
-        flexShrink: 0,
-        transition: "color 0.12s, background 0.12s",
       }
     },
       React.createElement("span", {style:{fontSize:"14px", lineHeight:1}}, icon),
@@ -6821,7 +6810,7 @@ const App = () => {
     }, "☰"),
     React.createElement("div", {
       style:{flex:1,fontWeight:"bold",fontSize:"13px",
-             letterSpacing:"2px",color:W.statusFg}
+             letterSpacing:"1.5px",color:W.statusFg}
     }, "ZETTELKASTEN"),
     aiStatus && React.createElement("div",{
       style:{fontSize:"10px",color:"#a8d8f0",
@@ -6978,7 +6967,7 @@ const App = () => {
             return React.createElement(React.Fragment,null,
               linkTypeFilter==="all"&&React.createElement("div",{style:{
                 padding:"5px 12px 3px",fontSize:"9px",color:W.fgMuted,
-                letterSpacing:"2px",background:"rgba(0,0,0,0.2)",flexShrink:0
+                letterSpacing:"1.5px",background:"rgba(0,0,0,0.2)",flexShrink:0
               }},"NOTITIES"),
               ns.map(n=>React.createElement("div",{key:n.id,
                 onMouseDown:(e)=>{
@@ -7007,7 +6996,7 @@ const App = () => {
             return React.createElement(React.Fragment,null,
               linkTypeFilter==="all"&&React.createElement("div",{style:{
                 padding:"5px 12px 3px",fontSize:"9px",color:W.orange,
-                letterSpacing:"2px",background:"rgba(0,0,0,0.2)"
+                letterSpacing:"1.5px",background:"rgba(0,0,0,0.2)"
               }},"PDF"),
               ps.map(p=>React.createElement("div",{key:p.name,
                 onMouseDown:(e)=>{
@@ -7035,7 +7024,7 @@ const App = () => {
             return React.createElement(React.Fragment,null,
               linkTypeFilter==="all"&&React.createElement("div",{style:{
                 padding:"5px 12px 3px",fontSize:"9px",color:W.blue,
-                letterSpacing:"2px",background:"rgba(0,0,0,0.2)"
+                letterSpacing:"1.5px",background:"rgba(0,0,0,0.2)"
               }},"AFBEELDINGEN"),
               imgs.map(img=>React.createElement("div",{key:img.name,
                 onMouseDown:(e)=>{
@@ -7223,7 +7212,7 @@ const App = () => {
                   style:{marginTop:"40px",paddingTop:"14px",
                          borderTop:`1px solid ${W.splitBg}`}
                 },
-                  React.createElement("div",{style:{fontSize:"10px",color:W.fgMuted,letterSpacing:"2px",marginBottom:"8px"}},"BACKLINKS"),
+                  React.createElement("div",{style:{fontSize:"10px",color:W.fgMuted,letterSpacing:"1.5px",marginBottom:"8px"}},"BACKLINKS"),
                   backlinks.map(n=>React.createElement("div",{key:n.id,
                     onClick:()=>setSelId(n.id),
                     style:{padding:"8px 10px",cursor:"pointer",
@@ -7364,7 +7353,7 @@ const App = () => {
             React.createElement("div",{style:{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",minWidth:0}},
               // Tab-kiezer voor rechter paneel
               React.createElement("div",{style:{
-                background:W.statusBg,borderBottom:`1px solid ${W.splitBg}`,
+                background:W.bg2,borderBottom:`1px solid ${W.splitBg}`,
                 padding:"0",display:"flex",alignItems:"center",flexShrink:0,height:"36px"
               }},
                 splitTabs.map(({id,icon,label})=>React.createElement("button",{

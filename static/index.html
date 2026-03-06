@@ -1,118 +1,170 @@
 <!DOCTYPE html>
 <html lang="nl">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-<title>Zettelkasten VIM</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<style>
-  @import url('https://cdn.jsdelivr.net/npm/hack-font@3/build/web/hack.css');
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  /* Voorkom ongewenste touch-gedrag op iOS (voor VIM canvas editor) */
-  canvas { touch-action: none; }
-  /* PDF textLayer WEL touch-action auto voor tekst selectie */
-  .textLayer, .textLayer * { touch-action: auto !important; }
-  button { touch-action: manipulation; }
-  /* Smooth scrolling op iOS */
-  .scroll-ios { -webkit-overflow-scrolling: touch; overflow-y: auto; }
-  html, body, #root {
-    height: 100%; width: 100%;
-    font-family: 'Hack', 'Courier New', monospace;
-    background: #242424; color: #e3e0d7;
-    overflow: hidden;
-  }
-  ::-webkit-scrollbar { width: 6px; height: 6px; }
-  ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-thumb { background: #3a4046; border-radius: 3px; }
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>Zettelkasten</title>
 
-  /* PDF text layer */
-  .textLayer {
-    position: absolute !important; inset: 0 !important;
-    overflow: hidden !important; opacity: 1 !important;
-    line-height: 1 !important;
-    user-select: text !important;
-    -webkit-user-select: text !important;
-    -moz-user-select: text !important;
-    cursor: text !important;
-    pointer-events: auto !important;
-    /* iOS Safari: touch-action auto zodat tekst-selectie werkt */
-    touch-action: auto !important;
-    -webkit-touch-callout: default !important;
-  }
-  .textLayer span, .textLayer br {
-    color: transparent !important; position: absolute !important;
-    white-space: pre !important; cursor: text !important;
-    transform-origin: 0% 0% !important;
-    user-select: text !important;
-    -webkit-user-select: text !important;
-    pointer-events: auto !important;
-    touch-action: auto !important;
-  }
-  .textLayer ::selection {
-    background: rgba(234,231,136,0.5) !important;  /* Wombat geel */
-    color: transparent !important;
-  }
-  /* iOS selectie kleur */
-  .textLayer ::-webkit-selection {
-    background: rgba(234,231,136,0.5) !important;
-    color: transparent !important;
-  }
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://cdn.jsdelivr.net/npm/hack-font@3/build/web/hack.css" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,300&display=swap" rel="stylesheet">
 
-  /* Focus / Goyo mode */
-  .goyo-mode .sidebar, .goyo-mode .meta-panel, .goyo-mode .top-bar-tabs { display: none !important; }
-  .goyo-mode .editor-wrap { max-width: 680px; margin: 0 auto; padding: 40px 60px; }
-  .goyo-mode .vim-editor textarea { background: #1a1a1a !important; }
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    canvas { touch-action: none; }
+    .textLayer, .textLayer * { touch-action: auto !important; }
+    button { touch-action: manipulation; }
 
-  /* Limelight: dim other paragraphs */
-  .limelight-mode .mdv p:not(.limelight-focus),
-  .limelight-mode .mdv li:not(.limelight-focus) { opacity: 0.25; transition: opacity 0.2s; }
+    html, body, #root {
+      height: 100%; width: 100%; overflow: hidden;
+      background: #1c1c1c; color: #e3e0d7;
+      font-family: 'DM Sans', 'Segoe UI', system-ui, sans-serif;
+      font-size: 14px;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
 
-  /* Markdown */
-  .mdv h1 { font-size: 20px; color: #ffffd7; margin: 0 0 14px; border-bottom: 1px solid #3a4046; padding-bottom: 6px; }
-  .mdv h2 { font-size: 16px; color: #cae682; margin: 18px 0 8px; }
-  .mdv h3 { font-size: 13px; color: #e3e0d7; margin: 14px 0 6px; }
-  .mdv p  { color: #e3e0d7; line-height: 1.85; margin: 0 0 10px; font-size: 13px; }
-  .mdv ul, .mdv ol { padding-left: 22px; margin: 6px 0 10px; }
-  .mdv li { color: #e3e0d7; line-height: 1.8; font-size: 13px; margin-bottom: 3px; }
-  .mdv strong { color: #ffffd7; }
-  .mdv em { color: #a0a8b0; font-style: italic; }
-  .mdv code { background: rgba(255,255,255,0.07); padding: 1px 5px; border-radius: 3px; font-size: 12px; color: #cae682; }
-  .mdv pre { background: rgba(0,0,0,0.35); padding: 12px 14px; border-radius: 4px; margin: 10px 0; overflow-x: auto; border-left: 3px solid #3a4046; }
-  .mdv pre code { background: none; padding: 0; font-size: 12px; color: #cae682; }
-  .mdv blockquote { border-left: 3px solid #e5786d; padding: 4px 12px; margin: 10px 0; background: rgba(229,120,109,0.07); color: #a0a8b0; font-style: italic; }
-  .mdv table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: 12px; }
-  .mdv th { background: rgba(255,255,255,0.06); color: #8ac6f2; padding: 6px 10px; border: 1px solid #3a4046; text-align: left; }
-  .mdv td { padding: 5px 10px; border: 1px solid #3a4046; }
-  .mdv tr:nth-child(even) td { background: rgba(255,255,255,0.02); }
-  .mdv hr { border: none; border-top: 1px solid #3a4046; margin: 18px 0; }
-  .zlink { color: #8ac6f2; cursor: pointer; text-decoration: underline; text-decoration-color: rgba(138,198,242,0.4); font-size: 13px; }
-  .zlink:hover { color: #ffffd7; }
-  .taghl { color: #9fca56; font-size: 13px; }
-  .spell-error { border-bottom: 2px solid #e5786d; cursor: help; }
+    ::-webkit-scrollbar { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #3a4046; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #4a5058; }
 
-  /* Snippet hints */
-  .snippet-hint { position: absolute; background: #2d2d2d; border: 1px solid #3a4046; border-radius: 4px; padding: 4px 8px; font-size: 11px; color: #8ac6f2; pointer-events: none; z-index: 100; }
+    .textLayer {
+      position: absolute !important; inset: 0 !important;
+      overflow: hidden !important; opacity: 1 !important;
+      line-height: 1 !important; user-select: text !important;
+      -webkit-user-select: text !important; cursor: text !important;
+      pointer-events: auto !important; touch-action: auto !important;
+      -webkit-touch-callout: default !important;
+    }
+    .textLayer span, .textLayer br {
+      color: transparent !important; position: absolute !important;
+      white-space: pre !important; cursor: text !important;
+      transform-origin: 0% 0% !important; user-select: text !important;
+      -webkit-user-select: text !important; pointer-events: auto !important;
+    }
+    .textLayer ::selection { background: rgba(234,231,136,0.5) !important; color: transparent !important; }
+    .textLayer ::-webkit-selection { background: rgba(234,231,136,0.5) !important; color: transparent !important; }
 
-  textarea::placeholder, input::placeholder { color: #857b6f; }
-  input, textarea, button, select { font-family: inherit; }
-</style>
+    .goyo-mode .sidebar, .goyo-mode .meta-panel, .goyo-mode .top-bar-tabs { display: none !important; }
+    .goyo-mode .editor-wrap { max-width: 680px; margin: 0 auto; padding: 40px 60px; }
+
+    .limelight-mode .mdv p:not(.limelight-focus),
+    .limelight-mode .mdv li:not(.limelight-focus) { opacity: .25; transition: opacity .2s; }
+
+    /* Markdown */
+    .mdv h1 { font-size: 1.2rem; font-weight: 600; color: #ffffd7; margin: 0 0 14px; border-bottom: 1px solid #3a4046; padding-bottom: 6px; }
+    .mdv h2 { font-size: 1rem; font-weight: 600; color: #cae682; margin: 18px 0 8px; }
+    .mdv h3 { font-size: .875rem; font-weight: 500; color: #e3e0d7; margin: 14px 0 6px; }
+    .mdv p  { color: #d8d5cc; line-height: 1.85; margin: 0 0 10px; font-size: .875rem; }
+    .mdv ul, .mdv ol { padding-left: 22px; margin: 6px 0 10px; }
+    .mdv li { color: #d8d5cc; line-height: 1.8; font-size: .875rem; margin-bottom: 3px; }
+    .mdv strong { color: #ffffd7; font-weight: 600; }
+    .mdv em { color: #a0a8b0; font-style: italic; }
+    .mdv code { background: rgba(255,255,255,.07); padding: 1px 6px; border-radius: 4px; font-size: .8rem; color: #cae682; font-family: 'Hack', monospace; border: 1px solid rgba(255,255,255,.06); }
+    .mdv pre  { background: rgba(0,0,0,.35); padding: 12px 14px; border-radius: 6px; margin: 10px 0; overflow-x: auto; border: 1px solid rgba(255,255,255,.06); border-left: 3px solid #3a4046; }
+    .mdv pre code { background: none; padding: 0; font-size: .8rem; color: #cae682; border: none; }
+    .mdv blockquote { border-left: 3px solid #e5786d; padding: 4px 12px; margin: 10px 0; background: rgba(229,120,109,.07); color: #a0a8b0; font-style: italic; border-radius: 0 4px 4px 0; }
+    .mdv table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: .8rem; }
+    .mdv th { background: rgba(255,255,255,.06); color: #8ac6f2; padding: 6px 10px; border: 1px solid #3a4046; text-align: left; font-weight: 500; }
+    .mdv td { padding: 5px 10px; border: 1px solid #3a4046; }
+    .mdv tr:nth-child(even) td { background: rgba(255,255,255,.02); }
+    .mdv hr { border: none; border-top: 1px solid #3a4046; margin: 18px 0; }
+    .zlink { color: #8ac6f2; cursor: pointer; text-decoration: underline; text-decoration-color: rgba(138,198,242,.35); font-size: .875rem; transition: color .12s; }
+    .zlink:hover { color: #ffffd7; }
+    .taghl { color: #9fca56; font-size: .875rem; }
+    .spell-error { border-bottom: 2px solid #e5786d; cursor: help; }
+
+    textarea::placeholder, input::placeholder { color: #5a524a; }
+    input, textarea, button, select { font-family: 'DM Sans', system-ui, sans-serif; }
+
+    @keyframes ai-pulse { 0%,100%{opacity:1} 50%{opacity:.6} }
+    @keyframes ai-dot   { 0%,100%{transform:scale(1)} 50%{transform:scale(.7)} }
+    @keyframes fadeIn   { from{opacity:0;transform:translateY(-3px)} to{opacity:1;transform:translateY(0)} }
+
+    /* Modern button base */
+    .btn-wombat {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 4px 11px; border-radius: 6px; font-size: 11px;
+      border: 1px solid #3a4046; background: transparent;
+      color: #857b6f; cursor: pointer; transition: all .12s;
+      letter-spacing: .2px; white-space: nowrap; flex-shrink: 0;
+      user-select: none;
+    }
+    .btn-wombat:hover { color: #e3e0d7; border-color: #4a5258; background: rgba(255,255,255,.04); }
+    .btn-wombat:active { transform: scale(.97); }
+    .btn-wombat.active-blue  { color: #8ac6f2; border-color: rgba(138,198,242,.4); background: rgba(138,198,242,.08); }
+    .btn-wombat.active-green { color: #9fca56; border-color: rgba(159,202,86,.4); background: rgba(159,202,86,.1); }
+    .btn-wombat.primary      { color: #1c1c1c; border-color: #9fca56; background: #9fca56; font-weight: 600; }
+    .btn-wombat.primary:hover { background: #aed464; border-color: #aed464; }
+    .btn-wombat.danger       { color: #e5786d; border-color: rgba(229,120,109,.35); }
+    .btn-wombat.danger:hover { background: rgba(229,120,109,.1); }
+
+    .snippet-hint {
+      position: absolute; background: #2a2a2a; border: 1px solid #3a4046;
+      border-radius: 5px; padding: 4px 8px; font-size: 11px; color: #8ac6f2;
+      pointer-events: none; z-index: 100; font-family: 'Hack', monospace;
+      box-shadow: 0 4px 12px rgba(0,0,0,.5);
+    }
+
+    /* Note list items */
+    .note-item {
+      padding: 7px 10px; cursor: pointer; border-radius: 5px;
+      transition: background .1s; border: 1px solid transparent;
+      margin: 1px 4px;
+    }
+    .note-item:hover { background: rgba(255,255,255,.04); }
+    .note-item.selected { background: rgba(138,198,242,.09); border-color: rgba(138,198,242,.18); }
+
+    /* Tag pills */
+    .tag-pill {
+      display: inline-flex; align-items: center; gap: 3px;
+      padding: 2px 8px; border-radius: 20px; font-size: 10px;
+      background: rgba(159,202,86,.1); border: 1px solid rgba(159,202,86,.28);
+      color: #9fca56; letter-spacing: .3px; cursor: default; white-space: nowrap;
+      transition: background .1s;
+    }
+    .tag-pill:hover { background: rgba(159,202,86,.16); }
+    .tag-pill button { background: none; border: none; color: inherit; cursor: pointer; padding: 0; opacity: .6; font-size: 10px; line-height: 1; }
+    .tag-pill button:hover { opacity: 1; }
+
+    /* Top bar tabs */
+    .topbar-tab {
+      display: flex; align-items: center; gap: 5px;
+      padding: 0 14px; height: 100%; font-size: 11px;
+      border: none; border-bottom: 2px solid transparent;
+      background: transparent; color: #857b6f; cursor: pointer;
+      letter-spacing: .5px; transition: color .12s, background .12s;
+      white-space: nowrap; flex-shrink: 0;
+    }
+    .topbar-tab:hover { color: #e3e0d7; background: rgba(255,255,255,.03); }
+    .topbar-tab.active { color: #ffffd7; border-bottom-color: #eae788; background: rgba(255,255,255,.05); }
+
+    /* Dropdown */
+    .wombat-dropdown {
+      background: #1c1c1c; border: 1px solid #3a4046; border-radius: 8px;
+      box-shadow: 0 8px 32px rgba(0,0,0,.75), 0 2px 8px rgba(0,0,0,.4);
+      animation: fadeIn .14s ease-out;
+    }
+
+    .scroll-ios { -webkit-overflow-scrolling: touch; overflow-y: auto; }
+  </style>
+
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="theme-color" content="#242424">
+  <meta name="theme-color" content="#1c1c1c">
 </head>
 <body>
 <div id="root"></div>
-<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script>
-  // Stel workerSrc direct in zodat de component hem altijd klaar vindt
-  if(window.pdfjsLib){
-    // Gebruik dezelfde CDN voor de worker — of fake worker als CDN niet beschikbaar
+  if (window.pdfjsLib) {
     pdfjsLib.GlobalWorkerOptions.workerSrc =
-      "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+      'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
   }
 </script>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
