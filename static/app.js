@@ -1618,13 +1618,16 @@ const TextLayerMount = ({textLayer, width, height}) => {
       ref.current.innerHTML = "";
       textLayer.style.position = "absolute";
       textLayer.style.top = "0"; textLayer.style.left = "0";
+      // Tekst selecteerbaar + touch-events door voor iPad-scroll
+      textLayer.style.pointerEvents = "auto";
+      textLayer.style.touchAction   = "pan-y";
       ref.current.appendChild(textLayer);
     }
   }, [textLayer]);
   return React.createElement("div", {
     ref,
     style:{position:"absolute",top:0,left:0,width:width+"px",height:height+"px",
-           pointerEvents:"none",overflow:"hidden"}
+           pointerEvents:"auto",overflow:"hidden",touchAction:"pan-y"}
   });
 };
 
@@ -1738,16 +1741,23 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
     if (pdfDoc) renderAllPages(pdfDoc, scale);
   }, [pdfDoc, scale, renderAllPages]);
 
-  // Scroll naar pagina bij navigatie via knoppen
-  useEffect(() => {
-    const node = pageRefs.current[pageNum];
-    if (node) node.scrollIntoView({behavior: "smooth", block: "start"});
-  }, [pageNum]);
+  // Scroll naar pagina via knoppen ◀/▶ — alleen als het een GEBRUIKER-actie is
+  // (niet elke keer dat pageNum wijzigt via de observer, anders loop)
+  const userNavRef = useRef(false);   // true = knop-klik, false = scroll
+  const scrollToPage = useCallback((n) => {
+    const node = pageRefs.current[n];
+    if (!node) return;
+    userNavRef.current = true;
+    node.scrollIntoView({behavior: "smooth", block: "start"});
+    // Reset de vlag zodra de scroll-animatie klaar kan zijn (~700ms)
+    setTimeout(() => { userNavRef.current = false; }, 700);
+  }, []);
 
-  // Intersection observer: update pageNum bij scrollen
+  // Intersection observer: update pageNum ALLEEN bij vrij scrollen (niet bij knop-navigatie)
   useEffect(() => {
     if (!scrollRef.current || renderedPages.length === 0) return;
     const obs = new IntersectionObserver(entries => {
+      if (userNavRef.current) return;   // negeer tijdens programmatisch scrollen
       let best = null, bestRatio = 0;
       entries.forEach(e => {
         if (e.intersectionRatio > bestRatio) {
@@ -1759,7 +1769,7 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
         const n = parseInt(best.dataset.page);
         if (n) setPageNum(n);
       }
-    }, {root: scrollRef.current, threshold: [0.1, 0.5, 0.9]});
+    }, {root: scrollRef.current, threshold: [0.1, 0.3, 0.5, 0.7, 0.9]});
     Object.values(pageRefs.current).forEach(el => { if (el) obs.observe(el); });
     return () => obs.disconnect();
   }, [renderedPages]);
@@ -1976,9 +1986,9 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
         },"⚠ samenvatten mislukt ×"),
         pdfDoc&&React.createElement(React.Fragment,null,
           React.createElement("span",{style:{color:W.fgMuted}},"│"),
-          React.createElement("button",{onClick:()=>setPageNum(p=>Math.max(1,p-1)),style:{background:"none",border:"none",color:W.fg,cursor:"pointer",fontSize:"16px",padding:"0 3px"}},"◀"),
+          React.createElement("button",{onClick:()=>{ const p=Math.max(1,pageNum-1); setPageNum(p); scrollToPage(p); },style:{background:"none",border:"none",color:W.fg,cursor:"pointer",fontSize:"16px",padding:"0 3px"}},"◀"),
           React.createElement("span",{style:{color:W.statusFg,minWidth:"60px",textAlign:"center"}},pageNum," / ",numPages),
-          React.createElement("button",{onClick:()=>setPageNum(p=>Math.min(numPages,p+1)),style:{background:"none",border:"none",color:W.fg,cursor:"pointer",fontSize:"16px",padding:"0 3px"}},"▶"),
+          React.createElement("button",{onClick:()=>{ const p=Math.min(numPages,pageNum+1); setPageNum(p); scrollToPage(p); },style:{background:"none",border:"none",color:W.fg,cursor:"pointer",fontSize:"16px",padding:"0 3px"}},"▶"),
           React.createElement("span",{style:{color:W.fgMuted}},"│"),
           React.createElement("button",{onClick:()=>setScale(s=>Math.max(0.5,+(s-0.2).toFixed(1))),style:{background:"none",border:"none",color:W.fg,cursor:"pointer",padding:"0 4px",fontSize:"16px"}},"−"),
           React.createElement("span",{style:{color:W.fgMuted,minWidth:"40px",textAlign:"center"}},Math.round(scale*100),"%"),
@@ -3071,21 +3081,49 @@ const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote, setAiStatu
 // ── WebImporter ────────────────────────────────────────────────────────────────
 // Instapaper-stijl: URL opgeven → inhoud ophalen → opschonen → Zettelkasten-notitie
 
-const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, addJob, updateJob}) => {
-  const { useState, useRef, useCallback } = React;
+const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, addJob, updateJob,
+                      importPreview, setImportPreview}) => {
+  const { useState, useRef, useCallback, useEffect } = React;
 
   const [url,        setUrl]       = useState("");
   const [busy,       setBusy]      = useState(false);
-  const [importing,  setImporting] = useState(false);  // achtergrond import bezig
+  const [importing,  setImporting] = useState(false);
   const [error,      setError]     = useState(null);
-  const [preview,    setPreview]   = useState(null);   // {title, url, markdown, images}
-  const [editMd,     setEditMd]    = useState("");
-  const [editTitle,  setEditTitle] = useState("");
-  const [tags,       setTags]      = useState([]);
+  // preview leeft in App-state (importPreview) zodat hij tab-wissels overleeft.
+  // Lokale edit-state wordt direct gevuld bij mount als importPreview al bestaat,
+  // én herschreven wanneer importPreview verandert (nieuw resultaat).
+  const initFromPreview = (p) => {
+    if (!p) return { md: "", title: "", tags: [] };
+    let domain = "";
+    try { domain = new URL(p.url).hostname.replace("www.","").split(".")[0]; } catch {}
+    return {
+      md:    p.markdown || "",
+      title: p.title    || "",
+      tags:  ["import", domain].filter(Boolean),
+    };
+  };
+  const init = initFromPreview(importPreview);
+  const [editMd,     setEditMd]    = useState(init.md);
+  const [editTitle,  setEditTitle] = useState(init.title);
+  const [tags,       setTags]      = useState(init.tags);
   const [saved,      setSaved]     = useState(false);
   const [renderMode, setRenderMode] = useState(true);
   const [selectedImages, setSelectedImages] = useState(new Set());
-  const urlRef = useRef(null);
+  const urlRef       = useRef(null);
+  const prevPreview  = useRef(importPreview); // detecteer echte wijzigingen
+
+  // Herschrijf edit-state alleen als importPreview echt verandert (nieuw resultaat)
+  useEffect(() => {
+    if (importPreview === prevPreview.current) return; // zelfde object, geen actie
+    prevPreview.current = importPreview;
+    if (!importPreview) return;
+    const {md, title, tags: newTags} = initFromPreview(importPreview);
+    setEditMd(md);
+    setEditTitle(title);
+    setTags(newTags);
+    setSaved(false);
+    setImporting(false);
+  }, [importPreview]);
 
   const doImport = useCallback(() => {
     const u = url.trim();
@@ -3105,39 +3143,39 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, addJob, upd
       try {
         const res = await api.importUrl({url: u, model: llmModel||"llama3.2-vision"});
         if (res?.ok) {
-          setPreview(res);
-          setEditMd(res.markdown);
-          setEditTitle(res.title);
-          const domain = new URL(res.url).hostname.replace("www.","");
-          setTags(["import", domain.split(".")[0]].filter(Boolean));
+          setImportPreview(res);          // opslaan in App-state (overleeft tab-wissel)
           if (res.images?.length && onRefreshImages) onRefreshImages();
-          updateJob && updateJob(jid,{status:"done", result: res.title?.slice(0,40)||"Klaar"});
+          updateJob && updateJob(jid,{
+            status:"done",
+            result: res.title?.slice(0,44)||"Klaar",
+            importResult: res,            // bewaar voor klik in job-dropdown
+          });
         } else {
           const msg = res?.error || "Import mislukt";
           setError(msg);
+          setImporting(false);
           updateJob && updateJob(jid,{status:"error", error:msg});
         }
       } catch(e) {
         setError(e.message);
+        setImporting(false);
         updateJob && updateJob(jid,{status:"error", error:e.message});
-      } finally {
-        setImporting(false);  // altijd wacht-scherm uitschakelen
       }
+      // importing=false komt via useEffect zodra importPreview gezet wordt
     })();
   }, [url, llmModel, onRefreshImages, addJob, updateJob]);
 
   const saveNote = useCallback(async () => {
-    if (!preview) return;
-    // Bouw content: bewerkbare Markdown + geselecteerde afbeeldingen inbedden
+    if (!importPreview) return;
     let content = editMd;
-    if (selectedImages.size > 0 && preview.images?.length) {
-      const pickedLinks = preview.images
+    if (selectedImages.size > 0 && importPreview.images?.length) {
+      const pickedLinks = importPreview.images
         .filter(img => selectedImages.has(img.name))
         .map(img => `![[img:${img.name}]]`)
         .join("\n\n");
       content += "\n\n" + pickedLinks;
     }
-    content += "\n\n---\n🌐 **Bron:** [" + preview.url + "](" + preview.url + ")";
+    content += "\n\n---\n🌐 **Bron:** [" + importPreview.url + "](" + importPreview.url + ")";
     await onAddNote({
       id:      genId(),
       title:   editTitle,
@@ -3150,7 +3188,7 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, addJob, upd
   }, [preview, editTitle, editMd, tags, selectedImages, onAddNote]);
 
   const reset = () => {
-    setUrl(""); setPreview(null); setEditMd(""); setEditTitle("");
+    setUrl(""); setImportPreview(null); setEditMd(""); setEditTitle("");
     setTags([]); setError(null); setSaved(false); setImporting(false);
     setSelectedImages(new Set());
     setTimeout(()=>urlRef.current?.focus(), 50);
@@ -3170,7 +3208,7 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, addJob, upd
         letterSpacing:"1.5px",fontWeight:"bold"}},"🌐 WEB IMPORT"),
       React.createElement("span",{style:{fontSize:"14px",color:W.fgMuted}}),
       React.createElement("div",{style:{flex:1}}),
-      preview && !saved && React.createElement("button",{
+      importPreview && !saved && React.createElement("button",{
         onClick:reset,
         style:{background:"none",border:`1px solid ${W.splitBg}`,color:W.fgMuted,
                borderRadius:"4px",padding:"4px 10px",fontSize:"14px",cursor:"pointer"}
@@ -3178,7 +3216,7 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, addJob, upd
     ),
 
     // ── URL invoer (ook zichtbaar tijdens import) ────────────────────────────
-    !preview && React.createElement("div",{style:{
+    !importPreview && React.createElement("div",{style:{
       flex:1, display:"flex", flexDirection:"column",
       alignItems:"center", justifyContent:"center",
       padding:"32px 24px", gap:"20px"
@@ -3263,7 +3301,7 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, addJob, upd
     ),
 
     // ── Preview & bewerken ───────────────────────────────────────────────────
-    preview && !saved && React.createElement("div",{style:{
+    importPreview && !saved && React.createElement("div",{style:{
       flex:1, display:"flex", gap:0, overflow:"hidden"
     }},
 
@@ -3353,17 +3391,17 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, addJob, upd
         React.createElement("div",{style:{fontSize:"9px",color:W.fgMuted,
           letterSpacing:"1px"}},"BRON"),
         React.createElement("div",{style:{fontSize:"14px",color:W.blue,
-          wordBreak:"break-all",lineHeight:"1.5"}}, preview.url),
+          wordBreak:"break-all",lineHeight:"1.5"}}, importPreview.url),
 
         // Afbeeldingen selecteren
-        preview.images?.length > 0 && React.createElement(React.Fragment, null,
+        importPreview.images?.length > 0 && React.createElement(React.Fragment, null,
           React.createElement("div",{style:{borderTop:`1px solid ${W.splitBg}`,paddingTop:"10px"}}),
           React.createElement("div",{style:{
             display:"flex", alignItems:"center", justifyContent:"space-between",
             marginBottom:"8px", flexShrink:0
           }},
             React.createElement("div",{style:{fontSize:"9px",color:W.fgMuted,letterSpacing:"1px"}},
-              "🖼 AFBEELDINGEN (" + preview.images.length + ")",
+              "🖼 AFBEELDINGEN (" + importPreview.images.length + ")",
               React.createElement("span",{style:{
                 marginLeft:"6px", fontSize:"9px",
                 color: selectedImages.size>0 ? W.comment : W.fgMuted
@@ -3382,7 +3420,7 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, addJob, upd
             scrollbarWidth:"thin", scrollbarColor:`${W.splitBg} transparent`,
             paddingRight:"2px",
           }},
-            preview.images.map(img => {
+            importPreview.images.map(img => {
               const sel = selectedImages.has(img.name);
               return React.createElement("div",{
                 key:img.name,
@@ -4646,18 +4684,6 @@ const MermaidEditor = ({ initialText="", onSave, onCancel, notes=[], serverPdfs=
         linkDropdown
       ),
 
-      // ✦ nieuw — lege mindmap
-      React.createElement("button",{
-        onClick: newMindmap,
-        title:"Nieuwe lege mindmap",
-        style:{
-          background:"none", border:`1px solid ${W.splitBg}`,
-          borderRadius:"6px", padding:"4px 10px",
-          color:W.fgMuted, fontSize:"14px",
-          cursor:"pointer", flexShrink:0,
-        }
-      }, "✦ nieuw"),
-
       // ⊞/⊟ preview
       React.createElement("button",{
         onClick:()=>setShowPreview(v=>!v),
@@ -5529,7 +5555,35 @@ const MindMap = ({notes, allTags, onSelectNote, aiMindmap, onAddNote, serverPdfs
              display:"flex",flexDirection:"column",gap:"7px",minWidth:"210px"}
     },
 
-      // AI/Vault/Mermaid toggle — bovenaan
+      // ✦ Nieuwe lege mindmap — boven de tabs
+      React.createElement("button",{
+        onClick:()=>{ setMmView("mermaid"); setEditMermaid(null); },
+        title:"Nieuwe lege mindmap openen in editor",
+        style:{
+          width:"100%", padding:"6px 10px",
+          background:"rgba(138,198,242,0.07)",
+          border:`1px solid rgba(138,198,242,0.3)`,
+          borderRadius:"6px", color:W.blue,
+          fontSize:"14px", fontWeight:"600",
+          cursor:"pointer", marginBottom:"4px",
+          display:"flex", alignItems:"center",
+          justifyContent:"center", gap:"6px",
+          transition:"all 0.12s",
+        },
+        onMouseEnter:e=>{
+          e.currentTarget.style.background="rgba(138,198,242,0.15)";
+          e.currentTarget.style.borderColor="rgba(138,198,242,0.55)";
+        },
+        onMouseLeave:e=>{
+          e.currentTarget.style.background="rgba(138,198,242,0.07)";
+          e.currentTarget.style.borderColor="rgba(138,198,242,0.3)";
+        },
+      },
+        React.createElement("span",null,"✦"),
+        "Nieuwe mindmap"
+      ),
+
+      // AI/Vault/Mermaid toggle — onder de nieuwe-knop
       React.createElement("div",{
         style:{display:"flex",gap:"4px",background:"rgba(0,0,0,0.3)",
                borderRadius:"6px",padding:"3px",marginBottom:"2px"}
@@ -6623,6 +6677,7 @@ const App = () => {
   const [aiStatus,      setAiStatus]    = useState(null);  // legacy (enkele taak)
   const [jobs,          setJobs]         = useState([]);    // [{id,type,label,status,result,error}]
   const [jobsPanelOpen, setJobsPanelOpen] = useState(false);
+  const [importPreview, setImportPreview] = useState(null); // resultaat URL-import (overleeft tab-wissel)
 
   // Jobs API — te gebruiken vanuit child-componenten
   const addJob = React.useCallback((job) => {
@@ -7089,6 +7144,24 @@ const App = () => {
                         fontSize:"13px",color:W.fgMuted,marginTop:"3px",
                         overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"
                       }}, job.result),
+                      // Import-resultaat: klikbare "bekijk & bewerk" knop
+                      job.type==="import" && job.status==="done" && job.importResult &&
+                        React.createElement("button",{
+                          onClick:()=>{
+                            setImportPreview(job.importResult);
+                            setTab("import");
+                            setJobsPanelOpen(false);
+                          },
+                          style:{
+                            marginTop:"5px",
+                            background:"rgba(138,198,242,0.1)",
+                            border:"1px solid rgba(138,198,242,0.35)",
+                            borderRadius:"5px", padding:"3px 10px",
+                            color:"#a8d8f0", fontSize:"13px",
+                            cursor:"pointer", display:"inline-flex",
+                            alignItems:"center", gap:"4px",
+                          }
+                        }, "→ bekijk & bewerk"),
                     ),
                     // Verwijder-knop (alleen voor klare taken)
                     job.status!=="running" && React.createElement("button",{
@@ -7747,6 +7820,7 @@ const App = () => {
             React.createElement(WebImporter,{llmModel,allTags,
               onRefreshImages: refreshImages,
               addJob, updateJob,
+              importPreview, setImportPreview,
               onAddNote:async(note)=>{ const saved=await api.post("/notes",note); setNotes(p=>[saved,...p]); setSelId(saved.id); setTab("notes"); }}));
           if(t==="mindmap") return React.createElement("div",{style:{flex:1,overflow:"hidden"}},
             React.createElement(MindMap,{notes,allTags,aiMindmap,serverPdfs,serverImages,
