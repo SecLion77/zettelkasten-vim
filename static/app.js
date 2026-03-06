@@ -2240,7 +2240,8 @@ const useWindowSize = () => {
 // Annotaties via klikpunt op afbeelding — zelfde methodiek als PDF annotaties.
 
 const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote, setAiStatus,
-                        notes, onDeleteNote, imgNotes, setImgNotes, allTags}) => {
+                        notes, onDeleteNote, imgNotes, setImgNotes, allTags,
+                        addJob, updateJob}) => {
   const { useState, useRef, useCallback, useEffect, useMemo } = React;
 
   const [busy,          setBusy]         = useState(null);
@@ -2338,30 +2339,37 @@ const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote, setAiStatu
     }
   }, [onRefresh]);
 
-  const describeImage = useCallback(async (fname) => {
+  const describeImage = useCallback((fname) => {
     setBusy(fname);
     const stem = fname.replace(/\.[^.]+$/,"");
-    setAiStatus?.("AI beschrijft: "+stem.slice(0,22)+"…");
-    try {
-      const model = llmModel || "llama3.2-vision";
-      const res   = await api.llmDescribeImage(fname, model);
-      if (res?.description) {
-        setDescs(p=>({...p, [fname]: res.description}));
-        if (onAddNote) {
-          await onAddNote({
-            id: genId(), title: "Afbeelding — "+stem,
-            content: "*Automatisch gegenereerd*\n\n![[img:"+fname+"]]\n\n## Beschrijving\n\n"+res.description,
-            tags: ["afbeelding","media"],
-            created: new Date().toISOString(), modified: new Date().toISOString(),
-          });
+    const jid = genId();
+    addJob && addJob({id:jid, type:"describe", label:"🖼 Beschrijven: "+stem.slice(0,26)+"…"});
+    // Achtergrond — UI blijft vrij
+    (async () => {
+      try {
+        const model = llmModel || "llama3.2-vision";
+        const res   = await api.llmDescribeImage(fname, model);
+        if (res?.description) {
+          setDescs(p=>({...p, [fname]: res.description}));
+          if (onAddNote) {
+            await onAddNote({
+              id: genId(), title: "Afbeelding — "+stem,
+              content: "*Automatisch gegenereerd*\n\n![[img:"+fname+"]]\n\n## Beschrijving\n\n"+res.description,
+              tags: ["afbeelding","media"],
+              created: new Date().toISOString(), modified: new Date().toISOString(),
+            });
+          }
+          updateJob && updateJob(jid,{status:"done", result:"Opgeslagen als notitie"});
+        } else {
+          setDescs(p=>({...p, [fname]: "⚠ Beschrijving niet beschikbaar (ollama pull llama3.2-vision)"}));
+          updateJob && updateJob(jid,{status:"error", error:"Geen beschrijving ontvangen"});
         }
-      } else {
-        setDescs(p=>({...p, [fname]: "⚠ Beschrijving niet beschikbaar (ollama pull llama3.2-vision)"}));
-      }
-    } catch(e) {
-      setDescs(p=>({...p, [fname]: "⚠ "+e.message}));
-    } finally { setBusy(null); setAiStatus?.(null); }
-  }, [llmModel, onAddNote]);
+      } catch(e) {
+        setDescs(p=>({...p, [fname]: "⚠ "+e.message}));
+        updateJob && updateJob(jid,{status:"error", error:e.message});
+      } finally { setBusy(null); }
+    })();
+  }, [llmModel, onAddNote, addJob, updateJob]);
 
   const deleteImg = useCallback(async (fname) => {
     const linked = (notes||[]).filter(n =>
@@ -2892,43 +2900,59 @@ const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote, setAiStatu
 // ── WebImporter ────────────────────────────────────────────────────────────────
 // Instapaper-stijl: URL opgeven → inhoud ophalen → opschonen → Zettelkasten-notitie
 
-const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages}) => {
+const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, addJob, updateJob}) => {
   const { useState, useRef, useCallback } = React;
 
   const [url,        setUrl]       = useState("");
-  const [busy,       setBusy]      = useState(false);
+  const [busy,       setBusy]      = useState(false);  // lokaal: URL-balk disablen tijdens submitten
   const [error,      setError]     = useState(null);
   const [preview,    setPreview]   = useState(null);   // {title, url, markdown, images}
   const [editMd,     setEditMd]    = useState("");
   const [editTitle,  setEditTitle] = useState("");
   const [tags,       setTags]      = useState([]);
   const [saved,      setSaved]     = useState(false);
-  const [renderMode, setRenderMode] = useState(true);   // true = render, false = broncode
-  const [selectedImages, setSelectedImages] = useState(new Set()); // geselecteerde afbeeldingen
+  const [renderMode, setRenderMode] = useState(true);
+  const [selectedImages, setSelectedImages] = useState(new Set());
   const urlRef = useRef(null);
 
-  const doImport = useCallback(async () => {
+  const doImport = useCallback(() => {
     const u = url.trim();
     if (!u) return;
-    setBusy(true); setError(null); setPreview(null); setSaved(false); setSelectedImages(new Set());
-    try {
-      const res = await api.importUrl({url: u, model: llmModel||"llama3.2-vision"});
-      if (res?.ok) {
-        setPreview(res);
-        setEditMd(res.markdown);
-        setEditTitle(res.title);
-        const domain = new URL(res.url).hostname.replace("www.","");
-        setTags(["import", domain.split(".")[0]].filter(Boolean));
-        // Ververs plaatjes-tab als er afbeeldingen zijn gedownload
-        if (res.images?.length && onRefreshImages) onRefreshImages();
-      } else {
-        setError(res?.error || "Import mislukt");
+    // Korte UI-feedback: URL-balk even disablen, dan meteen vrijgeven
+    setBusy(true);
+    setError(null);
+    setTimeout(() => setBusy(false), 400);  // UI direct beschikbaar
+
+    const jid = genId();
+    let shortUrl = u.replace(/^https?:\/\//,"").slice(0,38);
+    addJob && addJob({id:jid, type:"import", label:"🌐 Importeren: "+shortUrl+"…"});
+
+    // Achtergrond: geen await op topniveau → UI blijft volledig vrij
+    (async () => {
+      try {
+        const res = await api.importUrl({url: u, model: llmModel||"llama3.2-vision"});
+        if (res?.ok) {
+          setPreview(res);
+          setEditMd(res.markdown);
+          setEditTitle(res.title);
+          const domain = new URL(res.url).hostname.replace("www.","");
+          setTags(["import", domain.split(".")[0]].filter(Boolean));
+          if (res.images?.length && onRefreshImages) onRefreshImages();
+          updateJob && updateJob(jid,{
+            status:"done",
+            result: res.title?.slice(0,40) || "Klaar"
+          });
+        } else {
+          const msg = res?.error || "Import mislukt";
+          setError(msg);
+          updateJob && updateJob(jid,{status:"error", error:msg});
+        }
+      } catch(e) {
+        setError(e.message);
+        updateJob && updateJob(jid,{status:"error", error:e.message});
       }
-    } catch(e) {
-      setError(e.message);
-    }
-    setBusy(false);
-  }, [url, llmModel, onRefreshImages]);
+    })();
+  }, [url, llmModel, onRefreshImages, addJob, updateJob]);
 
   const saveNote = useCallback(async () => {
     if (!preview) return;
@@ -6386,7 +6410,27 @@ const App = () => {
   const [error,        setError]       = useState(null);
   const [sidebarOpen,  setSidebarOpen] = useState(false);
   const [renderMode,    setRenderMode]  = useState("plain");
-  const [aiStatus,      setAiStatus]    = useState(null);
+  const [aiStatus,      setAiStatus]    = useState(null);  // legacy (enkele taak)
+  const [jobs,          setJobs]         = useState([]);    // [{id,type,label,status,result,error}]
+  const [jobsPanelOpen, setJobsPanelOpen] = useState(false);
+
+  // Jobs API — te gebruiken vanuit child-componenten
+  const addJob = React.useCallback((job) => {
+    // job = {id, type, label}  → status wordt "running"
+    setJobs(prev => [...prev, {...job, status:"running", ts: Date.now()}]);
+  }, []);
+  const updateJob = React.useCallback((id, patch) => {
+    setJobs(prev => prev.map(j => j.id===id ? {...j,...patch} : j));
+  }, []);
+  const removeJob = React.useCallback((id) => {
+    setJobs(prev => prev.filter(j => j.id!==id));
+  }, []);
+  const clearDoneJobs = React.useCallback(() => {
+    setJobs(prev => prev.filter(j => j.status==="running"));
+  }, []);
+
+  const runningJobs = jobs.filter(j => j.status==="running");
+  const doneJobs    = jobs.filter(j => j.status!=="running");
   const [showLinkMenu,  setShowLinkMenu] = useState(false);  // gecombineerde link-dropdown
   const [linkSearch,    setLinkSearch]   = useState("");     // zoekterm in link-dropdown
   const [linkTypeFilter,setLinkTypeFilter]= useState("all"); // all|notes|pdf|images
@@ -6398,6 +6442,14 @@ const App = () => {
     setTimeout(()=>document.addEventListener("click",h),0);
     return ()=>document.removeEventListener("click",h);
   },[showLinkMenu]);
+
+  // Sluit job-panel bij klik buiten
+  React.useEffect(()=>{
+    if(!jobsPanelOpen) return;
+    const h=()=>setJobsPanelOpen(false);
+    setTimeout(()=>document.addEventListener("click",h),0);
+    return ()=>document.removeEventListener("click",h);
+  },[jobsPanelOpen]);
 
   const {w: winW} = useWindowSize();
   const isMobile  = winW < 768;
@@ -6415,8 +6467,10 @@ const App = () => {
     const s=document.createElement("style");
     s.id="zk-ai-css";
     s.textContent=`
-      @keyframes ai-pulse { 0%,100%{opacity:1} 50%{opacity:0.45} }
-      @keyframes ai-dot    { 0%,100%{transform:scale(1);opacity:1} 50%{transform:scale(1.6);opacity:0.7} }
+      @keyframes ai-pulse       { 0%,100%{opacity:1} 50%{opacity:0.45} }
+      @keyframes ai-dot         { 0%,100%{transform:scale(1);opacity:1} 50%{transform:scale(1.6);opacity:0.7} }
+      @keyframes progress-slide { 0%{transform:translateX(-100%)} 100%{transform:translateX(350%)} }
+      @keyframes fadeIn         { from{opacity:0;transform:translateY(-3px)} to{opacity:1;transform:translateY(0)} }
     `;
     document.head.appendChild(s);
   },[]);
@@ -6710,21 +6764,132 @@ const App = () => {
     React.createElement("div", {
       style:{padding:"0 6px", display:"flex", gap:"4px", alignItems:"center"}
     },
-      // AI-status indicator
-      aiStatus && React.createElement("div", {
-        style:{display:"flex",alignItems:"center",gap:"5px",
-               background:"rgba(138,198,242,0.1)",
-               border:"1px solid rgba(138,198,242,0.3)",
-               borderRadius:"20px",padding:"3px 11px",
-               color:"#a8d8f0",fontSize:"14px",
-               animation:"ai-pulse 1.4s ease-in-out infinite",
-               marginRight:"4px"}
+      // ── Job queue indicator ─────────────────────────────────────────
+      (jobs.length > 0) && React.createElement("div",{
+        style:{position:"relative", marginRight:"4px"}
       },
-        React.createElement("span",{style:{
-          display:"inline-block",width:"6px",height:"6px",
-          borderRadius:"50%",background:"#a8d8f0",flexShrink:0,
-          animation:"ai-dot 1.4s ease-in-out infinite"}}),
-        aiStatus
+        // Badge knop
+        React.createElement("button",{
+          onClick: e => { e.stopPropagation(); setJobsPanelOpen(p=>!p); },
+          style:{
+            display:"flex", alignItems:"center", gap:"6px",
+            background: runningJobs.length>0
+              ? "rgba(138,198,242,0.1)" : "rgba(159,202,86,0.1)",
+            border: `1px solid ${runningJobs.length>0
+              ? "rgba(138,198,242,0.35)" : "rgba(159,202,86,0.35)"}`,
+            borderRadius:"20px", padding:"3px 11px", cursor:"pointer",
+            color: runningJobs.length>0 ? "#a8d8f0" : W.comment,
+            fontSize:"14px",
+            animation: runningJobs.length>0 ? "ai-pulse 1.4s ease-in-out infinite" : "none",
+          }
+        },
+          runningJobs.length>0
+            ? React.createElement("span",{style:{
+                display:"inline-block",width:"7px",height:"7px",
+                borderRadius:"50%",background:"#a8d8f0",flexShrink:0,
+                animation:"ai-dot 1.4s ease-in-out infinite"}})
+            : React.createElement("span",null,"✓"),
+          runningJobs.length>0
+            ? (runningJobs.length===1
+                ? runningJobs[0].label
+                : runningJobs.length+" taken actief")
+            : doneJobs.length+" klaar"
+        ),
+
+        // Dropdown paneel
+        jobsPanelOpen && React.createElement("div",{
+          onClick: e=>e.stopPropagation(),
+          style:{
+            position:"absolute", top:"calc(100% + 8px)", right:0,
+            width:"320px", background:W.bg2,
+            border:`1px solid ${W.splitBg}`, borderRadius:"10px",
+            boxShadow:"0 12px 40px rgba(0,0,0,0.7)",
+            zIndex:2000, overflow:"hidden",
+            animation:"fadeIn 0.14s ease-out",
+          }
+        },
+          // Header
+          React.createElement("div",{style:{
+            padding:"10px 14px", borderBottom:`1px solid ${W.splitBg}`,
+            display:"flex", alignItems:"center", justifyContent:"space-between"
+          }},
+            React.createElement("span",{style:{fontSize:"14px",color:W.fgMuted,letterSpacing:"1px"}},
+              "ACHTERGRONDTAKEN"),
+            React.createElement("div",{style:{display:"flex",gap:"6px",alignItems:"center"}},
+              doneJobs.length>0 && React.createElement("button",{
+                onClick: clearDoneJobs,
+                style:{background:"none",border:"none",color:W.fgMuted,
+                       fontSize:"14px",cursor:"pointer",textDecoration:"underline",padding:"0"}
+              },"wis klaar"),
+              React.createElement("button",{
+                onClick:()=>setJobsPanelOpen(false),
+                style:{background:"none",border:"none",color:W.fgMuted,
+                       fontSize:"16px",cursor:"pointer",padding:"0 2px",lineHeight:1}
+              },"×")
+            )
+          ),
+          // Job lijst
+          React.createElement("div",{style:{maxHeight:"340px",overflowY:"auto"}},
+            jobs.length===0
+              ? React.createElement("div",{style:{padding:"20px",color:W.fgMuted,
+                  fontSize:"14px",textAlign:"center"}},"Geen taken")
+              : [...jobs].reverse().map(job =>
+                  React.createElement("div",{
+                    key:job.id,
+                    style:{
+                      padding:"10px 14px",
+                      borderBottom:`1px solid rgba(255,255,255,0.04)`,
+                      display:"flex", alignItems:"flex-start", gap:"10px"
+                    }
+                  },
+                    // Status icon
+                    React.createElement("span",{style:{
+                      fontSize:"14px", marginTop:"1px", flexShrink:0,
+                      animation: job.status==="running"
+                        ? "ai-dot 1.4s ease-in-out infinite" : "none"
+                    }},
+                      job.status==="running" ? "⏳"
+                      : job.status==="done"    ? "✓"
+                      : "✕"
+                    ),
+                    // Label + detail
+                    React.createElement("div",{style:{flex:1,minWidth:0}},
+                      React.createElement("div",{style:{
+                        fontSize:"14px",
+                        color: job.status==="running" ? W.fg
+                             : job.status==="done"    ? W.comment
+                             : W.orange,
+                        overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"
+                      }}, job.label),
+                      job.status==="running" && React.createElement("div",{style:{
+                        marginTop:"5px", height:"2px", borderRadius:"1px",
+                        background:`rgba(255,255,255,0.08)`, overflow:"hidden"
+                      }},
+                        React.createElement("div",{style:{
+                          height:"100%", width:"40%", borderRadius:"1px",
+                          background:W.blue,
+                          animation:"progress-slide 1.4s ease-in-out infinite"
+                        }})
+                      ),
+                      job.error && React.createElement("div",{style:{
+                        fontSize:"13px",color:W.orange,marginTop:"3px",
+                        overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"
+                      }}, job.error),
+                      job.result && React.createElement("div",{style:{
+                        fontSize:"13px",color:W.fgMuted,marginTop:"3px",
+                        overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"
+                      }}, job.result),
+                    ),
+                    // Verwijder-knop (alleen voor klare taken)
+                    job.status!=="running" && React.createElement("button",{
+                      onClick:()=>removeJob(job.id),
+                      style:{background:"none",border:"none",color:W.fgMuted,
+                             fontSize:"14px",cursor:"pointer",padding:"0",flexShrink:0}
+                    },"×")
+                  )
+                )
+          )
+        )
       ),
       // Zettels badge
       React.createElement("div",{style:{
@@ -7340,27 +7505,38 @@ const App = () => {
                 if(linked.length) setNotes(p=>p.filter(n=>!linked.find(l=>l.id===n.id)));
                 setPdfNotes(p=>p.filter(a=>a.file!==fname));
               },
-              onAutoSummarize:async(fname)=>{
+              onAutoSummarize:(fname)=>{
                 const stem=fname.replace(/\.pdf$/i,"");
-                setAiStatus("🧠 Samenvatten: "+stem.slice(0,20)+"…");
-                try{
-                  const res=await api.llmSummarizePdf(fname,llmModel);
-                  if(res?.ok && res.summary){
-                    const note={id:genId(),title:"Samenvatting — "+stem,
-                      content:"*Automatisch gegenereerd door Notebook LLM*\n\n"+res.summary+"\n\n---\n📄 **Bron:** [[pdf:"+fname+"]]",
-                      tags:["samenvatting","pdf"],created:new Date().toISOString(),modified:new Date().toISOString()};
-                    const saved=await api.post("/notes",note);
-                    setNotes(p=>[saved,...p]);
-                  } else if(res&&!res.ok){ throw new Error(res.error||"Samenvatten mislukt"); }
-                } finally { setAiStatus(null); }
+                const jid=genId();
+                addJob({id:jid, type:"summarize", label:"🧠 Samenvatten: "+stem.slice(0,26)+"…"});
+                // Draait in achtergrond — geen await, UI blijft responsief
+                (async()=>{
+                  try{
+                    const res=await api.llmSummarizePdf(fname,llmModel);
+                    if(res?.ok && res.summary){
+                      const note={id:genId(),title:"Samenvatting — "+stem,
+                        content:"*Automatisch gegenereerd door Notebook LLM*\n\n"+res.summary+"\n\n---\n📄 **Bron:** [[pdf:"+fname+"]]",
+                        tags:["samenvatting","pdf"],created:new Date().toISOString(),modified:new Date().toISOString()};
+                      const saved=await api.post("/notes",note);
+                      setNotes(p=>[saved,...p]);
+                      updateJob(jid,{status:"done",result:"Opgeslagen als: Samenvatting — "+stem.slice(0,28)});
+                    } else {
+                      throw new Error(res?.error||"Samenvatten mislukt");
+                    }
+                  } catch(e){
+                    updateJob(jid,{status:"error",error:e.message});
+                  }
+                })();
               }}));
           if(t==="images") return React.createElement("div",{style:{flex:1,overflow:"hidden"}},
             React.createElement(ImagesGallery,{serverImages,onRefresh:refreshImages,llmModel,setAiStatus,notes,imgNotes,setImgNotes,allTags,
+              addJob, updateJob,
               onDeleteNote:id=>setNotes(p=>p.filter(n=>n.id!==id)),
               onAddNote:async(note)=>{ const saved=await api.post("/notes",note); setNotes(p=>[saved,...p]); }}));
           if(t==="import") return React.createElement("div",{style:{flex:1,overflow:"hidden"}},
             React.createElement(WebImporter,{llmModel,allTags,
               onRefreshImages: refreshImages,
+              addJob, updateJob,
               onAddNote:async(note)=>{ const saved=await api.post("/notes",note); setNotes(p=>[saved,...p]); setSelId(saved.id); setTab("notes"); }}));
           if(t==="mindmap") return React.createElement("div",{style:{flex:1,overflow:"hidden"}},
             React.createElement(MindMap,{notes,allTags,aiMindmap,serverPdfs,serverImages,
