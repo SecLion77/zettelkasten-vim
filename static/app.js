@@ -3700,6 +3700,11 @@ const MermaidCodeEditor = ({ value, onChange, editorRef, noteTags=[], onTagsChan
 
     blinkRef.current = setInterval(() => { blinkOn.current = !blinkOn.current; draw(); }, 530);
 
+    // Auto-focus bij mount zodat toetsenbord direct werkt (ook bij tab-navigatie)
+    requestAnimationFrame(() => inp.focus());
+
+    const focusInput = () => inp.focus();
+
     const onMouseDown = (e) => {
       const r  = cv.getBoundingClientRect();
       const s  = S.current;
@@ -3713,6 +3718,8 @@ const MermaidCodeEditor = ({ value, onChange, editorRef, noteTags=[], onTagsChan
       draw();
     };
     cv.addEventListener("mousedown", onMouseDown);
+    // Canvas focus-event → stuur door naar hidden input
+    cv.addEventListener("focus", focusInput);
 
     const onWheel = (e) => {
       e.preventDefault();
@@ -3727,6 +3734,7 @@ const MermaidCodeEditor = ({ value, onChange, editorRef, noteTags=[], onTagsChan
       clearInterval(blinkRef.current);
       cancelAnimationFrame(rafRef.current);
       cv.removeEventListener("mousedown", onMouseDown);
+      cv.removeEventListener("focus", focusInput);
       cv.removeEventListener("wheel", onWheel);
     };
   }, []);
@@ -4101,16 +4109,26 @@ const MermaidCodeEditor = ({ value, onChange, editorRef, noteTags=[], onTagsChan
   }, [statusMsg]);
 
   return React.createElement("div",{
-    style:{flex:1, position:"relative", overflow:"hidden", background:W.bg}
+    style:{flex:1, position:"relative", overflow:"hidden", background:W.bg},
+    // Klik op de container (ook buiten canvas) → focus naar hidden input
+    onClick: () => inputRef.current?.focus(),
+    onFocus: () => inputRef.current?.focus(),
+    tabIndex: -1,
   },
-    React.createElement("canvas",{ref:cvRef, style:{display:"block"}}),
+    React.createElement("canvas",{
+      ref:cvRef,
+      style:{display:"block", outline:"none"},
+      tabIndex: 0,
+      // Canvas focus → stuur door naar input
+      onFocus: () => inputRef.current?.focus(),
+    }),
     React.createElement("input",{
       ref:inputRef, onKeyDown:handleKey, onPaste:handlePaste,
       readOnly:true,
       style:{position:"absolute",top:0,left:0,width:"1px",height:"1px",
              opacity:0,border:"none",outline:"none",padding:0,
-             fontSize:"1px",pointerEvents:"none"},
-      tabIndex:0,
+             fontSize:"1px"},
+      tabIndex: -1,
     })
   );
 };
