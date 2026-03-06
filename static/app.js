@@ -3730,22 +3730,33 @@ const MermaidCodeEditor = ({ value, onChange, editorRef }) => {
     }).join("\n");
   };
 
+  // ── Cursor-positie bijhouden voor statusbalk ─────────────────────────────
+  const [curPos, setCurPos] = React.useState({ln:1, col:1});
+
+  const updateCurPos = () => {
+    const ta = taRef.current;
+    if (!ta) return;
+    const before = ta.value.slice(0, ta.selectionStart);
+    const lines  = before.split("\n");
+    setCurPos({ ln: lines.length, col: lines[lines.length-1].length + 1 });
+  };
+
   const SHARED_STYLE = {
     position:    "absolute",
-    inset:       0,
+    top:         0, left: 0, right: 0, bottom: 0,
     margin:      0,
-    padding:     "12px 14px",
+    padding:     "10px 14px",
     border:      "none",
     outline:     "none",
-    fontSize:    "12px",
+    fontSize:    "13px",
     fontFamily:  "'Hack','Courier New',monospace",
-    lineHeight:  "1.7",
+    lineHeight:  "1.65",
     tabSize:     2,
     whiteSpace:  "pre",
     overflowWrap:"normal",
     wordWrap:    "normal",
     overflow:    "auto",
-    letterSpacing: "0",   // expliciet nul — voorkomt subpixel-drift bij meerdere regels
+    letterSpacing: "0",
     wordSpacing:   "0",
   };
 
@@ -3755,50 +3766,88 @@ const MermaidCodeEditor = ({ value, onChange, editorRef }) => {
       const ta  = e.target;
       const s   = ta.selectionStart;
       const end = ta.selectionEnd;
-      const nv  = value.slice(0,s) + "  " + value.slice(end);
+      const nv  = value.slice(0, s) + "  " + value.slice(end);
       onChange(nv);
-      requestAnimationFrame(() => { ta.selectionStart = ta.selectionEnd = s+2; });
+      requestAnimationFrame(() => {
+        ta.selectionStart = ta.selectionEnd = s + 2;
+        updateCurPos();
+      });
     }
   };
 
-  return React.createElement("div",{
+  // ── Statusbalk — identiek aan VimEditor ──────────────────────────────────
+  const statusBar = React.createElement("div", {
+    style:{
+      position:"absolute", bottom:0, left:0, right:0, height:"22px",
+      background:W.statusBg, display:"flex", alignItems:"center",
+      zIndex:3, userSelect:"none", pointerEvents:"none",
+    }
+  },
+    React.createElement("div", {style:{
+      background:W.comment, color:W.bg,
+      padding:"0 8px", height:"100%",
+      display:"flex", alignItems:"center",
+      fontSize:"11px", fontWeight:"bold",
+      fontFamily:"'Hack','Courier New',monospace",
+      letterSpacing:"0.5px", flexShrink:0,
+    }}, " INSERT "),
+    React.createElement("span", {style:{
+      fontSize:"11px", color:W.fgMuted,
+      fontFamily:"'Hack','Courier New',monospace",
+      marginLeft:"8px", overflow:"hidden",
+      textOverflow:"ellipsis", whiteSpace:"nowrap", flex:1,
+    }}, "  Tab=inspring  \u2014  🔗 koppelen = link invoegen op cursorpositie"),
+    React.createElement("span", {style:{
+      fontSize:"11px", color:W.fgDim,
+      fontFamily:"'Hack','Courier New',monospace",
+      marginRight:"10px", flexShrink:0,
+    }}, curPos.ln+":"+curPos.col)
+  );
+
+  return React.createElement("div", {
     style:{ flex:1, position:"relative", overflow:"hidden", background:W.bg }
   },
-    // Backdrop: gekleurd HTML (niet interactief)
-    React.createElement("div",{
-      ref: backdropRef,
-      "aria-hidden": "true",
-      style:{
-        ...SHARED_STYLE,
-        color:       "transparent",  // eigen tekst onzichtbaar
-        background:  "transparent",
-        pointerEvents:"none",
-        userSelect:  "none",
-        zIndex:      1,
-        // Getoonde highlighting
-        color: W.fg,  // fallback, spans overschrijven
-      },
-      dangerouslySetInnerHTML:{ __html: highlight(value) + "\n" }
-    }),
-    // Textarea: transparante tekst, cursor zichtbaar
-    React.createElement("textarea",{
-      ref:          taRef,
-      value,
-      onChange:     e => { onChange(e.target.value); syncScroll(); },
-      onScroll:     syncScroll,
-      onKeyDown:    handleKeyDown,
-      spellCheck:   false,
-      autoCapitalize:"off",
-      autoCorrect:  "off",
-      style:{
-        ...SHARED_STYLE,
-        background:  "transparent",
-        color:       "transparent",
-        caretColor:  W.fg,          // cursor wél zichtbaar
-        resize:      "none",
-        zIndex:      2,
-      }
-    })
+    // Scroll-wrapper: houdt 22px vrij voor statusbalk
+    React.createElement("div", {
+      style:{ position:"absolute", top:0, left:0, right:0, bottom:"22px", overflow:"hidden" }
+    },
+      // Backdrop: syntax highlighting (niet interactief)
+      React.createElement("div", {
+        ref: backdropRef,
+        "aria-hidden": "true",
+        style:{
+          ...SHARED_STYLE,
+          color:         W.fg,
+          background:    "transparent",
+          pointerEvents: "none",
+          userSelect:    "none",
+          zIndex:        1,
+        },
+        dangerouslySetInnerHTML:{ __html: highlight(value) + "\n" }
+      }),
+      // Textarea: transparante tekst, cursor wél zichtbaar
+      React.createElement("textarea", {
+        ref:            taRef,
+        value,
+        onChange:       e => { onChange(e.target.value); syncScroll(); updateCurPos(); },
+        onScroll:       syncScroll,
+        onKeyDown:      handleKeyDown,
+        onClick:        updateCurPos,
+        onKeyUp:        updateCurPos,
+        spellCheck:     false,
+        autoCapitalize: "off",
+        autoCorrect:    "off",
+        style:{
+          ...SHARED_STYLE,
+          background:  "transparent",
+          color:       "transparent",
+          caretColor:  W.fg,
+          resize:      "none",
+          zIndex:      2,
+        }
+      })
+    ),
+    statusBar
   );
 };
 
@@ -3981,72 +4030,54 @@ const MermaidEditor = ({ initialText="", onSave, onCancel, notes=[], serverPdfs=
     background:W.bg
   }},
 
-    // ── Toolbar — identiek aan notitie-editor stijl ─────────────────────────
+    // ── Toolbar — IDENTIEK aan notitie-editor (editorToolbar) ────────────────
+    // Zelfde achtergrond (W.bg2), zelfde hoogte, zelfde knop-stijlen
     React.createElement("div",{style:{
-      display:"flex", alignItems:"center", gap:"6px", flexWrap:"nowrap",
-      padding:"6px 10px", background:W.statusBg,
-      borderBottom:`1px solid ${W.splitBg}`, flexShrink:0,
-      minHeight:"40px",
+      background:W.bg2, borderBottom:`1px solid ${W.splitBg}`,
+      padding:"6px 10px", display:"flex",
+      alignItems:"center", gap:"6px", flexShrink:0,
+      flexWrap:"nowrap",
     }},
-      // Mode label — zelfde positie als "VIM EDITOR" badge
-      React.createElement("span",{style:{
-        fontSize:"10px", color:W.statusFg, letterSpacing:"2px",
-        fontWeight:"bold", flexShrink:0, marginRight:"4px",
-      }}, "🌿 MERMAID"),
-
-      // Titel — groot, transparant, net als notitie-editor titelbalk
+      // Titel — groot bold, transparant, precies als notitie-editor
       React.createElement("input",{
         value:title, onChange:e=>setTitle(e.target.value),
-        placeholder:"Notitie-titel…",
+        placeholder:"Mindmap titel… (Enter = naar editor)",
+        onKeyDown:e=>{ if(e.key==="Enter"){ e.preventDefault(); editorRef.current?.focus(); } },
         style:{
-          flex:1, minWidth:"80px", background:"transparent",
+          flex:1, minWidth:"120px", background:"transparent",
           border:"none", color:W.statusFg,
-          fontSize:"15px", fontWeight:"bold", outline:"none",
+          fontSize:"16px", fontWeight:"bold", outline:"none",
           WebkitAppearance:"none",
         }
       }),
-
       // Tags
       React.createElement(TagEditor,{tags, onChange:setTags, allTags:["mindmap","ai","overzicht"]}),
-
-      // ── Knoppen — zelfde stijl als notitie-editor ──────────────────────
-      // 🔗 koppelen
-      React.createElement("div",{
-        style:{position:"relative", flexShrink:0},
-        onClick:e=>e.stopPropagation()
-      },
-        React.createElement("button",{
-          onClick:()=>{ setShowLink(v=>!v); setLinkSearch(""); setLinkType("all"); },
-          title:"Link invoegen op cursorpositie: notitie, PDF of afbeelding",
-          style:{
-            background: showLink?"rgba(138,198,242,0.15)":"none",
-            border:`1px solid ${showLink?"rgba(138,198,242,0.4)":W.splitBg}`,
-            borderRadius:"6px", padding:"4px 10px",
-            color: showLink?W.blue:W.fgMuted,
-            fontSize:"11px", cursor:"pointer", flexShrink:0,
-          }
-        }, "🔗 koppelen"),
-        linkDropdown
-      ),
-
-      // 💾 opslaan
+      // ◎ focus (placeholder — Mermaid heeft geen goyo, maar knop voor consistentie)
+      React.createElement("button",{
+        disabled:true,
+        style:{
+          background:"none", border:`1px solid ${W.splitBg}`,
+          borderRadius:"6px", padding:"4px 10px",
+          color:W.fgMuted, fontSize:"11px",
+          cursor:"default", flexShrink:0, opacity:0.4,
+        }
+      }, "🌿 mermaid"),
+      // ✓ opslaan — zelfde kleur/stijl als notitie-editor "✓ opslaan"
       React.createElement("button",{
         onClick:handleSave, disabled:saving,
         style:{
-          background:"none", border:`1px solid ${W.comment}`,
+          background:W.comment, border:`1px solid ${W.comment}`,
           borderRadius:"6px", padding:"4px 10px",
-          color:W.comment, fontSize:"11px", fontWeight:"bold",
+          color:W.bg, fontSize:"11px", fontWeight:"bold",
           cursor:saving?"default":"pointer", flexShrink:0,
         }
-      }, saving ? "⏳…" : "✓ opslaan"),
-
+      }, saving ? "⏳ opslaan…" : "✓ opslaan"),
       // Feedback
       saveMsg && React.createElement("span",{style:{
         fontSize:"10px", flexShrink:0,
         color:saveMsg.startsWith("✓")?W.comment:W.orange,
       }}, saveMsg),
-
-      // ← terug
+      // ✕ sluiten
       onCancel && React.createElement("button",{
         onClick:onCancel,
         style:{
@@ -4055,43 +4086,57 @@ const MermaidEditor = ({ initialText="", onSave, onCancel, notes=[], serverPdfs=
           color:W.fgMuted, fontSize:"11px",
           cursor:"pointer", flexShrink:0,
         }
-      }, "✕ sluiten")
+      }, "✕ sluiten"),
     ),
 
-    // ── Sub-toolbar: kolom-headers ───────────────────────────────────────────
+    // ── Kolom-headers (dun, subtiel) ─────────────────────────────────────────
     React.createElement("div",{style:{
       display:"flex", flexShrink:0,
-      background:"rgba(0,0,0,0.18)",
+      background:"rgba(0,0,0,0.15)",
       borderBottom:`1px solid ${W.splitBg}`,
       fontSize:"9px", color:W.fgMuted, letterSpacing:"0.5px",
     }},
-      // Links: code-kolom header
       React.createElement("div",{style:{
         width:"42%", flexShrink:0,
         padding:"3px 12px",
-        display:"flex", alignItems:"center", gap:"8px",
+        display:"flex", alignItems:"center", justifyContent:"space-between",
         borderRight:`1px solid ${W.splitBg}`,
       }},
-        React.createElement("span",{style:{letterSpacing:"2px"}},"CODE"),
-        React.createElement("span",{style:{color:W.fgDim, fontStyle:"italic"}},
-          "Tab=inspringen  ·  2sp=niveau  ·  🔗=link als node"
+        React.createElement("span",{style:{letterSpacing:"2px", color:W.fgMuted}}, "EDITOR"),
+        // 🔗 koppelen hier in de sub-header, zodat het duidelijk bij de editor-kant hoort
+        React.createElement("div",{
+          style:{position:"relative"},
+          onClick:e=>e.stopPropagation()
+        },
+          React.createElement("button",{
+            onClick:()=>{ setShowLink(v=>!v); setLinkSearch(""); setLinkType("all"); },
+            title:"Link invoegen op cursorpositie",
+            style:{
+              background: showLink?"rgba(138,198,242,0.15)":"none",
+              border:`1px solid ${showLink?"rgba(138,198,242,0.4)":W.splitBg}`,
+              borderRadius:"5px", padding:"2px 8px",
+              color: showLink?W.blue:W.fgMuted,
+              fontSize:"9px", cursor:"pointer",
+            }
+          }, "🔗 koppelen"),
+          linkDropdown
         )
       ),
-      // Rechts: preview-kolom header
       React.createElement("div",{style:{
-        flex:1, padding:"3px 12px", textAlign:"right",
+        flex:1, padding:"3px 12px",
+        display:"flex", alignItems:"center", justifyContent:"flex-end", gap:"8px",
       }},
-        React.createElement("span",{style:{letterSpacing:"2px"}},"PREVIEW"),
-        React.createElement("span",{style:{color:W.fgDim, fontStyle:"italic", marginLeft:"6px"}},
-          "scroll=zoom  ·  sleep=pan"
-        )
+        React.createElement("span",{style:{color:W.fgDim, fontStyle:"italic"}},
+          "scroll=zoom · sleep=pan"
+        ),
+        React.createElement("span",{style:{letterSpacing:"2px", color:W.fgMuted}}, "PREVIEW"),
       ),
     ),
 
     // ── Split: editor links | preview rechts ────────────────────────────────
     React.createElement("div",{style:{flex:1, display:"flex", overflow:"hidden"}},
 
-      // Code editor
+      // Code editor (met ingebakken statusbalk onderaan)
       React.createElement("div",{style:{
         width:"42%", flexShrink:0, display:"flex", flexDirection:"column",
         borderRight:`1px solid ${W.splitBg}`
@@ -4099,7 +4144,7 @@ const MermaidEditor = ({ initialText="", onSave, onCancel, notes=[], serverPdfs=
         React.createElement(MermaidCodeEditor, {
           value: code,
           onChange: setCode,
-          editorRef,               // ← geeft insertAtCursor terug
+          editorRef,
         })
       ),
 
