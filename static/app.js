@@ -1597,11 +1597,42 @@ const Graph = ({notes, pdfNotes, onSelect, selectedId, localMode=false}) => {
 };
 
 
+// ── Canvas/TextLayer mounters (React wrappers voor imperatieve DOM-elementen) ──
+const CanvasMount = ({canvas, width, height}) => {
+  const ref = React.useRef(null);
+  React.useEffect(() => {
+    if (ref.current && canvas) {
+      ref.current.innerHTML = "";
+      ref.current.appendChild(canvas);
+    }
+  }, [canvas]);
+  return React.createElement("div", {
+    ref, style:{width:width+"px", height:height+"px", display:"block", lineHeight:0}
+  });
+};
+
+const TextLayerMount = ({textLayer, width, height}) => {
+  const ref = React.useRef(null);
+  React.useEffect(() => {
+    if (ref.current && textLayer) {
+      ref.current.innerHTML = "";
+      textLayer.style.position = "absolute";
+      textLayer.style.top = "0"; textLayer.style.left = "0";
+      ref.current.appendChild(textLayer);
+    }
+  }, [textLayer]);
+  return React.createElement("div", {
+    ref,
+    style:{position:"absolute",top:0,left:0,width:width+"px",height:height+"px",
+           pointerEvents:"none",overflow:"hidden"}
+  });
+};
+
 // ── PDF Viewer ─────────────────────────────────────────────────────────────────
 const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, onAutoSummarize, onDeletePdf}) => {
   const [pdfDoc,     setPdfDoc]     = useState(null);
   const [pdfFile,    setPdfFile]    = useState(null);
-  const [pageNum,    setPageNum]    = useState(1);
+  const [pageNum,    setPageNum]    = useState(1);   // huidige zichtbare pagina (voor annotaties)
   const [numPages,   setNumPages]   = useState(0);
   const [scale,      setScale]      = useState(1.4);
   const [highlights, setHighlights] = useState(pdfNotes||[]);
@@ -1615,11 +1646,12 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
   const [quickNote,  setQuickNote]  = useState("");
   const [quickTags,  setQuickTags]  = useState([]);
   const [showLibrary,   setShowLibrary]   = useState(false);
-  const [showAnnotPanel,setShowAnnotPanel]= useState(true);   // wegklapbaar
-  const [summarizing,   setSummarizing]   = useState(false);  // AI samenvatten bezig
-  const [summarizeErr,  setSummarizeErr]  = useState(null);   // foutmelding samenvatten
+  const [showAnnotPanel,setShowAnnotPanel]= useState(true);
+  const [summarizing,   setSummarizing]   = useState(false);
+  const [summarizeErr,  setSummarizeErr]  = useState(null);
+  const [renderedPages, setRenderedPages] = useState([]);  // [{num, canvas, textLayer}]
 
-  const canvasRef   = useRef(null);
+  const canvasRef   = useRef(null);    // enkel canvas (legacy, voor annotatie-hit-test)
   const textLayerRef= useRef(null);
   const wrapRef     = useRef(null);
   const scrollRef   = useRef(null);
@@ -1627,6 +1659,8 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
   const renderRef   = useRef(null);
   const tlRenderRef = useRef(null);
   const pinchRef    = useRef({active:false, dist0:0, scale0:1.4});
+  const pageRefs    = useRef({});      // {pageNum: domNode} voor scroll-to-page
+  const renderingRef= useRef(false);
 
   useEffect(()=>{
     // PDF.js en workerSrc worden al ingesteld in index.html
@@ -1661,35 +1695,82 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
     setTimeout(check, 50);
   },[]);
 
-  const renderPage=useCallback(async(doc,num,sc)=>{
-    if(!doc||!canvasRef.current||!textLayerRef.current)return;
-    if(renderRef.current){try{renderRef.current.cancel();}catch{}}
-    if(tlRenderRef.current){try{tlRenderRef.current.cancel();}catch{}}
-    const page=await doc.getPage(num);
-    const vp=page.getViewport({scale:sc});
-    const canvas=canvasRef.current;
-    const ctx=canvas.getContext("2d");
-    canvas.width=Math.floor(vp.width); canvas.height=Math.floor(vp.height);
-    canvas.style.width=Math.floor(vp.width)+"px"; canvas.style.height=Math.floor(vp.height)+"px";
-    const task=page.render({canvasContext:ctx,viewport:vp});
-    renderRef.current=task;
-    try{await task.promise;}catch{}
-    const tl=textLayerRef.current;
-    tl.innerHTML=""; tl.className="textLayer";
-    tl.style.width=Math.floor(vp.width)+"px"; tl.style.height=Math.floor(vp.height)+"px";
-    const tc=await page.getTextContent();
-    const tlTask=window.pdfjsLib.renderTextLayer({textContentSource:tc,container:tl,viewport:vp,textDivs:[]});
-    tlRenderRef.current=tlTask;
-    try{await tlTask.promise;}catch{}
-  },[]);
+  // Render alle pagina's in de scroll-container
+  const renderAllPages = useCallback(async (doc, sc) => {
+    if (!doc || renderingRef.current) return;
+    renderingRef.current = true;
+    setRenderedPages([]);
+    const pages = [];
+    for (let i = 1; i <= doc.numPages; i++) {
+      try {
+        const page = await doc.getPage(i);
+        const vp   = page.getViewport({scale: sc});
+        const canvas = document.createElement("canvas");
+        canvas.width  = Math.floor(vp.width);
+        canvas.height = Math.floor(vp.height);
+        canvas.style.display = "block";
+        const ctx = canvas.getContext("2d");
+        await page.render({canvasContext: ctx, viewport: vp}).promise;
 
-  useEffect(()=>{if(pdfDoc)renderPage(pdfDoc,pageNum,scale);},[pdfDoc,pageNum,scale,renderPage]);
+        // Tekst-laag div
+        const tl = document.createElement("div");
+        tl.className = "textLayer";
+        tl.style.width  = Math.floor(vp.width)  + "px";
+        tl.style.height = Math.floor(vp.height) + "px";
+        const tc = await page.getTextContent();
+        try {
+          await window.pdfjsLib.renderTextLayer({
+            textContentSource: tc, container: tl, viewport: vp, textDivs: []
+          }).promise;
+        } catch {}
+
+        pages.push({num: i, canvas, textLayer: tl,
+                    width: Math.floor(vp.width), height: Math.floor(vp.height)});
+        // Progressief renderen: toon pagina's zodra ze klaar zijn
+        setRenderedPages(prev => [...prev, {num:i, canvas, textLayer:tl,
+                                             width:Math.floor(vp.width), height:Math.floor(vp.height)}]);
+      } catch(e) { console.warn("Pagina "+i+" render fout:", e); }
+    }
+    renderingRef.current = false;
+  }, []);
+
+  useEffect(() => {
+    if (pdfDoc) renderAllPages(pdfDoc, scale);
+  }, [pdfDoc, scale, renderAllPages]);
+
+  // Scroll naar pagina bij navigatie via knoppen
+  useEffect(() => {
+    const node = pageRefs.current[pageNum];
+    if (node) node.scrollIntoView({behavior: "smooth", block: "start"});
+  }, [pageNum]);
+
+  // Intersection observer: update pageNum bij scrollen
+  useEffect(() => {
+    if (!scrollRef.current || renderedPages.length === 0) return;
+    const obs = new IntersectionObserver(entries => {
+      let best = null, bestRatio = 0;
+      entries.forEach(e => {
+        if (e.intersectionRatio > bestRatio) {
+          bestRatio = e.intersectionRatio;
+          best = e.target;
+        }
+      });
+      if (best) {
+        const n = parseInt(best.dataset.page);
+        if (n) setPageNum(n);
+      }
+    }, {root: scrollRef.current, threshold: [0.1, 0.5, 0.9]});
+    Object.values(pageRefs.current).forEach(el => { if (el) obs.observe(el); });
+    return () => obs.disconnect();
+  }, [renderedPages]);
 
   const loadPdf=async(arrayBuffer,name)=>{
     setIsLoading(true);
+    setRenderedPages([]);          // wis oude pagina's bij nieuw PDF
+    renderingRef.current = false;
+    pageRefs.current = {};
     try{
       if(!window.pdfjsLib) throw new Error("PDF.js nog niet geladen — herlaad de pagina");
-      // Zorg dat workerSrc altijd gezet is
       if(!window.pdfjsLib.GlobalWorkerOptions.workerSrc){
         window.pdfjsLib.GlobalWorkerOptions.workerSrc=
           "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
@@ -1979,14 +2060,14 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
             ))
       ),
 
-      // Scroll area
+      // ── Scroll area: alle pagina's doorlopend ───────────────────────────────
       React.createElement("div",{
         ref:scrollRef,
-        style:{flex:1,overflow:"auto",background:W.lineNrBg,position:"relative",cursor:"text"},
+        style:{flex:1,overflow:"auto",background:W.lineNrBg,position:"relative",
+               WebkitOverflowScrolling:"touch"},
         onMouseUp:handleMouseUp,
         onTouchStart:(e)=>{
           if(e.touches.length===2){
-            // Pinch start
             const dx=e.touches[0].clientX-e.touches[1].clientX;
             const dy=e.touches[0].clientY-e.touches[1].clientY;
             pinchRef.current={active:true, dist0:Math.hypot(dx,dy), scale0:scale};
@@ -2000,22 +2081,87 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
           const dy=e.touches[0].clientY-e.touches[1].clientY;
           const dist=Math.hypot(dx,dy);
           const ratio=dist/pinchRef.current.dist0;
-          const newScale=Math.min(4, Math.max(0.5,
-            +(pinchRef.current.scale0*ratio).toFixed(2)));
+          const newScale=Math.min(4,Math.max(0.5,+(pinchRef.current.scale0*ratio).toFixed(2)));
           setScale(newScale);
         },
         onTouchEnd:()=>{ pinchRef.current.active=false; },
       },
-        isLoading&&React.createElement("div",{style:{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center"}},
+        isLoading&&React.createElement("div",{style:{display:"flex",alignItems:"center",
+          justifyContent:"center",height:"200px"}},
           React.createElement("span",{style:{color:W.blue,fontSize:"14px"}},"laden…")
         ),
-        !pdfDoc&&!isLoading&&React.createElement("div",{style:{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:"100%",gap:"16px",color:W.fgMuted}},
+        !pdfDoc&&!isLoading&&React.createElement("div",{style:{display:"flex",flexDirection:"column",
+          alignItems:"center",justifyContent:"center",height:"100%",gap:"16px",color:W.fgMuted}},
           React.createElement("div",{style:{fontSize:"56px"}},"📄"),
           React.createElement("div",{style:{fontSize:"14px",color:W.fgDim}},":open PDF of kies uit bibliotheek"),
-          React.createElement("div",{style:{fontSize:"14px",color:W.splitBg,maxWidth:"300px",textAlign:"center",lineHeight:"1.8"}},"PDF's worden opgeslagen in je vault map.\nSelecteer tekst om te annoteren.")
+          React.createElement("div",{style:{fontSize:"14px",color:W.splitBg,maxWidth:"300px",
+            textAlign:"center",lineHeight:"1.8"}},"PDF's worden opgeslagen in je vault map.\nSelecteer tekst om te annoteren.")
         ),
-        pdfDoc&&React.createElement("div",{ref:wrapRef,style:{position:"relative",margin:"24px auto",width:"fit-content"}},
-          React.createElement("canvas",{ref:canvasRef,style:{display:"block",boxShadow:"0 4px 32px rgba(0,0,0,0.7)"}}),
+
+        // Alle pagina's als doorlopende kolom
+        pdfDoc && React.createElement("div",{
+          ref:wrapRef,
+          style:{display:"flex",flexDirection:"column",alignItems:"center",
+                 padding:"20px 0 40px", gap:"12px"}
+        },
+          renderedPages.map(pg =>
+            React.createElement("div",{
+              key:pg.num,
+              "data-page":pg.num,
+              ref:el=>{ pageRefs.current[pg.num]=el; },
+              style:{position:"relative",flexShrink:0,
+                     boxShadow:"0 4px 20px rgba(0,0,0,0.6)"}
+            },
+              // Canvas als img-achtige container
+              React.createElement(CanvasMount,{canvas:pg.canvas,width:pg.width,height:pg.height}),
+              // Highlight overlay SVG
+              React.createElement("svg",{
+                style:{position:"absolute",top:0,left:0,pointerEvents:"none",overflow:"visible"},
+                width:pg.width, height:pg.height,
+              },
+                highlights.filter(h=>h.page===pg.num&&h.file===pdfFile?.name&&h.rects?.length)
+                  .flatMap((h,hi)=>{
+                    const col=HCOLORS.find(c=>c.id===h.colorId)||HCOLORS[0];
+                    const isActive=editingId===h.id;
+                    return h.rects.map((r,ri)=>React.createElement("rect",{
+                      key:`${hi}-${ri}`,
+                      x:r.x*pg.width, y:r.y*pg.height,
+                      width:r.w*pg.width, height:r.h*pg.height,
+                      fill:col.bg, stroke:isActive?col.border:"none",
+                      strokeWidth:isActive?1.5:0, rx:2,
+                      style:{cursor:"pointer",pointerEvents:"all"},
+                      onClick:()=>setEditingId(h.id===editingId?null:h.id),
+                      title:h.text.substring(0,60),
+                    }));
+                  })
+              ),
+              // Tekst-laag
+              React.createElement(TextLayerMount,{textLayer:pg.textLayer,width:pg.width,height:pg.height}),
+              // Pagina-nummer badge
+              React.createElement("div",{style:{
+                position:"absolute",bottom:"6px",right:"8px",
+                background:"rgba(0,0,0,0.55)",borderRadius:"10px",
+                padding:"2px 8px",fontSize:"12px",color:"rgba(255,255,255,0.5)",
+                pointerEvents:"none",userSelect:"none"
+              }}, pg.num, " / ", numPages)
+            )
+          ),
+          // Laad-indicator voor nog-te-renderen pagina's
+          renderedPages.length < numPages && renderedPages.length > 0 &&
+            React.createElement("div",{style:{
+              color:W.fgMuted,fontSize:"14px",padding:"16px",
+              display:"flex",alignItems:"center",gap:"8px"
+            }},
+              React.createElement("span",{style:{animation:"ai-pulse 1.4s ease-in-out infinite"}},
+                "⏳"),
+              `Pagina ${renderedPages.length+1} van ${numPages} laden…`
+            )
+        ),
+
+        // iOS annoteerknoppen etc. — alleen zichtbaar als pageNum klopt
+        pdfDoc&&React.createElement("div",{ref:wrapRef,style:{display:"none"}},
+          React.createElement("canvas",{ref:canvasRef}),
+          React.createElement("div",{ref:textLayerRef}),
           // Highlight overlay — getekend als gekleurde rechthoeken ONDER de textLayer
           React.createElement("svg",{
             style:{position:"absolute",top:0,left:0,pointerEvents:"none",overflow:"visible"},
@@ -2929,7 +3075,8 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, addJob, upd
   const { useState, useRef, useCallback } = React;
 
   const [url,        setUrl]       = useState("");
-  const [busy,       setBusy]      = useState(false);  // lokaal: URL-balk disablen tijdens submitten
+  const [busy,       setBusy]      = useState(false);
+  const [importing,  setImporting] = useState(false);  // achtergrond import bezig
   const [error,      setError]     = useState(null);
   const [preview,    setPreview]   = useState(null);   // {title, url, markdown, images}
   const [editMd,     setEditMd]    = useState("");
@@ -2943,16 +3090,17 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, addJob, upd
   const doImport = useCallback(() => {
     const u = url.trim();
     if (!u) return;
-    // Korte UI-feedback: URL-balk even disablen, dan meteen vrijgeven
     setBusy(true);
     setError(null);
-    setTimeout(() => setBusy(false), 400);  // UI direct beschikbaar
+    setImporting(true);   // toon wacht-scherm op import-tab
+    setPreview(null);
+    setSaved(false);
+    setTimeout(() => setBusy(false), 400);
 
     const jid = genId();
     let shortUrl = u.replace(/^https?:\/\//,"").slice(0,38);
     addJob && addJob({id:jid, type:"import", label:"🌐 Importeren: "+shortUrl+"…"});
 
-    // Achtergrond: geen await op topniveau → UI blijft volledig vrij
     (async () => {
       try {
         const res = await api.importUrl({url: u, model: llmModel||"llama3.2-vision"});
@@ -2963,10 +3111,7 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, addJob, upd
           const domain = new URL(res.url).hostname.replace("www.","");
           setTags(["import", domain.split(".")[0]].filter(Boolean));
           if (res.images?.length && onRefreshImages) onRefreshImages();
-          updateJob && updateJob(jid,{
-            status:"done",
-            result: res.title?.slice(0,40) || "Klaar"
-          });
+          updateJob && updateJob(jid,{status:"done", result: res.title?.slice(0,40)||"Klaar"});
         } else {
           const msg = res?.error || "Import mislukt";
           setError(msg);
@@ -2975,6 +3120,8 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, addJob, upd
       } catch(e) {
         setError(e.message);
         updateJob && updateJob(jid,{status:"error", error:e.message});
+      } finally {
+        setImporting(false);  // altijd wacht-scherm uitschakelen
       }
     })();
   }, [url, llmModel, onRefreshImages, addJob, updateJob]);
@@ -3004,7 +3151,8 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, addJob, upd
 
   const reset = () => {
     setUrl(""); setPreview(null); setEditMd(""); setEditTitle("");
-    setTags([]); setError(null); setSaved(false); setSelectedImages(new Set());
+    setTags([]); setError(null); setSaved(false); setImporting(false);
+    setSelectedImages(new Set());
     setTimeout(()=>urlRef.current?.focus(), 50);
   };
 
@@ -3029,52 +3177,89 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, addJob, upd
       },"+ nieuwe import")
     ),
 
-    // ── URL invoer ───────────────────────────────────────────────────────────
+    // ── URL invoer (ook zichtbaar tijdens import) ────────────────────────────
     !preview && React.createElement("div",{style:{
       flex:1, display:"flex", flexDirection:"column",
       alignItems:"center", justifyContent:"center",
       padding:"32px 24px", gap:"20px"
     }},
-      React.createElement("div",{style:{fontSize:"48px",lineHeight:1}},"🌐"),
-      React.createElement("div",{style:{fontSize:"15px",color:W.fgDim,
-        textAlign:"center",lineHeight:"1.6",maxWidth:"460px"}},
-        "Plak een URL om de inhoud te importeren als Zettelkasten-notitie.",
-        React.createElement("br"),
-        React.createElement("span",{style:{fontSize:"14px",color:W.fgMuted}},
-          "De AI verwijdert navigatie, advertenties en rommel — zoals Instapaper.")),
 
-      // URL invoer
-      React.createElement("div",{style:{
-        display:"flex", gap:"10px", width:"100%", maxWidth:"560px"
-      }},
-        React.createElement("input",{
-          ref:urlRef,
-          type:"url",
-          value:url,
-          autoFocus:true,
-          onChange:e=>setUrl(e.target.value),
-          onKeyDown:e=>{ if(e.key==="Enter") doImport(); },
-          placeholder:"https://example.com/artikel",
-          style:{flex:1, background:W.bg2, border:`1px solid ${W.splitBg}`,
-                 borderRadius:"6px", padding:"10px 14px", color:W.fg,
-                 fontSize:"14px", outline:"none",
-                 boxShadow: url ? `0 0 0 2px rgba(138,198,242,0.25)` : "none"}
-        }),
-        React.createElement("button",{
-          onClick:doImport,
-          disabled:busy||!url.trim(),
-          style:{background:W.blue, color:W.bg, border:"none",
-                 borderRadius:"6px", padding:"10px 22px",
-                 fontSize:"14px", fontWeight:"bold", cursor:"pointer",
-                 opacity:busy||!url.trim()?0.5:1, whiteSpace:"nowrap"}
-        }, busy ? "⏳ ophalen…" : "→ Importeren")
-      ),
+      // Wacht-scherm tijdens import
+      importing
+        ? React.createElement(React.Fragment, null,
+            React.createElement("div",{style:{
+              fontSize:"48px",lineHeight:1,animation:"ai-pulse 1.4s ease-in-out infinite"
+            }},"🌐"),
+            React.createElement("div",{style:{
+              fontSize:"15px",color:W.fgDim,textAlign:"center",lineHeight:"1.7",maxWidth:"460px"
+            }},
+              "Bezig met importeren…",
+              React.createElement("br"),
+              React.createElement("span",{style:{fontSize:"14px",color:W.fgMuted}},
+                url.replace(/^https?:\/\//,"").slice(0,60))
+            ),
+            React.createElement("div",{style:{
+              width:"320px",height:"3px",borderRadius:"2px",
+              background:"rgba(255,255,255,0.08)",overflow:"hidden"
+            }},
+              React.createElement("div",{style:{
+                height:"100%",width:"35%",borderRadius:"2px",background:W.blue,
+                animation:"progress-slide 1.4s ease-in-out infinite"
+              }})
+            ),
+            React.createElement("div",{style:{
+              fontSize:"14px",color:W.fgMuted,textAlign:"center",maxWidth:"420px",lineHeight:"1.6"
+            }},
+              "Je kunt de app gewoon blijven gebruiken. De import verschijnt hier zodra hij klaar is."),
+            React.createElement("button",{
+              onClick:()=>{ setImporting(false); setError(null); },
+              style:{background:"none",border:`1px solid ${W.splitBg}`,color:W.fgMuted,
+                     borderRadius:"6px",padding:"6px 16px",fontSize:"14px",cursor:"pointer"}
+            },"× annuleer")
+          )
 
-      error && React.createElement("div",{style:{
-        color:W.orange, fontSize:"14px", background:"rgba(229,120,109,0.08)",
-        border:`1px solid rgba(229,120,109,0.25)`, borderRadius:"6px",
-        padding:"10px 16px", maxWidth:"560px", width:"100%"
-      }}, "⚠ "+error)
+        // Normale URL-invoer
+        : React.createElement(React.Fragment, null,
+            React.createElement("div",{style:{fontSize:"48px",lineHeight:1}},"🌐"),
+            React.createElement("div",{style:{fontSize:"15px",color:W.fgDim,
+              textAlign:"center",lineHeight:"1.6",maxWidth:"460px"}},
+              "Plak een URL om de inhoud te importeren als Zettelkasten-notitie.",
+              React.createElement("br"),
+              React.createElement("span",{style:{fontSize:"14px",color:W.fgMuted}},
+                "De AI verwijdert navigatie, advertenties en rommel — zoals Instapaper.")),
+
+            React.createElement("div",{style:{
+              display:"flex", gap:"10px", width:"100%", maxWidth:"560px"
+            }},
+              React.createElement("input",{
+                ref:urlRef,
+                type:"url",
+                value:url,
+                autoFocus:true,
+                onChange:e=>setUrl(e.target.value),
+                onKeyDown:e=>{ if(e.key==="Enter") doImport(); },
+                placeholder:"https://example.com/artikel",
+                style:{flex:1, background:W.bg2, border:`1px solid ${W.splitBg}`,
+                       borderRadius:"6px", padding:"10px 14px", color:W.fg,
+                       fontSize:"14px", outline:"none",
+                       boxShadow: url ? `0 0 0 2px rgba(138,198,242,0.25)` : "none"}
+              }),
+              React.createElement("button",{
+                onClick:doImport,
+                disabled:busy||!url.trim(),
+                style:{background:W.blue, color:W.bg, border:"none",
+                       borderRadius:"6px", padding:"10px 22px",
+                       fontSize:"14px", fontWeight:"bold", cursor:"pointer",
+                       opacity:busy||!url.trim()?0.5:1, whiteSpace:"nowrap"}
+              }, "→ Importeren")
+            ),
+
+            error && React.createElement("div",{style:{
+              color:W.orange, fontSize:"14px", background:"rgba(229,120,109,0.08)",
+              border:`1px solid rgba(229,120,109,0.25)`, borderRadius:"6px",
+              padding:"10px 16px", maxWidth:"560px", width:"100%"
+            }}, "⚠ "+error)
+          )
     ),
 
     // ── Preview & bewerken ───────────────────────────────────────────────────
