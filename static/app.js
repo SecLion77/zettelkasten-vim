@@ -3585,9 +3585,29 @@ const MermaidPreviewBlock = ({ code, onEdit }) => {
 // Gebruikt de overlay-techniek: een div met gekleurde spans eronder,
 // een transparante textarea erboven. Tekst en cursor blijven volledig bewerkbaar.
 // Kleuren komen exact overeen met het canvas-kleurenpalet.
-const MermaidCodeEditor = ({ value, onChange }) => {
+const MermaidCodeEditor = ({ value, onChange, editorRef }) => {
   const taRef        = React.useRef(null);
   const backdropRef  = React.useRef(null);
+
+  // Expose insertAtCursor via editorRef — zelfde patroon als VimEditor's onEditorRef
+  React.useEffect(() => {
+    if (!editorRef) return;
+    editorRef.current = {
+      focus: () => taRef.current?.focus(),
+      insertAtCursor: (text) => {
+        const ta = taRef.current;
+        if (!ta) { onChange(value + text); return; }
+        const s  = ta.selectionStart;
+        const e  = ta.selectionEnd;
+        const nv = value.slice(0, s) + text + value.slice(e);
+        onChange(nv);
+        requestAnimationFrame(() => {
+          ta.selectionStart = ta.selectionEnd = s + text.length;
+          ta.focus();
+        });
+      },
+    };
+  });
 
   const PALETTE = [W.blue, W.comment, W.orange, W.purple,
                    W.string, W.type, W.keyword, "#e8d44d"];
@@ -3783,22 +3803,34 @@ const MermaidCodeEditor = ({ value, onChange }) => {
 };
 
 // ── Mermaid Mindmap Editor (split: code | preview) ───────────────────────────
-const MermaidEditor = ({ initialText="", onSave, onCancel }) => {
+const MermaidEditor = ({ initialText="", onSave, onCancel, notes=[], serverPdfs=[], serverImages=[] }) => {
   const DEFAULT = `mindmap\n  root((Mijn Mindmap))\n    Tak A\n      Sub A1\n      Sub A2\n    Tak B\n      Sub B1\n    Tak C`;
-  const [code, setCode]         = React.useState(initialText || DEFAULT);
-  const [title, setTitle]       = React.useState("");
-  const [tags, setTags]         = React.useState(["mindmap"]);
-  const [saving, setSaving]     = React.useState(false);
-  const [saveMsg, setSaveMsg]   = React.useState("");
-  const containerRef            = React.useRef(null);
+  const [code, setCode]               = React.useState(initialText || DEFAULT);
+  const [title, setTitle]             = React.useState("");
+  const [tags, setTags]               = React.useState(["mindmap"]);
+  const [saving, setSaving]           = React.useState(false);
+  const [saveMsg, setSaveMsg]         = React.useState("");
+  const [showLink, setShowLink]       = React.useState(false);
+  const [linkSearch, setLinkSearch]   = React.useState("");
+  const [linkType, setLinkType]       = React.useState("all");
+  const containerRef                  = React.useRef(null);
+  const editorRef                     = React.useRef(null);   // {insertAtCursor}
   const [previewSize, setPreviewSize] = React.useState({w:400, h:400});
 
-  // Resize observer voor preview canvas
+  // Sluit link-dropdown bij klik buiten
+  React.useEffect(() => {
+    if (!showLink) return;
+    const h = () => { setShowLink(false); setLinkSearch(""); };
+    setTimeout(() => document.addEventListener("click", h), 0);
+    return () => document.removeEventListener("click", h);
+  }, [showLink]);
+
+  // Resize observer preview canvas
   React.useEffect(() => {
     if (!containerRef.current) return;
-    const ro = new ResizeObserver(entries => {
-      const e = entries[0];
-      if (e) setPreviewSize({w: e.contentRect.width, h: e.contentRect.height});
+    const ro = new ResizeObserver(e => {
+      const r = e[0];
+      if (r) setPreviewSize({w: r.contentRect.width, h: r.contentRect.height});
     });
     ro.observe(containerRef.current);
     return () => ro.disconnect();
@@ -3813,10 +3845,8 @@ const MermaidEditor = ({ initialText="", onSave, onCancel }) => {
   const handleSave = async () => {
     if (!onSave || saving) return;
     setSaving(true);
-    const nodes = parseMermaidMindmap(code);
-    const rootLabel = nodes[0]?.label || "mindmap";
-    const noteTitle = title || "Mindmap — " + rootLabel;
-    // Sla op als notitie met mermaid code block erin
+    const ns = parseMermaidMindmap(code);
+    const noteTitle = title || "Mindmap — " + (ns[0]?.label || "mindmap");
     const content = `\`\`\`mindmap\n${code}\n\`\`\``;
     try {
       await onSave({ title: noteTitle, content, tags });
@@ -3828,67 +3858,248 @@ const MermaidEditor = ({ initialText="", onSave, onCancel }) => {
     setSaving(false);
   };
 
+  // Voeg link in op huidige cursorpositie in de code-editor
+  const insertLink = (linkText) => {
+    editorRef.current?.insertAtCursor(linkText);
+    setShowLink(false);
+    setLinkSearch("");
+  };
+
+  // ── Link dropdown (identiek aan notitie-editor) ───────────────────────────
+  const linkDropdown = showLink && React.createElement("div",{
+    style:{position:"absolute", top:"calc(100% + 4px)", right:0, zIndex:210,
+           background:W.bg2, border:`1px solid ${W.splitBg}`, borderRadius:"8px",
+           width:"300px", maxHeight:"420px", display:"flex", flexDirection:"column",
+           boxShadow:"0 8px 32px rgba(0,0,0,0.75)"}
+  },
+    // Type-filter tabs
+    React.createElement("div",{style:{display:"flex",borderBottom:`1px solid ${W.splitBg}`,flexShrink:0}},
+      [["all","Alles"],["notes","📝 Notities"],["pdf","📄 PDF"],["images","🖼 Plaatjes"]].map(([id,lbl])=>
+        React.createElement("button",{key:id, onClick:()=>setLinkType(id),
+          style:{flex:1, background:linkType===id?"rgba(138,198,242,0.12)":"none",
+                 border:"none", borderBottom:linkType===id?`2px solid ${W.blue}`:"2px solid transparent",
+                 color:linkType===id?W.blue:W.fgMuted,
+                 fontSize:"9px", padding:"7px 2px", cursor:"pointer", letterSpacing:"0.3px"}
+        }, lbl)
+      )
+    ),
+    // Zoekbalk
+    React.createElement("div",{style:{padding:"7px 10px",borderBottom:`1px solid ${W.splitBg}`,flexShrink:0}},
+      React.createElement("input",{
+        autoFocus:true, value:linkSearch,
+        onChange:e=>setLinkSearch(e.target.value),
+        placeholder:"Zoeken…",
+        style:{width:"100%", background:"rgba(255,255,255,0.06)",
+               border:`1px solid ${W.splitBg}`, borderRadius:"5px",
+               padding:"5px 9px", color:W.fg, fontSize:"12px",
+               outline:"none", fontFamily:"inherit"}
+      })
+    ),
+    // Resultatenlijst
+    React.createElement("div",{style:{overflowY:"auto",flex:1}},
+      // Notities
+      (linkType==="all"||linkType==="notes") && (() => {
+        const ns = notes.filter(n =>
+          !linkSearch || n.title?.toLowerCase().includes(linkSearch.toLowerCase()) ||
+          (n.tags||[]).some(t=>t.includes(linkSearch.toLowerCase()))
+        ).slice(0,20);
+        if (!ns.length) return null;
+        return React.createElement(React.Fragment,null,
+          linkType==="all" && React.createElement("div",{style:{
+            padding:"5px 12px 3px", fontSize:"9px", color:W.fgMuted,
+            letterSpacing:"2px", background:"rgba(0,0,0,0.2)"
+          }},"NOTITIES"),
+          ns.map(n => React.createElement("div",{key:n.id,
+            onMouseDown: e => { e.preventDefault(); insertLink("[["+n.title+"]]"); },
+            style:{padding:"7px 12px", cursor:"pointer",
+                   borderBottom:`1px solid rgba(255,255,255,0.03)`,
+                   display:"flex", flexDirection:"column", gap:"1px"}
+          },
+            React.createElement("span",{style:{fontSize:"12px",color:W.fg,
+              overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},n.title),
+            (n.tags||[]).length>0 && React.createElement("span",{
+              style:{fontSize:"9px",color:W.comment}},(n.tags||[]).map(t=>"#"+t).join("  "))
+          ))
+        );
+      })(),
+      // PDFs
+      (linkType==="all"||linkType==="pdf") && (() => {
+        const ps = serverPdfs.filter(p =>
+          !linkSearch || p.name.toLowerCase().includes(linkSearch.toLowerCase())
+        ).slice(0,15);
+        if (!ps.length) return null;
+        return React.createElement(React.Fragment,null,
+          linkType==="all" && React.createElement("div",{style:{
+            padding:"5px 12px 3px", fontSize:"9px", color:W.orange,
+            letterSpacing:"2px", background:"rgba(0,0,0,0.2)"
+          }},"PDF"),
+          ps.map(p => React.createElement("div",{key:p.name,
+            onMouseDown: e => { e.preventDefault(); insertLink("[[pdf:"+p.name+"]]"); },
+            style:{padding:"7px 12px", cursor:"pointer",
+                   borderBottom:`1px solid rgba(255,255,255,0.03)`,
+                   display:"flex", alignItems:"center", gap:"8px"}
+          },
+            React.createElement("span",{style:{fontSize:"13px"}},"📄"),
+            React.createElement("span",{style:{fontSize:"12px",color:W.fgDim,
+              overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1}},p.name)
+          ))
+        );
+      })(),
+      // Afbeeldingen
+      (linkType==="all"||linkType==="images") && (() => {
+        const imgs = serverImages.filter(i =>
+          !linkSearch || i.name.toLowerCase().includes(linkSearch.toLowerCase())
+        ).slice(0,15);
+        if (!imgs.length) return null;
+        return React.createElement(React.Fragment,null,
+          linkType==="all" && React.createElement("div",{style:{
+            padding:"5px 12px 3px", fontSize:"9px", color:W.blue,
+            letterSpacing:"2px", background:"rgba(0,0,0,0.2)"
+          }},"AFBEELDINGEN"),
+          imgs.map(img => React.createElement("div",{key:img.name,
+            onMouseDown: e => { e.preventDefault(); insertLink("![[img:"+img.name+"]]"); },
+            style:{padding:"7px 12px", cursor:"pointer",
+                   borderBottom:`1px solid rgba(255,255,255,0.03)`,
+                   display:"flex", alignItems:"center", gap:"8px"}
+          },
+            React.createElement("span",{style:{fontSize:"13px"}},"🖼"),
+            React.createElement("span",{style:{fontSize:"12px",color:W.fgDim,
+              overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1}},img.name)
+          ))
+        );
+      })(),
+      // Lege staat
+      [notes, serverPdfs, serverImages].every(arr =>
+        !arr.filter(x => !linkSearch || (x.title||x.name||"").toLowerCase().includes(linkSearch.toLowerCase())).length
+      ) && React.createElement("div",{style:{padding:"20px",color:W.fgMuted,
+        fontSize:"11px",textAlign:"center"}},"Geen resultaten")
+    )
+  );
+
   return React.createElement("div",{style:{
-    display:"flex", flexDirection:"column", height:"100%", overflow:"hidden"
+    display:"flex", flexDirection:"column", height:"100%", overflow:"hidden",
+    background:W.bg
   }},
-    // Toolbar
+
+    // ── Toolbar — identiek aan notitie-editor stijl ─────────────────────────
     React.createElement("div",{style:{
-      display:"flex", alignItems:"center", gap:"8px",
-      padding:"8px 12px", background:W.statusBg,
-      borderBottom:`1px solid ${W.splitBg}`, flexShrink:0
+      display:"flex", alignItems:"center", gap:"6px", flexWrap:"nowrap",
+      padding:"6px 10px", background:W.statusBg,
+      borderBottom:`1px solid ${W.splitBg}`, flexShrink:0,
+      minHeight:"40px",
     }},
+      // Mode label — zelfde positie als "VIM EDITOR" badge
       React.createElement("span",{style:{
-        fontSize:"11px", color:W.statusFg, letterSpacing:"2px", fontWeight:"bold"
-      }}, "🌿 MERMAID MINDMAP"),
-      React.createElement("div",{style:{flex:1}}),
-      // Titel invoer
+        fontSize:"10px", color:W.statusFg, letterSpacing:"2px",
+        fontWeight:"bold", flexShrink:0, marginRight:"4px",
+      }}, "🌿 MERMAID"),
+
+      // Titel — groot, transparant, net als notitie-editor titelbalk
       React.createElement("input",{
         value:title, onChange:e=>setTitle(e.target.value),
         placeholder:"Notitie-titel…",
-        style:{background:W.bg,border:`1px solid ${W.splitBg}`,borderRadius:"4px",
-               padding:"4px 8px",color:W.fg,fontSize:"12px",outline:"none",
-               width:"200px"}
+        style:{
+          flex:1, minWidth:"80px", background:"transparent",
+          border:"none", color:W.statusFg,
+          fontSize:"15px", fontWeight:"bold", outline:"none",
+          WebkitAppearance:"none",
+        }
       }),
+
       // Tags
       React.createElement(TagEditor,{tags, onChange:setTags, allTags:["mindmap","ai","overzicht"]}),
-      // Knoppen
+
+      // ── Knoppen — zelfde stijl als notitie-editor ──────────────────────
+      // 🔗 koppelen
+      React.createElement("div",{
+        style:{position:"relative", flexShrink:0},
+        onClick:e=>e.stopPropagation()
+      },
+        React.createElement("button",{
+          onClick:()=>{ setShowLink(v=>!v); setLinkSearch(""); setLinkType("all"); },
+          title:"Link invoegen op cursorpositie: notitie, PDF of afbeelding",
+          style:{
+            background: showLink?"rgba(138,198,242,0.15)":"none",
+            border:`1px solid ${showLink?"rgba(138,198,242,0.4)":W.splitBg}`,
+            borderRadius:"6px", padding:"4px 10px",
+            color: showLink?W.blue:W.fgMuted,
+            fontSize:"11px", cursor:"pointer", flexShrink:0,
+          }
+        }, "🔗 koppelen"),
+        linkDropdown
+      ),
+
+      // 💾 opslaan
       React.createElement("button",{
         onClick:handleSave, disabled:saving,
-        style:{background:"linear-gradient(135deg,rgba(159,202,86,0.25),rgba(159,202,86,0.12))",
-               border:"1px solid rgba(159,202,86,0.5)",color:W.comment,
-               borderRadius:"5px",padding:"5px 14px",fontSize:"11px",fontWeight:"600",
-               cursor:saving?"default":"pointer"}
-      }, saving ? "⏳ Opslaan…" : "💾 Opslaan als notitie"),
-      saveMsg && React.createElement("span",{style:{fontSize:"10px",
-        color:saveMsg.startsWith("✓")?W.comment:W.orange}}, saveMsg),
+        style:{
+          background:"none", border:`1px solid ${W.comment}`,
+          borderRadius:"6px", padding:"4px 10px",
+          color:W.comment, fontSize:"11px", fontWeight:"bold",
+          cursor:saving?"default":"pointer", flexShrink:0,
+        }
+      }, saving ? "⏳…" : "✓ opslaan"),
+
+      // Feedback
+      saveMsg && React.createElement("span",{style:{
+        fontSize:"10px", flexShrink:0,
+        color:saveMsg.startsWith("✓")?W.comment:W.orange,
+      }}, saveMsg),
+
+      // ← terug
       onCancel && React.createElement("button",{
         onClick:onCancel,
-        style:{background:"none",border:`1px solid ${W.splitBg}`,color:W.fgMuted,
-               borderRadius:"5px",padding:"5px 10px",fontSize:"11px",cursor:"pointer"}
-      }, "← terug")
+        style:{
+          background:"none", border:`1px solid ${W.splitBg}`,
+          borderRadius:"6px", padding:"4px 10px",
+          color:W.fgMuted, fontSize:"11px",
+          cursor:"pointer", flexShrink:0,
+        }
+      }, "✕ sluiten")
     ),
 
-    // Split: editor links | preview rechts
-    React.createElement("div",{style:{flex:1,display:"flex",overflow:"hidden"}},
+    // ── Sub-toolbar: kolom-headers ───────────────────────────────────────────
+    React.createElement("div",{style:{
+      display:"flex", flexShrink:0,
+      background:"rgba(0,0,0,0.18)",
+      borderBottom:`1px solid ${W.splitBg}`,
+      fontSize:"9px", color:W.fgMuted, letterSpacing:"0.5px",
+    }},
+      // Links: code-kolom header
+      React.createElement("div",{style:{
+        width:"42%", flexShrink:0,
+        padding:"3px 12px",
+        display:"flex", alignItems:"center", gap:"8px",
+        borderRight:`1px solid ${W.splitBg}`,
+      }},
+        React.createElement("span",{style:{letterSpacing:"2px"}},"CODE"),
+        React.createElement("span",{style:{color:W.fgDim, fontStyle:"italic"}},
+          "Tab=inspringen  ·  2sp=niveau  ·  🔗=link als node"
+        )
+      ),
+      // Rechts: preview-kolom header
+      React.createElement("div",{style:{
+        flex:1, padding:"3px 12px", textAlign:"right",
+      }},
+        React.createElement("span",{style:{letterSpacing:"2px"}},"PREVIEW"),
+        React.createElement("span",{style:{color:W.fgDim, fontStyle:"italic", marginLeft:"6px"}},
+          "scroll=zoom  ·  sleep=pan"
+        )
+      ),
+    ),
 
-      // Code editor met syntax highlighting
+    // ── Split: editor links | preview rechts ────────────────────────────────
+    React.createElement("div",{style:{flex:1, display:"flex", overflow:"hidden"}},
+
+      // Code editor
       React.createElement("div",{style:{
         width:"42%", flexShrink:0, display:"flex", flexDirection:"column",
         borderRight:`1px solid ${W.splitBg}`
       }},
-        React.createElement("div",{style:{
-          padding:"5px 10px",fontSize:"9px",color:W.fgMuted,
-          letterSpacing:"1.5px",background:"rgba(0,0,0,0.15)",
-          borderBottom:`1px solid ${W.splitBg}`, flexShrink:0,
-          display:"flex", alignItems:"center", gap:"6px"
-        }},
-          "MERMAID SYNTAX",
-          React.createElement("span",{style:{fontSize:"9px",color:W.fgDim,fontStyle:"italic",fontWeight:"normal"}},
-            "root((Label)) · Tak · " + "  Sub")
-        ),
         React.createElement(MermaidCodeEditor, {
           value: code,
           onChange: setCode,
+          editorRef,               // ← geeft insertAtCursor terug
         })
       ),
 
@@ -3897,22 +4108,16 @@ const MermaidEditor = ({ initialText="", onSave, onCancel }) => {
         ref:containerRef,
         style:{flex:1, position:"relative", background:W.bg, overflow:"hidden"}
       },
-        React.createElement("div",{style:{
-          position:"absolute",top:"8px",right:"10px",
-          fontSize:"9px",color:W.fgMuted,letterSpacing:"1.5px",
-          zIndex:2, pointerEvents:"none"
-        }}, "PREVIEW"),
         React.createElement(MermaidCanvas,{
-          text:code,
-          width:previewSize.w||400,
-          height:previewSize.h||400
+          text:code, width:previewSize.w||400, height:previewSize.h||400,
+          interactive:true
         })
       )
     )
   );
 };
 
-const MindMap = ({notes, allTags, onSelectNote, aiMindmap, onAddNote}) => {
+const MindMap = ({notes, allTags, onSelectNote, aiMindmap, onAddNote, serverPdfs=[], serverImages=[]}) => {
   const { useState, useEffect, useRef, useCallback, useMemo } = React;
 
   // ── Node state ────────────────────────────────────────────────────────────
@@ -4668,6 +4873,9 @@ const MindMap = ({notes, allTags, onSelectNote, aiMindmap, onAddNote}) => {
   if (mmView === "mermaid") {
     return React.createElement(MermaidEditor, {
       initialText: editMermaid,
+      notes,
+      serverPdfs,
+      serverImages,
       onSave: async ({title, content, tags}) => {
         if (!onAddNote) return;
         await onAddNote({
@@ -6722,6 +6930,9 @@ const App = () => {
       }},
         React.createElement(MermaidEditor,{
           initialText: mermaidEditNote.code,
+          notes,
+          serverPdfs,
+          serverImages,
           onSave: async ({title, content, tags}) => {
             // Update de bestaande notitie
             const noteId = mermaidEditNote.noteId;
@@ -6780,7 +6991,7 @@ const App = () => {
               onRefreshImages: refreshImages,
               onAddNote:async(note)=>{ const saved=await api.post("/notes",note); setNotes(p=>[saved,...p]); setSelId(saved.id); setTab("notes"); }}));
           if(t==="mindmap") return React.createElement("div",{style:{flex:1,overflow:"hidden"}},
-            React.createElement(MindMap,{notes,allTags,aiMindmap,
+            React.createElement(MindMap,{notes,allTags,aiMindmap,serverPdfs,serverImages,
               onSelectNote:id=>{ setSelId(id); setTab("notes"); },
               onAddNote:async(note)=>{ const saved=await api.post("/notes",note); setNotes(p=>[saved,...p]); setSelId(saved.id); setTab("notes"); }}));
           if(t==="llm") return React.createElement("div",{style:{flex:1,overflow:"hidden"}},
