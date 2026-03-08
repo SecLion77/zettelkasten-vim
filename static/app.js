@@ -1087,13 +1087,15 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
         }
         if (e.key === "ArrowDown") {
           e.preventDefault();
+          e.stopPropagation();
           const ni = Math.min(compRef.current.idx+1, compRef.current.list.length-1);
-          compRef.current.idx = ni; setCompIdx(ni); return;
+          compRef.current.idx = ni; setCompIdx(ni); draw(); return;
         }
         if (e.key === "ArrowUp") {
           e.preventDefault();
+          e.stopPropagation();
           const ni = Math.max(compRef.current.idx-1, 0);
-          compRef.current.idx = ni; setCompIdx(ni); return;
+          compRef.current.idx = ni; setCompIdx(ni); draw(); return;
         }
         if (e.key === "Tab" || e.key === "Enter") {
           e.preventDefault(); acceptCompletion(s); return;
@@ -1123,7 +1125,7 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
         e.preventDefault();
         if (compRef.current.open) {
           const ni = (compRef.current.idx + 1) % compRef.current.list.length;
-          compRef.current.idx = ni; setCompIdx(ni);
+          compRef.current.idx = ni; setCompIdx(ni); draw();
         } else {
           triggerLocalCompletion(s);
         }
@@ -1133,7 +1135,7 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
         e.preventDefault();
         if (compRef.current.open) {
           const ni = (compRef.current.idx - 1 + compRef.current.list.length) % compRef.current.list.length;
-          compRef.current.idx = ni; setCompIdx(ni);
+          compRef.current.idx = ni; setCompIdx(ni); draw();
         } else {
           triggerLocalCompletion(s);
         }
@@ -1805,7 +1807,22 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
     // Canvas-gebied + completion popup overlay
     React.createElement("div", {
       style: {flex:1, position:"relative", overflow:"hidden"},
+      tabIndex: -1,
       onClick: () => inputRef.current?.focus(),
+      onKeyDown: (e) => {
+        // Onderschep pijltjestoetsen op wrapper-niveau als popup open is
+        // zodat de browser ze niet voor scrollen gebruikt
+        if (compRef.current.open &&
+            (e.key === "ArrowDown" || e.key === "ArrowUp" ||
+             e.key === "Tab" || e.key === "Enter")) {
+          e.preventDefault();
+          e.stopPropagation();
+          inputRef.current?.dispatchEvent(new KeyboardEvent("keydown", {
+            key: e.key, bubbles: false,
+            ctrlKey: e.ctrlKey, shiftKey: e.shiftKey,
+          }));
+        }
+      },
       onWheel: (e) => {
         e.preventDefault();
         const s = S.current;

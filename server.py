@@ -977,43 +977,6 @@ class VaultManager:
         return results
 
 
-    def _llm_improve_text(self):
-        """Stuur tekst naar LLM voor taalverbetering."""
-        body  = self._body()
-        text  = body.get("text", "").strip()
-        lang  = body.get("lang", "nl")
-        model = body.get("model", "")
-        if not text or not model:
-            return self._send(400, {"error": "text en model zijn vereist"})
-        lang_label = "Nederlands" if lang == "nl" else "English"
-        prompt = (
-            f"Je bent een taalkundige redacteur. Verbeter de volgende tekst in het {lang_label}. "
-            f"Geef ALLEEN de verbeterde tekst terug, zonder uitleg, zonder commentaar, "
-            f"zonder markdown-opmaak rondom de tekst zelf. "
-            f"Behoud de oorspronkelijke structuur en alinea-indeling.\n\n"
-            f"Originele tekst:\n{text}"
-        )
-        try:
-            import urllib.request as _req, json as _json
-            payload = _json.dumps({
-                "model": model,
-                "messages": [{"role": "user", "content": prompt}],
-                "stream": False,
-                "options": {"temperature": 0.3, "num_predict": 800}
-            }).encode()
-            req = _req.Request(
-                "http://localhost:11434/api/chat",
-                data=payload, headers={"Content-Type": "application/json"}, method="POST"
-            )
-            with _req.urlopen(req, timeout=60) as r:
-                data = _json.loads(r.read())
-            improved = (data.get("message", {}).get("content", "") or "").strip()
-            if not improved:
-                return self._send(500, {"error": "Geen respons van LLM"})
-            return self._send(200, {"improved": improved, "original": text})
-        except Exception as e:
-            return self._send(500, {"error": str(e)})
-
     def grammar_check_lines(self, lines: list, lang: str = "en") -> list:
         """Grammaticacontrole per regel via patroonherkenning.
         Geeft [{row, col, len, msg, type}] met type 'grammar' of 'style'."""
@@ -1342,6 +1305,43 @@ class ZKHandler(BaseHTTPRequestHandler):
             return {"error": "Geen toegang: "+str(ex), "path": path, "items": []}
         parent = str(p.parent) if p.parent != p else ""
         return {"path": str(p), "parent": parent, "items": items}
+
+    def _llm_improve_text(self):
+        """Stuur tekst naar LLM voor taalverbetering."""
+        body  = self._body()
+        text  = body.get("text", "").strip()
+        lang  = body.get("lang", "nl")
+        model = body.get("model", "")
+        if not text or not model:
+            return self._send(400, {"error": "text en model zijn vereist"})
+        lang_label = "Nederlands" if lang == "nl" else "English"
+        prompt = (
+            f"Je bent een taalkundige redacteur. Verbeter de volgende tekst in het {lang_label}. "
+            f"Geef ALLEEN de verbeterde tekst terug, zonder uitleg, zonder commentaar, "
+            f"zonder markdown-opmaak rondom de tekst zelf. "
+            f"Behoud de oorspronkelijke structuur en alinea-indeling.\n\n"
+            f"Originele tekst:\n{text}"
+        )
+        try:
+            import urllib.request as _req, json as _json
+            payload = _json.dumps({
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "stream": False,
+                "options": {"temperature": 0.3, "num_predict": 800}
+            }).encode()
+            req = _req.Request(
+                "http://localhost:11434/api/chat",
+                data=payload, headers={"Content-Type": "application/json"}, method="POST"
+            )
+            with _req.urlopen(req, timeout=60) as r:
+                data = _json.loads(r.read())
+            improved = (data.get("message", {}).get("content", "") or "").strip()
+            if not improved:
+                return self._send(500, {"error": "Geen respons van LLM"})
+            return self._send(200, {"improved": improved, "original": text})
+        except Exception as e:
+            return self._send(500, {"error": str(e)})
 
     def _llm_chat(self):
         body=self._body()
