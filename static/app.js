@@ -8331,6 +8331,211 @@ const App = () => {
     )
   );
 
+  // ── Tab definitie ────────────────────────────────────────────────────────
+  const tabs = [
+    {id:"notes",   icon:"📝", label:"Notities"},
+    {id:"graph",   icon:"🕸",  label:"Graaf"},
+    {id:"pdf",     icon:"📄", label:"PDF"},
+    {id:"images",  icon:"🖼",  label:"Plaatjes"},
+    {id:"search",  icon:"🔍", label:"Zoeken"},
+    {id:"import",  icon:"🌐", label:"Import"},
+    {id:"mindmap", icon:"🗺",  label:"Mindmap"},
+    {id:"llm",     icon:"🧠", label:"Notebook"},
+  ];
+
+  // ── Top bar (desktop/tablet) ──────────────────────────────────────────────
+  const topBar = !isMobile && React.createElement("div", {
+    style:{height:"44px",background:W.bg2,borderBottom:`1px solid ${W.splitBg}`,
+           display:"flex",alignItems:"center",flexShrink:0,gap:0}
+  },
+    React.createElement("div", {
+      style:{background:"transparent",color:W.statusFg,padding:"0 20px",
+             height:"100%",display:"flex",alignItems:"center",
+             fontWeight:"700",fontSize:"14px",letterSpacing:"3px",
+             flexShrink:0,borderRight:`1px solid ${W.splitBg}`}
+    }, "ZETTELKASTEN"),
+    isTablet && React.createElement("button", {
+      onClick: () => setSidebarOpen(p => !p),
+      style:{background:sidebarOpen?"rgba(138,198,242,0.15)":"none",
+             border:"none",borderRight:`1px solid ${W.splitBg}`,
+             color:sidebarOpen?W.blue:W.fgMuted,
+             padding:"0 14px",height:"100%",
+             fontSize:"16px",cursor:"pointer"}
+    }, "☰"),
+    tabs.map(({id, icon, label}) => React.createElement("button", {
+      key:id, onClick:()=>setTab(id),
+      className: `topbar-tab${tab===id?" active":""}`,
+      style:{ borderRight: `1px solid ${W.splitBg}` }
+    },
+      React.createElement("span", {style:{fontSize:"14px", lineHeight:1}}, icon),
+      React.createElement("span", null, label)
+    )),
+    React.createElement("div", {style:{flex:1}}),
+    React.createElement("div", {
+      style:{padding:"0 6px", display:"flex", gap:"4px", alignItems:"center"}
+    },
+      (jobs.length > 0) && React.createElement("div",{style:{position:"relative", marginRight:"4px"}},
+        React.createElement("button",{
+          onClick: e => { e.stopPropagation(); setJobsPanelOpen(p=>!p); },
+          style:{
+            display:"flex", alignItems:"center", gap:"6px",
+            background: runningJobs.length>0 ? "rgba(138,198,242,0.1)" : "rgba(159,202,86,0.1)",
+            border: `1px solid ${runningJobs.length>0 ? "rgba(138,198,242,0.35)" : "rgba(159,202,86,0.35)"}`,
+            borderRadius:"20px", padding:"3px 11px", cursor:"pointer",
+            color: runningJobs.length>0 ? "#a8d8f0" : W.comment,
+            fontSize:"14px",
+            animation: runningJobs.length>0 ? "ai-pulse 1.4s ease-in-out infinite" : "none",
+          }
+        },
+          runningJobs.length>0
+            ? React.createElement("span",{style:{display:"inline-block",width:"7px",height:"7px",
+                borderRadius:"50%",background:"#a8d8f0",flexShrink:0,
+                animation:"ai-dot 1.4s ease-in-out infinite"}})
+            : React.createElement("span",null,"✓"),
+          runningJobs.length>0
+            ? (runningJobs.length===1 ? runningJobs[0].label : runningJobs.length+" taken actief")
+            : doneJobs.length+" klaar"
+        ),
+        jobsPanelOpen && React.createElement("div",{
+          onClick: e=>e.stopPropagation(),
+          style:{position:"absolute",top:"calc(100% + 8px)",right:0,width:"320px",
+                 background:W.bg2,border:`1px solid ${W.splitBg}`,borderRadius:"10px",
+                 boxShadow:"0 12px 40px rgba(0,0,0,0.7)",zIndex:2000,overflow:"hidden",
+                 animation:"fadeIn 0.14s ease-out"}
+        },
+          React.createElement("div",{style:{padding:"10px 14px",borderBottom:`1px solid ${W.splitBg}`,
+            display:"flex",alignItems:"center",justifyContent:"space-between"}},
+            React.createElement("span",{style:{fontSize:"14px",color:W.fgMuted,letterSpacing:"1px"}},"ACHTERGRONDTAKEN"),
+            React.createElement("div",{style:{display:"flex",gap:"6px",alignItems:"center"}},
+              doneJobs.length>0 && React.createElement("button",{onClick:clearDoneJobs,
+                style:{background:"none",border:"none",color:W.fgMuted,fontSize:"14px",cursor:"pointer",textDecoration:"underline",padding:"0"}},"wis klaar"),
+              React.createElement("button",{onClick:()=>setJobsPanelOpen(false),
+                style:{background:"none",border:"none",color:W.fgMuted,fontSize:"16px",cursor:"pointer",padding:"0 2px",lineHeight:1}},"×")
+            )
+          ),
+          React.createElement("div",{style:{maxHeight:"340px",overflowY:"auto"}},
+            jobs.length===0
+              ? React.createElement("div",{style:{padding:"20px",color:W.fgMuted,fontSize:"14px",textAlign:"center"}},"Geen taken")
+              : [...jobs].reverse().map(job =>
+                  React.createElement("div",{key:job.id,
+                    style:{padding:"10px 14px",borderBottom:"1px solid rgba(255,255,255,0.04)",
+                           display:"flex",alignItems:"flex-start",gap:"10px"}},
+                    React.createElement("span",{style:{fontSize:"14px",marginTop:"1px",flexShrink:0,
+                      animation:job.status==="running"?"ai-dot 1.4s ease-in-out infinite":"none"}},
+                      job.status==="running"?"⏳":job.status==="done"?"✓":"✕"),
+                    React.createElement("div",{style:{flex:1,minWidth:0}},
+                      React.createElement("div",{style:{fontSize:"14px",
+                        color:job.status==="running"?W.fg:job.status==="done"?W.comment:W.orange,
+                        overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},job.label),
+                      job.status==="running" && React.createElement("div",{style:{marginTop:"5px",height:"2px",
+                        borderRadius:"1px",background:"rgba(255,255,255,0.08)",overflow:"hidden"}},
+                        React.createElement("div",{style:{height:"100%",width:"40%",borderRadius:"1px",
+                          background:W.blue,animation:"progress-slide 1.4s ease-in-out infinite"}})),
+                      job.error && React.createElement("div",{style:{fontSize:"13px",color:W.orange,
+                        marginTop:"3px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},job.error),
+                      job.result && React.createElement("div",{style:{fontSize:"13px",color:W.fgMuted,
+                        marginTop:"3px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},job.result),
+                      job.type==="import" && job.status==="done" && job.importResult &&
+                        React.createElement("button",{
+                          onClick:()=>{setImportPreview(job.importResult);setTab("import");setJobsPanelOpen(false);},
+                          style:{marginTop:"5px",background:"rgba(138,198,242,0.1)",
+                                 border:"1px solid rgba(138,198,242,0.35)",borderRadius:"5px",
+                                 padding:"3px 10px",color:"#a8d8f0",fontSize:"13px",
+                                 cursor:"pointer",display:"inline-flex",alignItems:"center",gap:"4px"}
+                        },"→ bekijk & bewerk")
+                    ),
+                    job.status!=="running" && React.createElement("button",{
+                      onClick:()=>removeJob(job.id),
+                      style:{background:"none",border:"none",color:W.fgMuted,
+                             fontSize:"14px",cursor:"pointer",padding:"0",flexShrink:0}},"×")
+                  ))
+          )
+        )
+      ),
+      React.createElement("div",{style:{display:"flex",alignItems:"baseline",gap:"3px",
+        background:"rgba(229,192,123,0.13)",border:"1px solid rgba(229,192,123,0.32)",
+        borderRadius:"6px",padding:"4px 10px"}},
+        React.createElement("span",{style:{fontSize:"14px",fontWeight:"700",color:W.yellow,
+          letterSpacing:"-0.5px",lineHeight:1}},notes.length),
+        React.createElement("span",{style:{fontSize:"9px",color:"rgba(229,192,123,0.7)",
+          letterSpacing:"0.8px",textTransform:"uppercase"}},"zettels")
+      ),
+      React.createElement("div",{style:{display:"flex",alignItems:"baseline",gap:"3px",
+        background:"rgba(159,202,86,0.13)",border:"1px solid rgba(159,202,86,0.32)",
+        borderRadius:"6px",padding:"4px 10px"}},
+        React.createElement("span",{style:{fontSize:"14px",fontWeight:"700",color:W.comment,
+          letterSpacing:"-0.5px",lineHeight:1}},allTags.length),
+        React.createElement("span",{style:{fontSize:"9px",color:"rgba(159,202,86,0.7)",
+          letterSpacing:"0.8px",textTransform:"uppercase"}},"tags")
+      ),
+    ),
+    React.createElement("button", {
+      onClick:()=>setSplitMode(p=>!p),
+      title: splitMode ? "Split-scherm sluiten" : "Split-scherm openen",
+      style:{background:splitMode?"linear-gradient(135deg,rgba(138,198,242,0.25),rgba(138,198,242,0.12))":"rgba(255,255,255,0.04)",
+             border:`1px solid ${splitMode?"rgba(138,198,242,0.55)":W.splitBg}`,
+             borderRadius:"6px",padding:"5px 13px",color:splitMode?W.blue:W.fgMuted,
+             fontSize:"11px",cursor:"pointer",margin:"0 4px 0 8px",
+             display:"flex",alignItems:"center",gap:"5px",letterSpacing:"0.4px",
+             boxShadow:splitMode?"0 0 8px rgba(138,198,242,0.2)":"none",transition:"all 0.15s"}
+    },
+      React.createElement("span",{style:{fontSize:"14px"}},splitMode?"⊟":"⊞"),
+      "split"
+    ),
+    React.createElement("button", {
+      onClick:()=>setShowSettings(true),
+      style:{background:"rgba(255,255,255,0.04)",border:`1px solid ${W.splitBg}`,
+             borderRadius:"6px",padding:"5px 13px",color:W.fgMuted,
+             fontSize:"11px",cursor:"pointer",margin:"0 10px 0 0",
+             display:"flex",alignItems:"center",gap:"5px",letterSpacing:"0.4px",transition:"all 0.15s"}
+    },
+      React.createElement("span",{style:{fontSize:"14px"}},"⚙"),
+      "instellingen"
+    )
+  );
+
+  // ── Mobile top bar ────────────────────────────────────────────────────────
+  const mobileTopBar = isMobile && React.createElement("div", {
+    style:{height:"48px",background:W.statusBg,borderBottom:`1px solid ${W.splitBg}`,
+           display:"flex",alignItems:"center",padding:"0 12px",flexShrink:0,gap:"8px"}
+  },
+    React.createElement("button", {
+      onClick:()=>setSidebarOpen(p=>!p),
+      style:{background:"none",border:`1px solid ${W.splitBg}`,borderRadius:"6px",
+             color:W.fgMuted,fontSize:"18px",padding:"4px 10px",cursor:"pointer"}
+    }, "☰"),
+    React.createElement("div", {
+      style:{flex:1,fontWeight:"bold",fontSize:"14px",letterSpacing:"1.5px",color:W.statusFg}
+    }, "ZETTELKASTEN"),
+    aiStatus && React.createElement("div",{
+      style:{fontSize:"14px",color:"#a8d8f0",background:"rgba(138,198,242,0.1)",
+             border:"1px solid rgba(138,198,242,0.2)",borderRadius:"10px",padding:"2px 8px",
+             animation:"ai-pulse 1.4s ease-in-out infinite"}},"⏳ ",aiStatus),
+    React.createElement("button", {
+      onClick:()=>setShowSettings(true),
+      style:{background:"none",border:"none",color:W.fgMuted,fontSize:"18px",cursor:"pointer",padding:"4px"}
+    }, "⚙")
+  );
+
+  // ── Bottom nav (mobile) ───────────────────────────────────────────────────
+  const bottomNav = isMobile && React.createElement("div", {
+    style:{height:"56px",background:W.statusBg,borderTop:`1px solid ${W.splitBg}`,
+           display:"flex",flexShrink:0,paddingBottom:"env(safe-area-inset-bottom,0px)"}
+  },
+    tabs.map(({id,icon,label}) => React.createElement("button", {
+      key:id, onClick:()=>setTab(id),
+      style:{flex:1,background:"none",border:"none",
+             borderTop:tab===id?`2px solid ${W.yellow}`:"2px solid transparent",
+             color:tab===id?W.yellow:W.fgMuted,
+             display:"flex",flexDirection:"column",alignItems:"center",
+             justifyContent:"center",gap:"2px",cursor:"pointer",fontSize:"18px",paddingTop:"6px"}
+    },
+      React.createElement("span", null, icon),
+      React.createElement("span", {style:{fontSize:"14px",letterSpacing:"0.5px"}}, label)
+    ))
+  );
+
+
     // ── Hoofd render ──────────────────────────────────────────────────────────
   return React.createElement("div", {
     style:{display:"flex",flexDirection:"column",height:"100vh",
