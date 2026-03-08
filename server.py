@@ -888,33 +888,76 @@ class VaultManager:
 
     @classmethod
     def _ensure_spell(cls, lang: str, vault_dir=None):
-        """Laad en cache woordenlijst voor lang (eenmalig per server-run)."""
+        """Laad en cache woordenlijst voor taal (eenmalig per server-run).
+
+        Zoekpaden per taal — in volgorde van prioriteit:
+          0. static/vendor/dict/   — ingebakken in de app (via download-dictionaries.sh)
+          1. vault_dir/<lang>.dic  — eigen woordenlijst in vault
+          2. /opt/homebrew/share/hunspell/
+          3. LibreOffice bundled   — /Applications/LibreOffice.app/...
+          4. /usr/share/hunspell/  — Linux systeem
+          5. /usr/share/myspell/   — oudere Linux distro's
+          6. Ingebakken fallback   — _nl_builtin_words() (alleen NL)
+        """
         with cls._get_lock():
             if lang in cls._spell_cache:
                 return
             from pathlib import Path as _P
+            import glob as _glob
+
+            # ── Pad naar static/vendor/dict/ (naast server.py) ──────────────
+            _server_dir = _P(__file__).parent
+            _vendor_dict = _server_dir / "static" / "vendor" / "dict"
+
             words = set()
             if lang == "en":
-                for dic in ["/usr/share/hunspell/en_US.dic",
-                            "/usr/share/myspell/en_US.dic"]:
-                    aff = dic.replace(".dic", ".aff")
-                    if _P(dic).exists() and _P(aff).exists():
-                        words = cls._load_hunspell(dic, aff)
-                        break
-            elif lang == "nl":
-                candidates = ["/usr/share/hunspell/nl_NL.dic",
-                              "/usr/share/myspell/nl_NL.dic"]
+                candidates = [
+                    str(_vendor_dict / "en_US.dic"),          # 0. ingebakken in app
+                    "/opt/homebrew/share/hunspell/en_US.dic", # 2. Homebrew
+                    "/usr/share/hunspell/en_US.dic",          # 4. Linux
+                    "/usr/share/myspell/en_US.dic",           # 5. oudere Linux
+                ]
+                for lo in _glob.glob("/Applications/LibreOffice*.app/Contents/Resources/extensions/dict-en/*/en_US.dic"):
+                    candidates.insert(2, lo)                  # 3. LibreOffice Mac
                 if vault_dir:
-                    candidates.insert(0, str(_P(vault_dir) / "nl_NL.dic"))
+                    candidates.insert(1, str(_P(vault_dir) / "en_US.dic"))  # 1. vault
                 for dic in candidates:
                     aff = dic.replace(".dic", ".aff")
                     if _P(dic).exists() and _P(aff).exists():
                         words = cls._load_hunspell(dic, aff)
+                        print(f"[spell] EN geladen: {dic} ({len(words)} woorden)", flush=True)
                         break
-                if not words:
-                    words = cls._nl_builtin_words()
-            cls._spell_cache[lang] = words
 
+            elif lang == "nl":
+                candidates = [
+                    str(_vendor_dict / "nl_NL.dic"),          # 0. ingebakken in app
+                    "/opt/homebrew/share/hunspell/nl_NL.dic", # 2. Homebrew
+                    str(_P.home() / "Library/Spelling/nl_NL.dic"),  # macOS user
+                    "/Library/Spelling/nl_NL.dic",            # macOS systeem
+                    "/usr/share/hunspell/nl_NL.dic",          # 4. Linux
+                    "/usr/share/myspell/nl_NL.dic",           # 5. oudere Linux
+                ]
+                for lo in _glob.glob("/Applications/LibreOffice*.app/Contents/Resources/extensions/dict-nl/*/nl_NL.dic"):
+                    candidates.insert(2, lo)                  # 3. LibreOffice Mac
+                if vault_dir:
+                    candidates.insert(1, str(_P(vault_dir) / "nl_NL.dic"))  # 1. vault
+                loaded = False
+                for dic in candidates:
+                    aff = dic.replace(".dic", ".aff")
+                    if _P(dic).exists() and _P(aff).exists():
+                        words = cls._load_hunspell(dic, aff)
+                        print(f"[spell] NL geladen: {dic} ({len(words)} woorden)", flush=True)
+                        loaded = True
+                        break
+                if not loaded:
+                    words = cls._nl_builtin_words()
+                    print(
+                        f"[spell] NL: geen woordenboek gevonden — gebruik ingebakken fallback "
+                        f"({len(words)} woorden).\n"
+                        f"         Tip: voer uit: cd static/vendor && bash download-dictionaries.sh",
+                        flush=True
+                    )
+            cls._spell_cache[lang] = words
 
     @classmethod
     def _suggest(cls, word: str, wordset: set, max_n: int = 8) -> list:

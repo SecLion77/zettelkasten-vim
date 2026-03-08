@@ -11,7 +11,6 @@
 | Vereiste | Versie | Verplicht |
 |----------|--------|-----------|
 | Python | 3.8+ | ✅ Ja |
-| Node.js + npm | 18+ | ✅ Ja (voor UI-build) |
 | Ollama | nieuwste | ⚪ Optioneel (AI-functies) |
 | Moderne browser | Chrome / Firefox / Safari | ✅ Ja |
 
@@ -27,47 +26,16 @@ Zet de projectmap ergens neer, bijv.:
 ~/Apps/zettelkasten-python-app/
 ├── server.py
 ├── README.md
-├── static/
-│   ├── index.html
-│   └── app.js
-└── zettelkasten-vite/       ← Vite project voor de UI-build
-    ├── package.json
-    ├── vite.config.js
-    ├── tailwind.config.js
-    ├── postcss.config.js
-    └── src/
-        ├── index.css
-        ├── main.jsx
-        ├── lib/utils.js
-        └── components/ui/
-            ├── button.jsx
-            ├── input.jsx
-            ├── badge.jsx
-            ├── separator.jsx
-            └── scroll-area.jsx
+└── static/
+    ├── index.html
+    ├── app.js
+    └── vendor/              ← alleen nodig voor offline modus
+        └── download-vendors.sh
 ```
 
 ---
 
-### Stap 2 — UI bouwen (Vite + Tailwind)
-
-De UI gebruikt **DM Sans** als interfacefont en het **Wombat** kleurenschema via Tailwind. Bouw de CSS eenmalig:
-
-```bash
-cd ~/Apps/zettelkasten-python-app/zettelkasten-vite
-
-npm install        # installeert Vite, Tailwind, PostCSS (~30 sec)
-npm run build      # bouwt → ../static/wombat.css
-```
-
-✅ Als het gelukt is staat er een `wombat.css` in de `static/` map.
-
-> **Alleen nodig bij eerste installatie of na wijzigingen aan de UI-stijlen.**  
-> De app werkt ook zónder deze stap — dan valt hij terug op de ingebakken stijlen in `index.html`.
-
----
-
-### Stap 3 — Server starten
+### Stap 2 — Server starten
 
 ```bash
 cd ~/Apps/zettelkasten-python-app
@@ -84,7 +52,7 @@ Bij `--host 0.0.0.0` toont het opstartbericht ook het netwerk-IP, bijv. `http://
 
 ---
 
-### Stap 4 — AI instellen (optioneel)
+### Stap 3 — AI instellen (optioneel)
 
 Voor samenvattingen, beschrijvingen, chat en mindmap-generatie is **Ollama** nodig:
 
@@ -108,17 +76,37 @@ ollama pull llama3.2-vision
 
 ---
 
-### Samenvatting in één keer
+## 📡 Offline modus
+
+Standaard laadt de app React, PDF.js en de fonts van CDN (internet vereist bij eerste open).  
+Met `--offline` worden alle bestanden lokaal geserveerd — **geen internet nodig**.
+
+### Eenmalige setup (met internet)
 
 ```bash
-# Eenmalige setup
-cd ~/Apps/zettelkasten-python-app/zettelkasten-vite
-npm install && npm run build
-
-# Daarna altijd opstarten met:
-cd ~/Apps/zettelkasten-python-app
-python3 server.py
+cd ~/Apps/zettelkasten-python-app/static/vendor
+bash download-vendors.sh
 ```
+
+Dit downloadt naar `static/vendor/`:
+- `react.production.min.js`
+- `react-dom.production.min.js`
+- `pdf.min.js` + `pdf.worker.min.js`
+- Hack font + DM Sans font
+
+### Opstarten zonder internet
+
+```bash
+python3 server.py --offline
+```
+
+De server controleert bij het opstarten of alle vendor-bestanden aanwezig zijn en geeft een duidelijke foutmelding als er iets ontbreekt. Het opstartscherm toont ook de actieve modus:
+
+```
+  Offline : JA (vendor/)    ← of: nee (CDN)
+```
+
+> **Let op:** de web-importer (URL → notitie) heeft altijd internet nodig — dat is inherent aan het ophalen van externe pagina's.
 
 ---
 
@@ -275,20 +263,18 @@ mindmap
 zettelkasten-python-app/
 ├── server.py                  ← Python backend, puur stdlib
 ├── README.md
-├── static/
-│   ├── index.html             ← HTML shell
-│   ├── app.js                 ← React frontend (~7400 regels)
-│   └── wombat.css             ← 🔨 Gebouwd door Vite (na npm run build)
-└── zettelkasten-vite/         ← Vite + Tailwind + shadcn/ui
-    ├── package.json
-    ├── vite.config.js
-    ├── tailwind.config.js
-    ├── postcss.config.js
-    └── src/
-        ├── index.css          ← Tailwind + Wombat globals
-        ├── main.jsx           ← Entry point
-        ├── lib/utils.js       ← shadcn cn() utility
-        └── components/ui/     ← shadcn componenten (Wombat-gestyled)
+└── static/
+    ├── index.html             ← HTML shell (CDN/offline via @@placeholders@@)
+    ├── app.js                 ← React frontend (~7900 regels)
+    └── vendor/                ← Lokale kopieën van libraries (offline modus)
+        ├── download-vendors.sh
+        ├── react.production.min.js
+        ├── react-dom.production.min.js
+        ├── pdf.min.js
+        ├── pdf.worker.min.js
+        ├── hack.css
+        ├── dm-sans.css
+        └── fonts/
 ```
 
 ---
@@ -301,3 +287,4 @@ zettelkasten-python-app/
 - **Privacy:** alle AI draait lokaal via Ollama, geen data naar buiten
 - **iPad:** start met `--host 0.0.0.0`, open het getoonde IP in Safari
 - **Zoeken:** typ in de zoekbalk in de sidebar, of `/` in NORMAL mode in de editor
+- **Volledig offline:** eenmalig `bash static/vendor/download-vendors.sh`, daarna `python3 server.py --offline`
