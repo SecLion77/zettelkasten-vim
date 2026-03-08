@@ -971,10 +971,48 @@ class VaultManager:
                 results[raw] = {"spell": True, "grammar": None}; continue
             if w in vault_ok or w in known:
                 results[raw] = {"spell": True, "grammar": None}; continue
-            # Genereer suggesties via edit-distance (max 8)
-        sug = cls._suggest(w, known | vault_ok, max_n=8)
-        results[raw] = {"spell": False, "grammar": None, "suggestions": sug}
+            # Fout: genereer suggesties via edit-distance
+            sug = VaultManager._suggest(w, known | vault_ok, max_n=8)
+            results[raw] = {"spell": False, "grammar": None, "suggestions": sug}
         return results
+
+
+    def _llm_improve_text(self):
+        """Stuur tekst naar LLM voor taalverbetering."""
+        body  = self._body()
+        text  = body.get("text", "").strip()
+        lang  = body.get("lang", "nl")
+        model = body.get("model", "")
+        if not text or not model:
+            return self._send(400, {"error": "text en model zijn vereist"})
+        lang_label = "Nederlands" if lang == "nl" else "English"
+        prompt = (
+            f"Je bent een taalkundige redacteur. Verbeter de volgende tekst in het {lang_label}. "
+            f"Geef ALLEEN de verbeterde tekst terug, zonder uitleg, zonder commentaar, "
+            f"zonder markdown-opmaak rondom de tekst zelf. "
+            f"Behoud de oorspronkelijke structuur en alinea-indeling.\n\n"
+            f"Originele tekst:\n{text}"
+        )
+        try:
+            import urllib.request as _req, json as _json
+            payload = _json.dumps({
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "stream": False,
+                "options": {"temperature": 0.3, "num_predict": 800}
+            }).encode()
+            req = _req.Request(
+                "http://localhost:11434/api/chat",
+                data=payload, headers={"Content-Type": "application/json"}, method="POST"
+            )
+            with _req.urlopen(req, timeout=60) as r:
+                data = _json.loads(r.read())
+            improved = (data.get("message", {}).get("content", "") or "").strip()
+            if not improved:
+                return self._send(500, {"error": "Geen respons van LLM"})
+            return self._send(200, {"improved": improved, "original": text})
+        except Exception as e:
+            return self._send(500, {"error": str(e)})
 
     def grammar_check_lines(self, lines: list, lang: str = "en") -> list:
         """Grammaticacontrole per regel via patroonherkenning.
@@ -1186,6 +1224,7 @@ class ZKHandler(BaseHTTPRequestHandler):
                         fname=hdr.split(b"filename=")[1].split(b'"')[1].decode()
                         return self._send(200,self.vault.save_image(fname,body.rstrip(b"\r\n--")))
             return self._send(400,{"error":"Multipart vereist"})
+        if p=="/api/llm/improve-text":   return self._llm_improve_text()
         if p=="/api/llm/chat":           return self._llm_chat()
         if p=="/api/llm/summarize-pdf":  return self._llm_summarize_pdf()
         if p=="/api/llm/describe-image": return self._llm_describe_image()
