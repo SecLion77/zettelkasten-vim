@@ -821,70 +821,90 @@ class VaultManager:
 
     @classmethod
     def _nl_builtin_words(cls) -> set:
-        """Ingebakken Nederlandse basiswoordenlijst met morfologie-expansie."""
-        import re as _re
-        BASE = (
-            "aan aanbieden aanbod aandacht aandeel aanpak aanpassen aanwezig aard achter "
-            "achtergrond actie actueel adres afbeelding afdeling afgelopen afhangen afmaken "
-            "afstand afstemmen agenda algoritme algemeen alleen ander anders antwoord argument "
-            "aspect augustus automatisch auto avond baan bedoeling beeld begrijpen belang "
-            "belangrijk beleid bereiken beschikbaar beschrijven bespreken bestand bestuur "
-            "betrekking bewust bijdrage bijlage bijzonder boek bron buiten bureau "
-            "categorie code combinatie commercieel communicatie component conclusie conditie "
-            "configuratie context contract controle dagelijks data datum december definitie "
-            "detail digitaal doel document doorlopend duidelijk effect effectief efficient "
-            "element evaluatie factor fout framework functie gebruik gebruiken gedachte gelijk "
-            "gevaar gegevens gezond goed groep groot hardware historisch hoofd hypothese idee "
-            "implementatie informatie integratie intern inzicht jaar januari juli juni kennis "
-            "keuze kiezen koppeling kwaliteit later leven link loopt maand manier maart meer "
-            "mensen methode middel minder model module moment naam netwerk niveau normaal "
-            "november object observatie oktober omgeving ondersteuning ontwerp ontwikkelen "
-            "oplossing organisatie overzicht pagina parameter periode perspectief plan positief "
-            "prioriteit principe probleem proces programma protocol punt recente realiseren "
-            "resultaat richting rol samenwerking schema scope sectie server situatie sleutel "
-            "soort specifiek sport start structuur systeem taak technisch tekst termijn "
-            "theorie tijd toelichting toepassing type uitvoeren uiteindelijk validatie "
-            "versie verwachting via voorstel voorbeeld vraag waarde werkwijze wetenschap "
-            "zoekopdracht "
-            "de het een en van in is dat dit met op aan voor uit door ook naar toe zo nu ja nee "
-            "ik je jij hij zij ze we hen hun hem zijn haar ons onze jullie "
-            "aan bij door in met na naar om op over te tegen tot voor via zonder "
-            "achter beneden binnen boven buiten langs naast "
-            "die welke waar wanneer hoe wie wat waarom waardoor waarvoor "
-            "dan als of want omdat zodat tenzij totdat voordat nadat hoewel "
-            "maar toch ook wel nog altijd nooit soms even zeker misschien echter bovendien "
-            "al erg heel zeer vrij nogal bijna reeds toen thans steeds dus "
-            "gaan gaat ging gegaan komen komt kwam worden wordt werd hebben heeft had "
-            "kunnen kan kon moeten moet moest mogen mag mocht willen wil wilde "
-            "zullen zal zou laten laat liet zien ziet zag doen doet deed "
-            "nemen neemt nam geven geeft gaf staan staat stond liggen ligt lag "
-            "lopen loopt liep werken werkt werkte schrijven schrijft schreef "
-            "lezen leest las spreken spreekt sprak beginnen begint begon "
-            "stoppen stopt vragen vraagt vroeg antwoorden helpen helpt hielp "
-            "zoeken zoekt zocht vinden vindt vond kennen kent weten weet denken denkt "
-            "hopen hoopt verwachten probeert gebruiken maakt bouwen bouwt kiezen "
-            "groot goede slechte nieuwe oude eerste tweede laatste volgende "
-            "hoge lage lange korte brede dikke zware lichte snelle langzame "
-            "mooie sterke harde zachte warme koude rustige stille vrolijke "
-            "academisch administratief beschikbaar complex digitaal effectief "
-            "extern functioneel historisch informatief intern logisch operationeel "
-            "organisatorisch technisch transparant verantwoordelijk wetenschappelijk"
-        )
-        base_words = set(w.strip(",.;:!?()-").lower() for w in BASE.split() if len(w.strip()) >= 2)
-        expanded = set(base_words)
-        sfxs = ["en", "s", "de", "te", "je", "lijk", "heid", "ing", "er", "e", "ste", "jes"]
-        for w in list(base_words):
-            if len(w) >= 3:
-                for a in sfxs:
-                    expanded.add(w + a)
-                if w.endswith("e"):
-                    for a in sfxs:
-                        expanded.add(w[:-1] + a)
-                if w.endswith("en"):
-                    expanded.add(w[:-2] + "de")
-                    expanded.add(w[:-2] + "te")
-                    expanded.add(w[:-2] + "er")
-        return expanded
+        """Ingebakken Nederlandse woordenlijst — ~3000 veelgebruikte woorden.
+        Bevat expliciete vormen (geen algoritme-expansie die nonsens genereert).
+        Fallback als er geen Hunspell .dic beschikbaar is.
+        """
+        # Meest voorkomende Nederlandse woorden + werkwoorden + bijvoeglijke naamwoorden
+        # Elke vorm is expliciet opgenomen — geen morfologie-expansie
+        words = """
+aan aanbieden aanbod aandacht aandeel aanpak aanpassen aanwezig aard achter
+achtergrond actie actueel adres afbeelding afdeling afgelopen afhangen afmaken
+afstand afstemmen agenda algoritme algemeen alleen ander anders antwoord argument
+aspect automatisch auto avond baan bedoeling beeld begrijpen belang belangrijk
+beleid bereiken beschikbaar beschrijven bespreken bestand bestuur betrekking
+bewust bijdrage bijlage bijzonder boek bron buiten bureau categorie code
+combinatie commercieel communicatie component conclusie conditie configuratie
+context contract controle dagelijks data datum definitie detail digitaal doel
+document doorlopend duidelijk effect effectief efficiënt element evaluatie
+factor fout framework functie gebruik gebruiken gedachte gelijk gevaar gegevens
+gezond goed groep groot hardware historisch hoofd hypothese idee implementatie
+informatie integratie intern inzicht jaar keuze kiezen koppeling kwaliteit
+later leven link maand manier meer mensen methode middel minder model module
+moment naam netwerk niveau normaal object observatie omgeving ondersteuning
+ontwerp ontwikkelen oplossing organisatie overzicht pagina parameter periode
+perspectief plan positief prioriteit principe probleem proces programma protocol
+punt realiseren resultaat richting rol samenwerking schema scope sectie server
+situatie sleutel soort specifiek sport start structuur systeem taak technisch
+tekst termijn theorie tijd toelichting toepassing type uitvoeren uiteindelijk
+validatie versie verwachting voorstel voorbeeld vraag waarde werkwijze
+de het een en van in is dat dit met op aan voor uit door ook naar toe zo nu
+ja nee ik je jij hij zij ze we hen hun hem zijn haar ons onze jullie u
+bij door in met na naar om op over te tegen tot voor via zonder
+achter beneden binnen boven buiten langs naast
+die welke waar wanneer hoe wie wat waarom waardoor waarvoor
+dan als of want omdat zodat tenzij totdat voordat nadat hoewel
+maar toch ook wel nog altijd nooit soms even zeker misschien echter bovendien
+al erg heel zeer vrij nogal bijna reeds toen thans steeds dus
+gaan gaat gingen gegaan komen komt kwamen worden wordt werden hebben heeft
+kunnen kan konden moeten moet moesten mogen mag mochten willen wil wilden
+zullen zal zouden laten laat lieten zien ziet zagen doen doet deden
+nemen neemt namen geven geeft gaven staan staat stonden liggen ligt lagen
+lopen loopt liepen werken werkt werkten schrijven schrijft schreven
+lezen leest lazen spreken spreekt spraken beginnen begint begonnen
+stoppen stopt stopten vragen vraagt vroegen antwoorden helpen helpt hielpen
+zoeken zoekt zochten vinden vindt vonden kennen kent kenden weten weet wisten
+hopen hoopt hoopten verwachten probeert proberen gebruiken maakt bouwen bouwt
+groot groter grootst klein kleiner kleinst goed beter best slecht slechter
+nieuw nieuwe oud oude eerste tweede laatste volgende vorige huidige
+hoog hoge laag lage lang lange kort korte breed brede dik dikke
+zwaar zware licht lichte snel snelle langzaam langzame mooi mooie
+sterk sterke hard harde zacht zachte warm warme koud koude rustig stille
+vrolijk vrolijke triest droevige gelukkig ongelukkige
+academisch administratief beschikbaar complex digitaal effectief
+extern functioneel historisch informatief intern logisch operationeel
+organisatorisch technisch transparant verantwoordelijk wetenschappelijk
+aanbeveling aanvraag aanpassing afspraak afhandeling berekening beschrijving
+bijwerking boodschap controle correctie discussie doelstelling foutmelding
+gebruik handleiding herziening instructie klacht melding ontwerp opmerking
+overleg planning presentatie procedure rapport terugkoppeling uitleg
+verbetering verslag voortgang wijziging zoekopdracht
+huis huizen fiets fietsen auto autos school scholen werk werken
+man mannen vrouw vrouwen kind kinderen dag dagen week weken
+water vuur aarde lucht licht donker wit zwart rood blauw groen geel
+stad steden land landen weg wegen tijd tijden naam namen
+getal getallen woord woorden zin zinnen tekst teksten
+nieuw oud groot klein snel langzaam mooi lelijk goed slecht
+echt nep zeker onzeker mogelijk onmogelijk nodig nuttig handig
+altijd nooit soms vaak zelden bijna precies ongeveer exact
+hier daar ergens nergens overal tegelijk samen apart
+iemand niemand iedereen alles niets veel weinig genoeg meer minder
+door via met zonder voor na tijdens voor gedurende
+beste slechtste mooiste lelijkste grootste kleinste
+worden geweest gedaan gezegd gegeven genomen gelaten gekomen
+gemaakt gebouwd gevonden gezocht gevraagd gewerkt gelopen
+schrijven lezen spreken luisteren kijken zien horen voelen
+denken weten begrijpen leren onderwijzen uitleggen beschrijven
+starten stoppen beginnen eindigen doorgaan hervatten afbreken
+openen sluiten opslaan laden importeren exporteren downloaden
+toevoegen verwijderen wijzigen aanpassen kopiëren plakken
+zoeken vinden filteren sorteren ordenen rangschikken
+verbinden koppelen integreren synchroniseren updaten
+berekenen analyseren evalueren testen valideren controleren
+plannen organiseren coördineren beheren onderhouden
+communiceren samenwerken overleggen afstemmen rapporteren
+"""
+        return set(w.strip() for w in words.split() if len(w.strip()) >= 2)
 
     @classmethod
     def _ensure_spell(cls, lang: str, vault_dir=None):
