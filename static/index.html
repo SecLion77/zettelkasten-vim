@@ -163,17 +163,23 @@
 </script>
 <script src="@@REACT_SRC@@"></script>
 <script src="@@REACT_DOM_SRC@@"></script>
-<!-- SOLID stap 1: Notities-tab modules (laden vóór app.js) -->
+<!-- Stable data-modules: geen UI-globals nodig, laden vroeg -->
 <script src="modules/noteApi.js"></script>
 <script src="modules/noteStore.js"></script>
+<script src="modules/pdfService.js"></script>
+<script src="modules/annotationStore.js"></script>
+<!-- app.js: definieert W, TagPill, VimEditor, genId etc. -->
+<script src="app.js"></script>
+<!-- UI-modules: laden NA app.js zodat W, TagPill etc. beschikbaar zijn -->
 <script src="modules/NoteList.js"></script>
 <script src="modules/NoteEditor.js"></script>
 <script src="modules/NotePreview.js"></script>
 <script src="modules/NotesMeta.js"></script>
 <script src="modules/NotesTab.js"></script>
-<!-- SOLID stap 2: PDF-tab modules -->
-<script src="modules/pdfService.js"></script>
-<script src="modules/annotationStore.js"></script>
-<script src="app.js"></script>
+<!-- Bootstrap: mount React NADAT alle modules geladen zijn -->
+<script>
+  const root = ReactDOM.createRoot(document.getElementById("root"));
+  root.render(React.createElement(App));
+</script>
 </body>
 </html>
