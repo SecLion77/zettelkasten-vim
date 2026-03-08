@@ -847,81 +847,75 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
     clearTimeout(spellTimer.current);
     spellTimer.current = setTimeout(async () => {
       const s    = S.current;
-      const lang = spellLang;  // "en", "nl", of "auto" — server detecteert auto
+      const lang = spellLang;
 
-      // Verzamel unieke woorden
-      const wordRe   = /[a-zA-ZÀ-ÿ\u0100-\u017F\u0180-\u024F'-]{3,}/g;
+      // ── Stap 1: verzamel unieke woorden uit buffer ────────────────────
       const allWords = new Set();
       for (const line of s.lines) {
+        const re = /[a-zA-ZÀ-ÿ'-]{3,}/g;
         let m;
-        wordRe.lastIndex = 0;
-        while ((m = wordRe.exec(line)) !== null) {
+        while ((m = re.exec(line)) !== null) {
           const w = m[0].replace(/^'+|'+$/g, "");
-          if (w.length >= 3 && !/\d/.test(w) && !/^[A-Z]{2,}$/.test(w))
-            allWords.add(w);
+          if (w.length >= 3) allWords.add(w);
         }
       }
 
-      // Vraag server: spellcheck + grammatica in één call
+      // ── Stap 2: server spellcheck ─────────────────────────────────────
       let spellRes = {}, grammarRes = [], detectedLang = lang;
       try {
         const resp = await fetch("/api/spellcheck", {
           method:  "POST",
           headers: {"Content-Type": "application/json"},
-          body:    JSON.stringify({
-            words: [...allWords],
-            lines: s.lines,
-            lang,
-          }),
+          body:    JSON.stringify({ words: [...allWords], lines: s.lines, lang }),
         });
         const data = await resp.json();
-        // Nieuwe API: {spell: {word: {spell,grammar}}, grammar: [...], lang: "en"|"nl"}
-        spellRes      = data.spell   || data.results || {};
-        grammarRes    = data.grammar || [];
-        detectedLang  = data.lang    || lang;
-      } catch(_) { /* server niet beschikbaar */ }
+        spellRes   = data.spell   || {};
+        grammarRes = data.grammar || [];
+        detectedLang = data.lang  || lang;
+      } catch(e) {
+        console.warn("[spell] server fout:", e.message);
+      }
 
-      // ── Spellfouten per regel bouwen ────────────────────────────────────
+      // ── Stap 3: fouten per regel markeren ────────────────────────────
       const newSpell = new Map();
-      // Nieuwe regex instantie per iteratie — voorkomt lastIndex problemen
-      const wordRe2 = /[a-zA-ZÀ-ÿĀ-ſƀ-ɏ'-]{3,}/g;
       s.lines.forEach((line, row) => {
         const errs = [];
-        let m2;
-        wordRe2.lastIndex = 0;
-        while ((m2 = wordRe.exec(line)) !== null) {
-          const word = m2[0].replace(/^'+|'+$/g, "");
+        // Nieuwe regex per regel — KRITIEK: voorkomt lastIndex-bug
+        const re = /[a-zA-ZÀ-ÿ'-]{3,}/g;
+        let m;
+        while ((m = re.exec(line)) !== null) {
+          const raw  = m[0];
+          const word = raw.replace(/^'+|'+$/g, "");
           if (word.length < 3) continue;
-          if (/\d/.test(word) || /^[A-Z]{2,}$/.test(word)) continue;
+          if (/\d/.test(word)) continue;
+          if (/^[A-Z]{2,}$/.test(word)) continue;   // afkorting
           if (SpellEngine.isLearned(word)) continue;
-          // Zoek op origineel, lowercase én gestript — server indexeert beide
-          const entry = spellRes[word] || spellRes[word.toLowerCase()]
-                     || spellRes[m2[0]] || spellRes[m2[0].toLowerCase()];
+          // Server indexeert op raw EN lowercase — probeer beide
+          const entry = spellRes[raw] ?? spellRes[raw.toLowerCase()]
+                     ?? spellRes[word] ?? spellRes[word.toLowerCase()];
           if (entry && entry.spell === false) {
-            errs.push({col: m2.index, len: word.length, word,
-                       type: "spell", suggestions: entry.suggestions || []});
+            errs.push({ col: m.index, len: raw.length, word: raw,
+                        type: "spell", suggestions: entry.suggestions || [] });
           }
         }
         if (errs.length) newSpell.set(row, errs);
       });
       spellErrors.current = newSpell;
 
-      // ── Grammaticafouten per regel bouwen ───────────────────────────────
+      // ── Stap 4: grammaticafouten per regel ───────────────────────────
       const newGrammar = new Map();
       for (const err of grammarRes) {
-        const row = err.row;
-        if (!newGrammar.has(row)) newGrammar.set(row, []);
-        newGrammar.get(row).push(err);
+        if (!newGrammar.has(err.row)) newGrammar.set(err.row, []);
+        newGrammar.get(err.row).push(err);
       }
       grammarErrors.current = newGrammar;
 
-      // Taaldetectie tonen in statusbalk als auto
-      if (lang === "auto" && detectedLang !== lang) {
+      if (lang === "auto" && detectedLang !== "auto")
         setStatus(`spell: auto → ${detectedLang}`);
-      }
+
       draw();
     }, 400);
-  }, [spellLang, detectLang]);
+  }, [spellLang]);
 
 
   // Spellcheck opnieuw plannen bij taalwissel of tekstwijziging
