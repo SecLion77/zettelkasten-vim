@@ -466,13 +466,14 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
   const [mode,       setModeState] = useState("INSERT");
   const [cmdBuf,     setCmdBuf]    = useState("");
   const [statusMsg,  setStatus]    = useState("");
-  const [spellLang,  setSpell]     = useState("off");
-  const spellCycle = ["off","en","nl"];
+  const [spellLang,  setSpell]     = useState("auto");  // altijd aan
+  const spellCycle = ["auto","en","nl","off"];
 
   // Completion popup state
   const [compList,   setCompList]  = useState([]);   // [{word, source}]
   const [compIdx,    setCompIdx]   = useState(0);    // geselecteerde index
   const [compOpen,   setCompOpen]  = useState(false);
+  const [compPos,    setCompPos]   = useState({x:0, y:0}); // popup positie in px
   const [aiLoading,  setAiLoading] = useState(false);
   const compRef    = useRef({list:[], idx:0, open:false});
 
@@ -965,6 +966,15 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
     if (!suggestions.length) { closeCompletion(); return; }
     compRef.current = {list: suggestions, idx: 0, open: true};
     setCompList(suggestions); setCompIdx(0); setCompOpen(true);
+    // Update popup positie direct bij openen
+    const cv = cvRef.current;
+    if (cv) {
+      const rect = cv.getBoundingClientRect();
+      const nw   = numColsWidth(s);
+      const x = rect.left + nw + s.cur.col * s.charW;
+      const y = rect.top  + (s.cur.row - s.scroll + 1) * LINE_H + 4;
+      setCompPos({x: Math.min(x, window.innerWidth - 260), y});
+    }
   }, [closeCompletion]);
 
   // Trigger AI completion via Ollama
@@ -999,6 +1009,14 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
       if (aiWords.length) {
         compRef.current = {list: aiWords, idx: 0, open: true};
         setCompList(aiWords); setCompIdx(0); setCompOpen(true);
+        const cv2 = cvRef.current;
+        if (cv2) {
+          const rect2 = cv2.getBoundingClientRect();
+          const nw2   = numColsWidth(S.current);
+          const x2 = rect2.left + nw2 + S.current.cur.col * S.current.charW;
+          const y2 = rect2.top  + (S.current.cur.row - S.current.scroll + 1) * LINE_H + 4;
+          setCompPos({x: Math.min(x2, window.innerWidth - 260), y: y2});
+        }
         setStatus("");
       } else {
         setStatus("Geen AI suggesties");
@@ -1159,14 +1177,14 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
         scheduleUndo(s); emit(s); draw(); return;
       }
 
-      // Gewone tekens — trigger completion na woordtekens
+      // Gewone tekens — trigger completion na woordtekens + markdown-triggers
       if (e.key.length === 1 && !e.ctrlKey && !e.metaKey) {
         e.preventDefault();
         insertChar(s, e.key);
         scheduleUndo(s); emit(s); scrollToCursor(s);
-        // Spellcheck plannen na woordgrens
-        if (spellLang !== "off" && /[\s.,!?;:]/.test(e.key)) scheduleSpellCheck();
-        // Completion: bij alfabetische tekens automatisch lokale suggesties
+        // Spellcheck plannen na elk teken
+        if (spellLang !== "off") scheduleSpellCheck();  // na elk teken
+        // Completion: bij alfabetische tekens lokale suggesties
         if (/[a-zA-ZÀ-ÿ']/.test(e.key)) {
           const prefix = getWordBeforeCursor(s);
           if (prefix.length >= 3) {
@@ -1175,14 +1193,125 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
             closeCompletion();
           }
         } else {
-          // Scheidingsteken: sluit completion
+          // Sluit word-completion bij scheidingstekens,
+          // maar toon markdown-snippet hints bij triggers
           closeCompletion();
+          const line   = s.lines[s.cur.row];
+          const before = line.slice(0, s.cur.col);
+          // Toon hint-popup voor markdown-snippets
+          const mdTriggers = [
+            { re: /\[\[$/, hint: "[[notitie]]  — link invoegen" },
+            { re: /#{1,3} $/, hint: "## Sectie  — kop (h1/h2/h3 + Tab)" },
+            { re: /\*\*$/, hint: "**tekst**  — bold (bold + Tab)" },
+            { re: /\*[^*]?$/, hint: "*tekst*  — cursief (em + Tab)" },
+            { re: /^> /, hint: "> citaat  (quote + Tab)" },
+            { re: /^- \[ \]/, hint: "- [ ] taak  (todo + Tab)" },
+            { re: /```$/, hint: "```taal … \`\`\`  (code + Tab)" },
+          ];
+          const hit = mdTriggers.find(t => t.re.test(before));
+          if (hit) {
+            const hint = [{word: hit.hint, source: "md"}];
+            compRef.current = {list: hint, idx: 0, open: true};
+            setCompList(hint); setCompIdx(0); setCompOpen(true);
+          }
         }
         draw(); return;
       }
       return;
     }
 
+
+      // ── Spelnavigatie: ]s volgende fout, [s vorige fout, z= suggesties ──────
+      // ]s — spring naar volgende spelfout
+      if (!e.ctrlKey && e.key==="]" && s.mode==="NORMAL") {
+        // wacht op volgende toets 's'
+        S.current._pendingSpellNav = "next";
+        setStatus("]");
+        draw(); return;
+      }
+      if (!e.ctrlKey && e.key==="[" && s.mode==="NORMAL") {
+        S.current._pendingSpellNav = "prev";
+        setStatus("[");
+        draw(); return;
+      }
+      // Verwerk ]s / [s na pending
+      if (S.current._pendingSpellNav && e.key === "s") {
+        e.preventDefault();
+        const dir = S.current._pendingSpellNav;
+        S.current._pendingSpellNav = null;
+        setStatus("");
+        // Verzamel alle spellfouten gesorteerd op (row, col)
+        const errs = [];
+        spellErrors.current.forEach((rowErrs, row) =>
+          rowErrs.forEach(err => errs.push({row, col: err.col, len: err.len, word: err.word}))
+        );
+        errs.sort((a,b) => a.row!==b.row ? a.row-b.row : a.col-b.col);
+        if (!errs.length) { setStatus("Geen spelfouten"); draw(); return; }
+        const {row: cr, col: cc} = s.cur;
+        let target = null;
+        if (dir === "next") {
+          target = errs.find(e => e.row > cr || (e.row===cr && e.col > cc));
+          if (!target) target = errs[0]; // wrap
+        } else {
+          const before = errs.filter(e => e.row < cr || (e.row===cr && e.col < cc));
+          target = before.length ? before[before.length-1] : errs[errs.length-1];
+        }
+        s.cur.row = target.row;
+        s.cur.col = target.col;
+        scrollToCursor(s);
+        setStatus(`Spelfout: '${target.word}'  z= voor suggesties`);
+        draw(); return;
+      }
+      S.current._pendingSpellNav = null;
+
+      // z= — spelsuggesties voor woord onder cursor
+      if (!e.ctrlKey && e.key==="z" && s.mode==="NORMAL") {
+        S.current._pendingZ = true;
+        draw(); return;
+      }
+      if (S.current._pendingZ && e.key==="=") {
+        e.preventDefault();
+        S.current._pendingZ = false;
+        // Haal woord onder cursor op
+        const line = s.lines[s.cur.row];
+        const wordRe2 = /[a-zA-ZÀ-ÿ'-]{2,}/g;
+        let hit2 = null;
+        let m3;
+        wordRe2.lastIndex = 0;
+        while ((m3 = wordRe2.exec(line)) !== null) {
+          if (m3.index <= s.cur.col && s.cur.col <= m3.index + m3[0].length) {
+            hit2 = {word: m3[0], col: m3.index, len: m3[0].length};
+            break;
+          }
+        }
+        if (!hit2) { setStatus("Geen woord onder cursor"); draw(); return; }
+        // Vraag suggesties op via server
+        setStatus(`z= suggesties voor '${hit2.word}'…`);
+        fetch("/api/spellcheck", {
+          method: "POST",
+          headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({words:[hit2.word], lines:s.lines, lang: spellLang==="off"?"en":spellLang}),
+        }).then(r=>r.json()).then(data => {
+          const sug = data.suggestions?.[hit2.word] || data.spell?.[hit2.word]?.suggestions || [];
+          if (!sug.length) { setStatus(`Geen suggesties voor '${hit2.word}'  (:spell+ om te leren)`); draw(); return; }
+          // Toon suggesties als completion popup
+          const items = sug.slice(0,8).map(w=>({word:w, source:"spell"}));
+          compRef.current = {list:items, idx:0, open:true, replaceWord: hit2};
+          setCompList(items); setCompIdx(0); setCompOpen(true);
+          const cv3 = cvRef.current;
+          if (cv3) {
+            const rect3 = cv3.getBoundingClientRect();
+            const nw3   = numColsWidth(s);
+            const x3 = rect3.left + nw3 + hit2.col * s.charW;
+            const y3 = rect3.top  + (s.cur.row - s.scroll + 1) * LINE_H + 4;
+            setCompPos({x: Math.min(x3, window.innerWidth - 260), y: y3});
+          }
+          setStatus(`z= '${hit2.word}' — Tab/Enter=accepteer  Esc=sluiten`);
+          draw();
+        }).catch(()=>setStatus("Server niet bereikbaar"));
+        draw(); return;
+      }
+      S.current._pendingZ = false;
     // ────────────────────────── COMMAND ─────────────────────────────────────
     if (m === "COMMAND") {
       e.preventDefault();
@@ -1645,8 +1774,8 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
       compOpen && compList.length > 0 && React.createElement("div", {
         style: {
           position: "fixed",
-          left: (() => { const {x} = getCursorPx(); return Math.min(x, window.innerWidth - 240) + "px"; })(),
-          top:  (() => { const {y} = getCursorPx(); return (y + 2) + "px"; })(),
+          left: compPos.x + "px",
+          top:  compPos.y + "px",
           zIndex: 9999,
           background: W.bg2,
           border: `1px solid ${W.blue}`,
@@ -1690,11 +1819,11 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
             React.createElement("span", {
               style: {
                 fontSize: "9px", padding: "1px 5px", borderRadius: "8px",
-                background: item.source === "ai" ? W.purple+"33" : W.comment+"33",
-                color:      item.source === "ai" ? W.purple      : W.comment,
+                background: item.source === "ai" ? W.purple+"33" : item.source === "md" ? W.orange+"33" : W.comment+"33",
+                color:      item.source === "ai" ? W.purple      : item.source === "md" ? W.orange      : W.comment,
                 flexShrink: 0,
               }
-            }, item.source === "ai" ? "AI" : "↩"),
+            }, item.source === "ai" ? "AI" : item.source === "md" ? "md" : "↩"),
             // Woord
             React.createElement("span", {style:{flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}},
               item.word

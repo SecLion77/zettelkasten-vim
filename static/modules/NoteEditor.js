@@ -36,6 +36,21 @@ const NoteEditor = ({
     setEditTitle(note?.title   || "");
     setEditContent(note?.content || "");
     setEditTags(note?.tags    || []);
+    setTimeout(() => {
+      if (!note) return;
+      if (!note.title) {
+        // Nieuwe notitie: focus op het titelveld
+        titleRef.current?.focus();
+        titleRef.current?.select();
+      } else {
+        // Bestaande notitie: cursor naar onderste regel in editor
+        const ref = contentRef.current;
+        if (ref?.setCursor) {
+          const lines = (note.content || "").split("\n");
+          ref.setCursor(lines.length - 1, lines[lines.length - 1].length);
+        }
+      }
+    }, 80);
   }, [note?.id]);
 
   const handleSave = () => {

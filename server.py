@@ -915,6 +915,29 @@ class VaultManager:
                     words = cls._nl_builtin_words()
             cls._spell_cache[lang] = words
 
+
+    @classmethod
+    def _suggest(cls, word: str, wordset: set, max_n: int = 8) -> list:
+        """Genereer spellingssuggesties via edit-distance 1 en 2."""
+        import re as _re
+        alphabet = "abcdefghijklmnopqrstuvwxyz"
+        def edits1(w):
+            splits  = [(w[:i], w[i:]) for i in range(len(w)+1)]
+            deletes = [L+R[1:]       for L,R in splits if R]
+            transposes=[L+R[1]+R[0]+R[2:] for L,R in splits if len(R)>1]
+            replaces= [L+c+R[1:]    for L,R in splits if R for c in alphabet]
+            inserts = [L+c+R        for L,R in splits       for c in alphabet]
+            return set(deletes+transposes+replaces+inserts)
+        candidates = edits1(word) & wordset
+        if len(candidates) < max_n:
+            for e1 in edits1(word):
+                candidates |= edits1(e1) & wordset
+        # Sorteer op overeenkomst met origineel (langere gemeenschappelijke prefix eerst)
+        def score(c):
+            common = sum(1 for a,b in zip(word,c) if a==b)
+            return (-common, abs(len(c)-len(word)))
+        return sorted(candidates, key=score)[:max_n]
+
     def spellcheck_words(self, words: list, lang: str = "en") -> dict:
         """Spellcheck via geladen Hunspell-woordenboek.
         Geeft {word: {"spell": bool, "grammar": None}}."""
@@ -948,7 +971,9 @@ class VaultManager:
                 results[raw] = {"spell": True, "grammar": None}; continue
             if w in vault_ok or w in known:
                 results[raw] = {"spell": True, "grammar": None}; continue
-            results[raw] = {"spell": False, "grammar": None}
+            # Genereer suggesties via edit-distance (max 8)
+        sug = cls._suggest(w, known | vault_ok, max_n=8)
+        results[raw] = {"spell": False, "grammar": None, "suggestions": sug}
         return results
 
     def grammar_check_lines(self, lines: list, lang: str = "en") -> list:
