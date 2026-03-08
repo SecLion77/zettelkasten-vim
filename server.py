@@ -1201,6 +1201,7 @@ class ZKHandler(BaseHTTPRequestHandler):
         if p=="/api/llm/models":  return self._llm_models()
         if p=="/api/config":      return self._send(200,{"vault_path":self.vault.path_str,"config":self.vault.get_config()})
         if p=="/api/ext-pdfs":     return self._send(200,{"dirs":self.vault.get_ext_pdf_dirs(),"files":self.vault.scan_ext_pdfs()})
+        if p.startswith("/api/mail/inbox-stream"): return self._mail_inbox_stream()
         if p.startswith("/api/browse"):
             from urllib.parse import parse_qs, urlparse as _up
             qs = parse_qs(_up(self.path).query)
@@ -1933,54 +1934,340 @@ class ZKHandler(BaseHTTPRequestHandler):
         }
 
     # ── Thunderbird inbox lezen ───────────────────────────────────────────────
+    def _mail_inbox_stream(self):
+        """SSE-stream die live rapporteert terwijl Thunderbird-inboxen worden gescand.
+        GET /api/mail/inbox-stream?path=...&filter_to=...
+        Stuurt events: {type: "status"|"profile"|"file"|"inbox"|"done"|"error", ...}
+        """
+        import mailbox, email as _email, email.header as _ehdr, email.utils as _eutils
+        import re as _re
+        from urllib.parse import parse_qs, urlparse as _up
+
+        qs          = parse_qs(_up(self.path).query)
+        custom_path = qs.get("path",[""])[0].strip()
+        filter_to   = ""  # geen filter — alle mails tonen
+        max_msgs    = int(qs.get("max",["300"])[0])
+
+        # ── SSE helpers ──────────────────────────────────────────────────────
+        self.send_response(200)
+        self.send_header("Content-Type",  "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("X-Accel-Buffering", "no")
+        self.end_headers()
+
+        def emit(evt_type, **kwargs):
+            data = json.dumps({"type": evt_type, **kwargs}, ensure_ascii=False)
+            msg  = f"data: {data}\n\n"
+            try:
+                self.wfile.write(msg.encode("utf-8"))
+                self.wfile.flush()
+            except Exception:
+                pass
+
+        # ── Hulpfuncties (zelfde als _mail_inbox) ───────────────────────────
+        URL_RE = _re.compile(r'https?://[^\s<>"\')\]\\,]+')
+
+        def tb_profiles():
+            from pathlib import Path as _P
+            import os as _os
+            home = _P.home()
+            cands = []
+            cands += list((home/"Library/Thunderbird/Profiles").glob("*"))
+            cands += list((home/".thunderbird").glob("*.default*"))
+            cands += list((home/".thunderbird").glob("*"))
+            appdata = _P(_os.environ.get("APPDATA","C:/x"))
+            cands += list((appdata/"Thunderbird/Profiles").glob("*.default*"))
+            return [c for c in cands if c.is_dir()]
+
+        def find_mbox_files(profile_dir):
+            from pathlib import Path as _P
+            hits = []
+            seen = set()
+            p = _P(profile_dir)
+            SKIP_EXTS  = {'.msf','.dat','.html','.js','.css','.json','.sqlite',
+                          '.log','.db','.xpi','.jar','.zip','.png','.jpg','.gif'}
+            SKIP_NAMES = {'lock','parent.lock','popstate','filterlog','msgfilterrules',
+                          'prefs','logins','key4','cert9','places','favicons','cookies',
+                          'formhistory','permissions','content-prefs','search','extensions'}
+            def is_mbox(path):
+                if path.stat().st_size == 0: return False
+                try:
+                    with open(path,'rb') as fh: return fh.read(6).startswith(b'From ')
+                except: return False
+            def label_for(path, mail_root):
+                try:
+                    rel   = path.relative_to(mail_root)
+                    parts = [x for x in rel.parts if x != '.sbd' and not x.endswith('.sbd')]
+                    acct  = parts[0] if parts else mail_root.name
+                    folder= " / ".join(parts[1:]) if len(parts)>1 else parts[0] if parts else path.name
+                    return acct, f"{acct}  ›  {folder}"
+                except: return path.parent.name, path.name
+            for sub in ("Mail","ImapMail"):
+                mail_root = p/sub
+                if not mail_root.exists(): continue
+                for mf in mail_root.rglob("*"):
+                    if not mf.is_file() or mf in seen: continue
+                    if mf.name.lower() not in ("inbox","in","inkomend"): continue  # alleen INBOX
+                    if mf.suffix.lower() in SKIP_EXTS: continue
+                    if mf.name.endswith('.msf'): continue
+                    if not is_mbox(mf): continue
+                    seen.add(mf)
+                    acct, lbl = label_for(mf, mail_root)
+                    hits.append((mf, lbl, acct))
+            def sort_key(h):
+                n = h[0].name.lower()
+                return (0,h[1]) if n in ("inbox","inkomend") else (2,h[1]) if n in ("sent","gestuurd","verzonden") else (1,h[1])
+            hits.sort(key=sort_key)
+            return hits
+
+        def decode_hdr(h):
+            if not h: return ""
+            parts = _ehdr.decode_header(h)
+            out = []
+            for b,enc in parts:
+                out.append(b.decode(enc or "utf-8", errors="replace") if isinstance(b,bytes) else (b or ""))
+            return " ".join(out).strip()
+
+        def addr_contains(hdr, addr): return addr in hdr.lower()
+
+        def extract_urls(msg):
+            urls=[]; plain=""; html_text=""
+            for part in msg.walk():
+                ct = part.get_content_type()
+                try:
+                    payload = part.get_payload(decode=True)
+                    if payload is None: continue
+                    charset = part.get_content_charset("utf-8") or "utf-8"
+                    text = payload.decode(charset, errors="replace")
+                    if ct=="text/plain" and not plain: plain=text[:3000]
+                    elif ct=="text/html" and not html_text: html_text=text[:3000]
+                    found = [u.rstrip(".,;:!?)>\"'") for u in URL_RE.findall(text)]
+                    urls.extend(found)
+                except: continue
+            if not plain and html_text:
+                plain = _re.sub(r'<[^>]+',' ',html_text); plain=_re.sub(r'\s+',' ',plain).strip()[:3000]
+            SKIP=("unsubscribe","pixel","tracking","open.php","click.php","beacon",
+                  "analytics","mailchimp","sendgrid","list-unsubscribe",".gif?","img.","image.","icon.")
+            seen=set(); deduped=[]
+            for u in urls:
+                if u in seen or len(u)<12: continue
+                if any(s in u.lower() for s in SKIP): continue
+                seen.add(u); deduped.append(u)
+            return plain.strip(), deduped
+
+        # ── Start scannen ────────────────────────────────────────────────────
+        try:
+            emit("status", msg="🔍 Thunderbird-profiel zoeken…")
+
+            # Bepaal te scannen bestanden
+            files_to_scan = []
+            if custom_path:
+                from pathlib import Path as _P
+                p = _P(custom_path).expanduser()
+                emit("status", msg=f"📁 Pad opgegeven: {p}")
+                if p.is_file():
+                    files_to_scan = [(p, p.name, p.parent.name)]
+                elif p.is_dir():
+                    hits = find_mbox_files(p)
+                    if hits:
+                        files_to_scan = hits
+                    else:
+                        SKIP_EXTS={'.msf','.dat','.html','.js','.css','.json','.sqlite','.log','.db'}
+                        for f in sorted(p.rglob("*")):
+                            if not f.is_file() or f.suffix.lower() in SKIP_EXTS: continue
+                            try:
+                                with open(f,'rb') as fh:
+                                    if fh.read(6).startswith(b'From '):
+                                        files_to_scan.append((f, f.name, f.parent.name))
+                            except: continue
+            else:
+                profiles = tb_profiles()
+                emit("status", msg=f"📂 {len(profiles)} profiel(en) gevonden")
+                for prof in profiles:
+                    emit("profile", path=str(prof), name=prof.name)
+                    hits = find_mbox_files(prof)
+                    emit("status", msg=f"  └ {len(hits)} mbox-bestanden in {prof.name}")
+                    files_to_scan += hits
+
+            if not files_to_scan:
+                emit("error", msg="Geen mbox-bestanden gevonden.",
+                     paths_tried=[str(p) for p in tb_profiles()])
+                return
+
+            emit("status", msg=f"📬 {len(files_to_scan)} mbox-bestanden gevonden — inhoud laden…")
+
+            # Lees elk bestand
+            all_inboxes = []
+            for idx, (fpath, label, account) in enumerate(files_to_scan):
+                size_kb = fpath.stat().st_size // 1024
+                emit("file", path=str(fpath), label=label,
+                     idx=idx+1, total=len(files_to_scan),
+                     size_kb=size_kb,
+                     msg=f"📄 [{idx+1}/{len(files_to_scan)}] {label}  ({size_kb} KB)")
+                mails_in_box = []
+                try:
+                    box = mailbox.mbox(str(fpath))
+                    for i, msg in enumerate(box):
+                        if len(mails_in_box) >= max_msgs: break
+                        if filter_to:
+                            to_v  = decode_hdr(msg.get("to",""))
+                            cc_v  = decode_hdr(msg.get("cc",""))
+                            bcc_v = decode_hdr(msg.get("bcc",""))
+                            if not (addr_contains(to_v,filter_to) or
+                                    addr_contains(cc_v,filter_to) or
+                                    addr_contains(bcc_v,filter_to)):
+                                continue
+                        subj = decode_hdr(msg.get("subject","(geen onderwerp)"))
+                        frm  = decode_hdr(msg.get("from",""))
+                        date = msg.get("date","")
+                        mid  = msg.get("message-id","") or f"{label}_{i}"
+                        try:
+                            dt = _eutils.parsedate_to_datetime(date)
+                            ts = dt.isoformat()
+                            ts_display = dt.strftime("%-d %b %Y")
+                        except:
+                            ts = date; ts_display = date[:16] if date else ""
+                        plain, urls = extract_urls(msg)
+                        if not urls: continue
+                        mails_in_box.append({
+                            "id": mid.strip("<>"), "subject": subj, "from": frm,
+                            "date": ts, "date_display": ts_display,
+                            "urls": urls[:15], "snippet": plain[:400], "inbox": label,
+                        })
+                    box.close()
+                    mails_in_box.sort(key=lambda m: m.get("date",""), reverse=True)
+                except Exception as e:
+                    emit("status", msg=f"  ⚠ {label}: {e}")
+                    continue
+
+                if mails_in_box:
+                    inbox_data = {"name": label, "file": str(fpath),
+                                  "count": len(mails_in_box), "mails": mails_in_box}
+                    all_inboxes.append(inbox_data)
+                    emit("inbox", name=label, count=len(mails_in_box),
+                         msg=f"  ✓ {len(mails_in_box)} mails gevonden")
+                else:
+                    emit("status", msg="  — geen mails met URLs gevonden")
+
+            total = sum(b["count"] for b in all_inboxes)
+            emit("done", inboxes=all_inboxes, total=total,
+                 msg=f"✅ Klaar — {total} mails in {len(all_inboxes)} inbox(en)")
+
+        except Exception as e:
+            emit("error", msg=f"Fout: {e}")
+
     def _mail_inbox(self):
         """Leest Thunderbird lokale inbox (mbox of Maildir).
-        Geeft lijst van mails terug met subject, from, date en gevonden URLs.
-        Body: {path?: "...", max?: 200}
+        Groepeert resultaten per inbox-bestand.
+        Filtert: alleen mails aan hjhopman@gmail.com.
+        Body: {path?: "...", max?: 200, filter_to?: "hjhopman@gmail.com"}
         """
         import mailbox, email as _email, email.header as _ehdr, email.utils as _eutils
         import re as _re
 
-        body = self._body()
+        body        = self._body()
         custom_path = body.get("path","").strip()
-        max_msgs    = min(int(body.get("max", 200)), 500)
+        max_msgs    = min(int(body.get("max", 300)), 1000)
+        filter_to   = ""  # geen filter — alle mails tonen
 
         URL_RE = _re.compile(r'https?://[^\s<>"\')\]\\,]+')
 
-        # ── Zoek Thunderbird mbox-bestanden ───────────────────────────────────
         def tb_profiles():
-            """Geeft lijst van mogelijke Thunderbird profiel-mappen terug."""
             from pathlib import Path as _P
             import os as _os
-            candidates = []
             home = _P.home()
-            # macOS
-            candidates += list((home/"Library/Thunderbird/Profiles").glob("*.default*"))
+            candidates = []
             candidates += list((home/"Library/Thunderbird/Profiles").glob("*"))
-            # Linux
             candidates += list((home/".thunderbird").glob("*.default*"))
             candidates += list((home/".thunderbird").glob("*"))
-            # Windows
             appdata = _P(_os.environ.get("APPDATA","C:/Users/User/AppData/Roaming"))
             candidates += list((appdata/"Thunderbird/Profiles").glob("*.default*"))
             return [c for c in candidates if c.is_dir()]
 
         def find_inbox_files(profile_dir):
-            """Zoek mbox-bestanden die waarschijnlijk de inbox zijn."""
+            """Zoek alle mbox-bestanden recursief in het Thunderbird profiel.
+            Thunderbird IMAP-structuur:
+              Mail/Local Folders/Inbox
+              ImapMail/imap.gmail.com/INBOX
+              ImapMail/imap.gmail.com/[Gmail]/Alle mail   ← submappen via .sbd/
+              ImapMail/imap-mail.outlook.com/Inbox
+            Herkenning: mbox-bestanden beginnen met 'From ' op de eerste regel,
+            of hebben geen extensie + niet-nul grootte.
+            .msf/.dat/.html/.js/.css etc. worden overgeslagen.
+            """
             from pathlib import Path as _P
             hits = []
+            seen = set()
             p = _P(profile_dir)
-            # Thunderbird slaat mbox op als bestand zonder extensie (bijv. "INBOX", "Inbox")
-            # of in Mail/Local Folders/
+
+            SKIP_EXTS = {'.msf','.dat','.html','.js','.css','.json','.sqlite',
+                         '.log','.png','.jpg','.gif','.db','.xpi','.jar','.zip'}
+            SKIP_NAMES = {'lock','parent.lock','popstate','filterlog',
+                          'msgfilterrules','prefs','logins','key4',
+                          'cert9','places','favicons','cookies','formhistory',
+                          'permissions','content-prefs','search','extensions',
+                          'addonstartupcache','xulstore','session.json',
+                          'sessionstore-backups','crashes','minidumps'}
+
+            def is_mbox(path):
+                """Controleer of een bestand een mbox is (begint met 'From ')."""
+                if path.stat().st_size == 0:
+                    return False
+                try:
+                    with open(path, 'rb') as fh:
+                        header = fh.read(6)
+                        return header.startswith(b'From ')
+                except Exception:
+                    return False
+
+            def build_label(path, mail_root):
+                """Maak een leesbaar label: account / mappenpad."""
+                try:
+                    rel = path.relative_to(mail_root)
+                    parts = list(rel.parts)
+                    # .sbd mappen zijn Thunderbird submappen — strip die uit het label
+                    parts = [p for p in parts if p != '.sbd' and not p.endswith('.sbd')]
+                    # account = eerste deel, rest = mappad
+                    account = parts[0] if parts else mail_root.name
+                    folder  = " / ".join(parts[1:]) if len(parts) > 1 else parts[0] if parts else path.name
+                    return account, f"{account}  ›  {folder}"
+                except Exception:
+                    return path.parent.name, path.name
+
             for sub in ("Mail", "ImapMail"):
                 mail_root = p / sub
-                if mail_root.exists():
-                    for mbox_file in mail_root.rglob("*"):
-                        name_lower = mbox_file.name.lower()
-                        if mbox_file.is_file() and not mbox_file.suffix:
-                            if name_lower in ("inbox","sent","gestuurd","verzonden"):
-                                hits.append((mbox_file, name_lower))
-                        # msf = samenvatting-bestand; sla over
+                if not mail_root.exists():
+                    continue
+                # Recursief alle bestanden
+                for mbox_file in mail_root.rglob("*"):
+                    if not mbox_file.is_file():
+                        continue
+                    if mbox_file in seen:
+                        continue
+                    # Alleen INBOX — andere mappen zijn niet relevant
+                    if mbox_file.name.lower() not in ("inbox","in","inkomend"):
+                        continue
+                    # Skip op extensie
+                    if mbox_file.suffix.lower() in SKIP_EXTS:
+                        continue
+                    # Skip .msf bestanden
+                    if mbox_file.name.endswith('.msf'):
+                        continue
+                    # Controleer inhoud
+                    if not is_mbox(mbox_file):
+                        continue
+                    seen.add(mbox_file)
+                    account, label = build_label(mbox_file, mail_root)
+                    hits.append((mbox_file, label, account))
+
+            # Sorteer: inbox bovenaan, dan op label
+            def sort_key(h):
+                name = h[0].name.lower()
+                if name in ("inbox","in","inkomend"): return (0, h[1])
+                if name in ("sent","gestuurd","verzonden"): return (2, h[1])
+                return (1, h[1])
+            hits.sort(key=sort_key)
             return hits
 
         def decode_hdr(h):
@@ -1994,103 +2281,149 @@ class ZKHandler(BaseHTTPRequestHandler):
                     out.append(b or "")
             return " ".join(out).strip()
 
+        def addr_contains(header_val, addr):
+            """Controleer of addr voorkomt in een adresveld (To/CC/BCC)."""
+            return addr in header_val.lower()
+
         def extract_body_and_urls(msg):
-            """Haal plain text + HTML body op en extraheer URLs."""
             urls = []
             plain = ""
+            html_text = ""
             for part in msg.walk():
                 ct = part.get_content_type()
                 try:
                     payload = part.get_payload(decode=True)
-                    if payload is None:
-                        continue
+                    if payload is None: continue
                     charset = part.get_content_charset("utf-8") or "utf-8"
                     text = payload.decode(charset, errors="replace")
-                    if ct == "text/plain":
-                        plain = text[:2000]
+                    if ct == "text/plain" and not plain:
+                        plain = text[:3000]
+                    elif ct == "text/html" and not html_text:
+                        html_text = text[:3000]
                     found = URL_RE.findall(text)
-                    # Verwijder trailing leestekens
-                    found = [u.rstrip(".,;:!?)>") for u in found]
+                    found = [u.rstrip(".,;:!?)>\"'") for u in found]
                     urls.extend(found)
                 except Exception:
                     continue
-            # Dedupliceer maar bewaar volgorde
+            # Gebruik HTML als fallback voor snippet
+            if not plain and html_text:
+                # Strip HTML tags voor snippet
+                plain = _re.sub(r'<[^>]+>', ' ', html_text)
+                plain = _re.sub(r'\s+', ' ', plain).strip()[:3000]
+            # Dedupliceer, filter triviale URLs
+            SKIP = ("unsubscribe","pixel","tracking","open.php","click.php",
+                    "beacon","analytics","mailchimp","sendgrid","list-unsubscribe",
+                    ".gif?","img.","image.","icon.")
             seen = set(); deduped = []
             for u in urls:
-                if u not in seen and len(u) > 10:
-                    seen.add(u); deduped.append(u)
-            return plain, deduped
+                if u in seen or len(u) < 12: continue
+                if any(s in u.lower() for s in SKIP): continue
+                seen.add(u); deduped.append(u)
+            return plain.strip(), deduped
 
         # ── Bepaal te lezen bestanden ─────────────────────────────────────────
-        files_to_read = []  # [(path, label)]
+        files_to_read = []  # [(path, label, account_name)]
         if custom_path:
             from pathlib import Path as _P
-            p = _P(custom_path)
+            p = _P(custom_path).expanduser()
             if p.is_file():
-                files_to_read = [(p, p.name)]
+                files_to_read = [(p, p.name, p.parent.name)]
             elif p.is_dir():
-                # Maildir of map met mbox-bestanden
-                for f in p.iterdir():
-                    if f.is_file() and not f.suffix:
-                        files_to_read.append((f, f.name))
+                # Probeer eerst als Thunderbird-profielmap
+                hits = find_inbox_files(p)
+                if hits:
+                    files_to_read = hits
+                else:
+                    # Val terug: scan map zelf op mbox-bestanden
+                    SKIP_EXTS = {'.msf','.dat','.html','.js','.css','.json',
+                                 '.sqlite','.log','.db','.xpi','.jar','.zip'}
+                    for f in sorted(p.rglob("*")):
+                        if not f.is_file() or f.suffix.lower() in SKIP_EXTS:
+                            continue
+                        try:
+                            with open(f,'rb') as fh:
+                                if fh.read(6).startswith(b'From '):
+                                    files_to_read.append((f, f.name, f.parent.name))
+                        except Exception:
+                            continue
         else:
             for profile in tb_profiles():
-                for fpath, label in find_inbox_files(profile):
-                    files_to_read.append((fpath, label))
+                files_to_read += find_inbox_files(profile)
 
         if not files_to_read:
+            profiles = tb_profiles()
             return self._send(200, {
                 "ok": False,
-                "error": "Geen Thunderbird inbox gevonden. Geef pad op in de instellingen.",
-                "mails": [],
-                "paths_tried": [str(p) for p in tb_profiles()],
+                "error": "Geen Thunderbird mbox-bestanden gevonden. Geef het pad naar je Thunderbird profiel of Inbox-bestand op.",
+                "inboxes": [],
+                "paths_tried": [str(p) for p in profiles],
+                "tip": "Thunderbird profiel staat meestal in ~/.thunderbird/xxxxx.default/",
             })
 
-        # ── Lees mails ────────────────────────────────────────────────────────
-        all_mails = []
-        for fpath, label in files_to_read[:4]:  # max 4 bestanden
+        # ── Lees per bestand, groepeer als inbox ──────────────────────────────
+        inboxes = []
+        for fpath, label, account in files_to_read:  # geen limiet
+            mails_in_box = []
             try:
                 box = mailbox.mbox(str(fpath))
                 for i, msg in enumerate(box):
-                    if len(all_mails) >= max_msgs:
+                    if len(mails_in_box) >= max_msgs:
                         break
+
+                    # ── Filter: alleen mails aan filter_to ───────────────────
+                    if filter_to:
+                        to_val  = decode_hdr(msg.get("to",""))
+                        cc_val  = decode_hdr(msg.get("cc",""))
+                        bcc_val = decode_hdr(msg.get("bcc",""))
+                        if not (addr_contains(to_val,  filter_to) or
+                                addr_contains(cc_val,  filter_to) or
+                                addr_contains(bcc_val, filter_to)):
+                            continue
+
                     subj = decode_hdr(msg.get("subject","(geen onderwerp)"))
                     frm  = decode_hdr(msg.get("from",""))
                     date = msg.get("date","")
                     mid  = msg.get("message-id","") or f"{label}_{i}"
                     try:
-                        ts = _eutils.parsedate_to_datetime(date).isoformat() if date else ""
+                        dt = _eutils.parsedate_to_datetime(date)
+                        ts = dt.isoformat()
+                        ts_display = dt.strftime("%-d %b %Y")
                     except Exception:
-                        ts = date
+                        ts = date; ts_display = date[:16] if date else ""
 
                     plain, urls = extract_body_and_urls(msg)
 
-                    # Filter: alleen mails met minstens 1 URL (dat is het doel)
                     if not urls:
-                        continue
+                        continue  # alleen mails mét URLs
 
-                    all_mails.append({
-                        "id":      mid.strip("<>"),
-                        "subject": subj,
-                        "from":    frm,
-                        "date":    ts,
-                        "urls":    urls[:10],   # max 10 URLs per mail
-                        "snippet": plain[:200],
-                        "source":  label,
+                    mails_in_box.append({
+                        "id":       mid.strip("<>"),
+                        "subject":  subj,
+                        "from":     frm,
+                        "date":     ts,
+                        "date_display": ts_display,
+                        "urls":     urls[:15],
+                        "snippet":  plain[:400],
+                        "inbox":    label,
                     })
                 box.close()
-            except Exception as e:
-                # Corrupt of vergrendeld bestand — sla over
+                mails_in_box.sort(key=lambda m: m.get("date",""), reverse=True)
+                if mails_in_box:
+                    inboxes.append({
+                        "name":  label,
+                        "file":  str(fpath),
+                        "count": len(mails_in_box),
+                        "mails": mails_in_box,
+                    })
+            except Exception:
                 continue
 
-        # Sorteer nieuwste eerst
-        all_mails.sort(key=lambda m: m.get("date",""), reverse=True)
-
+        total = sum(b["count"] for b in inboxes)
         return self._send(200, {
-            "ok":    True,
-            "mails": all_mails,
-            "count": len(all_mails),
-            "files": [str(f) for f,_ in files_to_read],
+            "ok":      True,
+            "inboxes": inboxes,
+            "total":   total,
+            "filter":  filter_to,
         })
 
     def _mail_import_batch(self):

@@ -26,6 +26,7 @@ const NotesTab = ({
   onSplitCmd = null,       // doorgeven aan NoteEditor → VimEditor
   pasteQueue = [],         // blokken klaar om in de editor te plakken
   onPasteConsumed = null,  // () => void — na verwerking
+  editorFocusTrigger = 0, // verhoog om editor-canvas te focussen (split-wissel)
 }) => {
   const { useState, useRef, useMemo, useCallback, useEffect } = React;
 
@@ -39,6 +40,13 @@ const NotesTab = ({
     }
     onPasteConsumed?.();
   }, [pasteQueue]);
+
+  // Split-focus terug naar editor: focust canvas op de plek waar de cursor stond
+  useEffect(() => {
+    if (editorFocusTrigger > 0) {
+      setTimeout(() => contentRef.current?.focus(), 30);
+    }
+  }, [editorFocusTrigger]);
 
   // ── Lokale UI-state (behoort alleen tot NotesTab) ─────────────────────────
   const [vimMode,       setVimMode]       = useState(false);
