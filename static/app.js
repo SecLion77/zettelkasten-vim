@@ -1956,94 +1956,96 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
       })
     ),
 
-    // ── AI taalverbeterbalk ───────────────────────────────────────────────────
+    // ── AI taalverbeterbalk — vaste smalle balk onderaan ─────────────────────
     React.createElement("div", {
       style: {
         flexShrink: 0,
         borderTop: `1px solid ${W.splitBg}`,
         background: W.bg2,
+        display: "flex", alignItems: "center", gap: "6px",
+        padding: "4px 10px",
+        position: "relative",   // anker voor het overlay-venster
       }
     },
-      // Verbeter-knop balk
-      React.createElement("div", {
-        style: {
-          display: "flex", alignItems: "center", gap: "6px",
-          padding: "5px 10px",
-        }
-      },
-        React.createElement("span", {style:{fontSize:"12px", color: W.fgMuted}}, "🤖 AI taal:"),
-        // Taal selector
-        ["auto","nl","en"].map(l =>
-          React.createElement("button", {
-            key: l,
-            onClick: () => setAiImproveLang(l),
-            style: {
-              background: aiImproveLang === l ? "rgba(138,198,242,0.2)" : "none",
-              border: `1px solid ${aiImproveLang === l ? W.blue : W.splitBg}`,
-              borderRadius: "4px", padding: "2px 8px",
-              color: aiImproveLang === l ? W.blue : W.fgMuted,
-              fontSize: "11px", cursor: "pointer",
-            }
-          }, l)
-        ),
+      React.createElement("span", {style:{fontSize:"11px", color: W.fgMuted, whiteSpace:"nowrap"}}, "🤖 AI:"),
+
+      // Taal selector
+      ["auto","nl","en"].map(l =>
         React.createElement("button", {
-          onClick: triggerImprove,
-          disabled: aiImproving,
+          key: l,
+          onClick: () => setAiImproveLang(l),
           style: {
-            background: aiImproving ? "none" : "rgba(138,198,242,0.12)",
-            border: `1px solid ${aiImproving ? W.splitBg : "rgba(138,198,242,0.4)"}`,
-            borderRadius: "4px", padding: "3px 12px",
-            color: aiImproving ? W.fgMuted : "#a8d8f0",
-            fontSize: "12px", cursor: aiImproving ? "not-allowed" : "pointer",
-            display: "flex", alignItems: "center", gap: "5px",
-            animation: aiImproving ? "ai-pulse 1.4s ease-in-out infinite" : "none",
+            background: aiImproveLang === l ? "rgba(138,198,242,0.2)" : "none",
+            border: `1px solid ${aiImproveLang === l ? W.blue : W.splitBg}`,
+            borderRadius: "4px", padding: "1px 7px",
+            color: aiImproveLang === l ? W.blue : W.fgMuted,
+            fontSize: "11px", cursor: "pointer",
           }
-        },
-          aiImproving
-            ? React.createElement(React.Fragment, null,
-                React.createElement("span", {style:{display:"inline-block",width:"6px",height:"6px",
-                  borderRadius:"50%",background:"#a8d8f0",
-                  animation:"ai-dot 1.4s ease-in-out infinite"}}),
-                "verbeteren…"
-              )
-            : "✨ verbeter tekst"
-        ),
-        aiImprove && React.createElement("button", {
-          onClick: () => setAiImprove(null),
-          style: {background:"none",border:"none",color:W.fgMuted,fontSize:"12px",cursor:"pointer",marginLeft:"auto"}
-        }, "× sluiten")
+        }, l)
       ),
 
-      // Verbeteringsresultaat — diff weergave
+      // Verbeter-knop
+      React.createElement("button", {
+        onClick: triggerImprove,
+        disabled: aiImproving,
+        style: {
+          background: aiImproving ? "none" : "rgba(138,198,242,0.12)",
+          border: `1px solid ${aiImproving ? W.splitBg : "rgba(138,198,242,0.4)"}`,
+          borderRadius: "4px", padding: "2px 10px",
+          color: aiImproving ? W.fgMuted : "#a8d8f0",
+          fontSize: "11px", cursor: aiImproving ? "not-allowed" : "pointer",
+        }
+      }, aiImproving ? "⏳ bezig…" : "✨ verbeter"),
+
+      // Sluit-knop (alleen als suggestie open is)
+      aiImprove && React.createElement("button", {
+        onClick: () => setAiImprove(null),
+        style: {
+          background: "none", border: "none",
+          color: W.fgMuted, fontSize: "13px",
+          cursor: "pointer", marginLeft: "auto", lineHeight: 1,
+        }
+      }, "×"),
+
+      // ── Resultaatvenster als overlay BOVEN de balk ──────────────────────────
       aiImprove && React.createElement("div", {
         style: {
-          margin: "0 10px 8px",
-          background: W.bg,
-          border: `1px solid rgba(138,198,242,0.3)`,
-          borderRadius: "6px",
+          position: "absolute",
+          bottom: "100%",        // direkt boven de balk
+          left: 0, right: 0,
+          background: W.bg2,
+          border: `1px solid rgba(138,198,242,0.35)`,
+          borderBottom: "none",
+          borderRadius: "6px 6px 0 0",
+          boxShadow: "0 -4px 16px rgba(0,0,0,0.4)",
+          zIndex: 200,
+          maxHeight: "260px",
+          display: "flex", flexDirection: "column",
           overflow: "hidden",
-          maxHeight: "180px",
         }
       },
-        // Header
+        // Header-balk
         React.createElement("div", {
           style: {
             padding: "6px 12px",
             background: "rgba(138,198,242,0.08)",
-            borderBottom: `1px solid rgba(138,198,242,0.2)`,
+            borderBottom: `1px solid rgba(138,198,242,0.18)`,
             display: "flex", alignItems: "center", justifyContent: "space-between",
+            flexShrink: 0,
           }
         },
-          React.createElement("span", {style:{fontSize:"11px",color:"#a8d8f0",letterSpacing:"0.5px"}},
-            "AI SUGGESTIE — verbeterde versie"),
-          React.createElement("div", {style:{display:"flex",gap:"6px"}},
+          React.createElement("span", {
+            style:{fontSize:"11px", color:"#a8d8f0", letterSpacing:"0.5px"}
+          }, "AI SUGGESTIE — verbeterde versie"),
+          React.createElement("div", {style:{display:"flex", gap:"6px"}},
             React.createElement("button", {
               onClick: acceptImprove,
               style: {
                 background: "rgba(159,202,86,0.2)",
                 border: `1px solid rgba(159,202,86,0.4)`,
                 borderRadius: "4px", padding: "2px 10px",
-                color: W.comment, fontSize: "12px", cursor: "pointer", fontWeight: "bold",
+                color: W.comment, fontSize: "12px",
+                cursor: "pointer", fontWeight: "bold",
               }
             }, "✓ overnemen"),
             React.createElement("button", {
@@ -2056,13 +2058,13 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
             }, "negeren")
           )
         ),
-        // Verbeterde tekst
+        // Verbeterde tekst — scrollbaar
         React.createElement("div", {
           style: {
             padding: "8px 12px",
             fontSize: "13px", color: W.fg,
             lineHeight: "1.6",
-            overflowY: "auto", maxHeight: "120px",
+            overflowY: "auto",
             fontFamily: "'Hack','Courier New',monospace",
             whiteSpace: "pre-wrap",
           }
