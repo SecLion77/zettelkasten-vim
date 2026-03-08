@@ -1310,6 +1310,8 @@ class ZKHandler(BaseHTTPRequestHandler):
         if p=="/api/llm/describe-image": return self._llm_describe_image()
         if p=="/api/llm/mindmap":        return self._llm_mindmap()
         if p=="/api/import-url":         return self._import_url()
+        if p=="/api/mail/inbox":         return self._mail_inbox()
+        if p=="/api/mail/import-batch":  return self._mail_import_batch()
         if p=="/api/ext-pdfs":
             dirs = self._body().get("dirs", [])
             self.vault.set_ext_pdf_dirs(dirs)
@@ -1699,13 +1701,18 @@ class ZKHandler(BaseHTTPRequestHandler):
             return self._send(200,{"ok":False,"error":str(e)})
 
     def _import_url(self):
-        """Haal inhoud van een URL op en converteer naar Markdown — Instapaper-stijl.
-        Downloadt ook afbeeldingen en slaat ze op in de vault/images map."""
-        body   = self._body()
-        url    = body.get("url","").strip()
-        model  = body.get("model","llama3.2-vision")
+        """Haal inhoud van een URL op en converteer naar Markdown — Instapaper-stijl."""
+        body  = self._body()
+        url   = body.get("url","").strip()
+        model = body.get("model","llama3.2-vision")
         if not url:
             return self._send(400,{"error":"url vereist"})
+        result = self._do_import_url(url, model)
+        return self._send(200, result)
+
+    def _do_import_url(self, url, model="llama3.2-vision"):
+        """Kern-logica voor URL-import. Geeft dict terug (geen HTTP response).
+        Downloadt ook afbeeldingen en slaat ze op in de vault/images map."""
         if not url.startswith(("http://","https://")):
             url = "https://" + url
 
@@ -1726,7 +1733,7 @@ class ZKHandler(BaseHTTPRequestHandler):
                     charset = ct.split("charset=")[-1].split(";")[0].strip()
                 html = raw_bytes.decode(charset, errors="replace")
         except Exception as e:
-            return self._send(200,{"ok":False,"error":"URL ophalen mislukt: "+str(e)})
+            return {"ok":False,"error":"URL ophalen mislukt: "+str(e)}
 
         # ── HTML → tekst + afbeelding-URLs via stdlib html.parser ────────────
         from html.parser import HTMLParser
@@ -1917,13 +1924,209 @@ class ZKHandler(BaseHTTPRequestHandler):
         except Exception:
             md = f"# {page_title}\n\n{raw_text[:4000]}"
 
-        return self._send(200,{
+        return {
             "ok":     True,
             "title":  page_title,
             "url":    url,
             "markdown": md,
             "images": saved_images,   # beschikbaar voor selectie in de UI
+        }
+
+    # ── Thunderbird inbox lezen ───────────────────────────────────────────────
+    def _mail_inbox(self):
+        """Leest Thunderbird lokale inbox (mbox of Maildir).
+        Geeft lijst van mails terug met subject, from, date en gevonden URLs.
+        Body: {path?: "...", max?: 200}
+        """
+        import mailbox, email as _email, email.header as _ehdr, email.utils as _eutils
+        import re as _re
+
+        body = self._body()
+        custom_path = body.get("path","").strip()
+        max_msgs    = min(int(body.get("max", 200)), 500)
+
+        URL_RE = _re.compile(r'https?://[^\s<>"\')\]\\,]+')
+
+        # ── Zoek Thunderbird mbox-bestanden ───────────────────────────────────
+        def tb_profiles():
+            """Geeft lijst van mogelijke Thunderbird profiel-mappen terug."""
+            from pathlib import Path as _P
+            import os as _os
+            candidates = []
+            home = _P.home()
+            # macOS
+            candidates += list((home/"Library/Thunderbird/Profiles").glob("*.default*"))
+            candidates += list((home/"Library/Thunderbird/Profiles").glob("*"))
+            # Linux
+            candidates += list((home/".thunderbird").glob("*.default*"))
+            candidates += list((home/".thunderbird").glob("*"))
+            # Windows
+            appdata = _P(_os.environ.get("APPDATA","C:/Users/User/AppData/Roaming"))
+            candidates += list((appdata/"Thunderbird/Profiles").glob("*.default*"))
+            return [c for c in candidates if c.is_dir()]
+
+        def find_inbox_files(profile_dir):
+            """Zoek mbox-bestanden die waarschijnlijk de inbox zijn."""
+            from pathlib import Path as _P
+            hits = []
+            p = _P(profile_dir)
+            # Thunderbird slaat mbox op als bestand zonder extensie (bijv. "INBOX", "Inbox")
+            # of in Mail/Local Folders/
+            for sub in ("Mail", "ImapMail"):
+                mail_root = p / sub
+                if mail_root.exists():
+                    for mbox_file in mail_root.rglob("*"):
+                        name_lower = mbox_file.name.lower()
+                        if mbox_file.is_file() and not mbox_file.suffix:
+                            if name_lower in ("inbox","sent","gestuurd","verzonden"):
+                                hits.append((mbox_file, name_lower))
+                        # msf = samenvatting-bestand; sla over
+            return hits
+
+        def decode_hdr(h):
+            if not h: return ""
+            parts = _ehdr.decode_header(h)
+            out = []
+            for b, enc in parts:
+                if isinstance(b, bytes):
+                    out.append(b.decode(enc or "utf-8", errors="replace"))
+                else:
+                    out.append(b or "")
+            return " ".join(out).strip()
+
+        def extract_body_and_urls(msg):
+            """Haal plain text + HTML body op en extraheer URLs."""
+            urls = []
+            plain = ""
+            for part in msg.walk():
+                ct = part.get_content_type()
+                try:
+                    payload = part.get_payload(decode=True)
+                    if payload is None:
+                        continue
+                    charset = part.get_content_charset("utf-8") or "utf-8"
+                    text = payload.decode(charset, errors="replace")
+                    if ct == "text/plain":
+                        plain = text[:2000]
+                    found = URL_RE.findall(text)
+                    # Verwijder trailing leestekens
+                    found = [u.rstrip(".,;:!?)>") for u in found]
+                    urls.extend(found)
+                except Exception:
+                    continue
+            # Dedupliceer maar bewaar volgorde
+            seen = set(); deduped = []
+            for u in urls:
+                if u not in seen and len(u) > 10:
+                    seen.add(u); deduped.append(u)
+            return plain, deduped
+
+        # ── Bepaal te lezen bestanden ─────────────────────────────────────────
+        files_to_read = []  # [(path, label)]
+        if custom_path:
+            from pathlib import Path as _P
+            p = _P(custom_path)
+            if p.is_file():
+                files_to_read = [(p, p.name)]
+            elif p.is_dir():
+                # Maildir of map met mbox-bestanden
+                for f in p.iterdir():
+                    if f.is_file() and not f.suffix:
+                        files_to_read.append((f, f.name))
+        else:
+            for profile in tb_profiles():
+                for fpath, label in find_inbox_files(profile):
+                    files_to_read.append((fpath, label))
+
+        if not files_to_read:
+            return self._send(200, {
+                "ok": False,
+                "error": "Geen Thunderbird inbox gevonden. Geef pad op in de instellingen.",
+                "mails": [],
+                "paths_tried": [str(p) for p in tb_profiles()],
+            })
+
+        # ── Lees mails ────────────────────────────────────────────────────────
+        all_mails = []
+        for fpath, label in files_to_read[:4]:  # max 4 bestanden
+            try:
+                box = mailbox.mbox(str(fpath))
+                for i, msg in enumerate(box):
+                    if len(all_mails) >= max_msgs:
+                        break
+                    subj = decode_hdr(msg.get("subject","(geen onderwerp)"))
+                    frm  = decode_hdr(msg.get("from",""))
+                    date = msg.get("date","")
+                    mid  = msg.get("message-id","") or f"{label}_{i}"
+                    try:
+                        ts = _eutils.parsedate_to_datetime(date).isoformat() if date else ""
+                    except Exception:
+                        ts = date
+
+                    plain, urls = extract_body_and_urls(msg)
+
+                    # Filter: alleen mails met minstens 1 URL (dat is het doel)
+                    if not urls:
+                        continue
+
+                    all_mails.append({
+                        "id":      mid.strip("<>"),
+                        "subject": subj,
+                        "from":    frm,
+                        "date":    ts,
+                        "urls":    urls[:10],   # max 10 URLs per mail
+                        "snippet": plain[:200],
+                        "source":  label,
+                    })
+                box.close()
+            except Exception as e:
+                # Corrupt of vergrendeld bestand — sla over
+                continue
+
+        # Sorteer nieuwste eerst
+        all_mails.sort(key=lambda m: m.get("date",""), reverse=True)
+
+        return self._send(200, {
+            "ok":    True,
+            "mails": all_mails,
+            "count": len(all_mails),
+            "files": [str(f) for f,_ in files_to_read],
         })
+
+    def _mail_import_batch(self):
+        """Importeer een lijst van URLs (vanuit geselecteerde mails).
+        Body: {urls: ["...", ...], model?: "..."}
+        Geeft een lijst van import-resultaten terug.
+        Hergebruikt de bestaande _import_url logica per URL.
+        """
+        body  = self._body()
+        urls  = body.get("urls", [])[:20]   # max 20 tegelijk
+        model = body.get("model", "llama3.2-vision")
+        if not urls:
+            return self._send(400, {"error": "urls[] vereist"})
+
+        results = []
+        for url in urls:
+            try:
+                # Hergebruik bestaande import-logica via interne aanroep
+                # Maak tijdelijk een nep-body aan
+                import json as _json
+                old_body = self.rfile  # bewaar
+                self._cached_body = _json.dumps({"url": url, "model": model}).encode()
+                res_data = {}
+
+                # Roep de logica rechtstreeks aan (zonder HTTP-overhead)
+                # We moeten _import_url aanpassen om ook direct te returnen
+                # Eenvoudiger: roep de helper direct aan
+                result = self._do_import_url(url, model)
+                results.append({"url": url, **result})
+            except Exception as e:
+                results.append({"url": url, "ok": False, "error": str(e)})
+            finally:
+                if hasattr(self, '_cached_body'):
+                    del self._cached_body
+
+        return self._send(200, {"ok": True, "results": results})
 
 
 def get_local_ip():

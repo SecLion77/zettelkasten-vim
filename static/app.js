@@ -1135,7 +1135,15 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
       }
 
       if (e.ctrlKey && e.key === "s") { e.preventDefault(); onSave(); setStatus("opgeslagen ✓"); draw(); return; }
-      if (e.ctrlKey && e.key === "j") { e.preventDefault(); if (!expandSnippet(s)) setStatus("geen snippet"); draw(); return; }
+      // Ctrl+H/J/K/L — split-venster navigatie (nnoremap <C-H> <C-W><C-H> etc. uit vimrc)
+      if (e.ctrlKey && e.key === "h") { e.preventDefault(); onSplitCmd?.("focus-left");  setStatus("◀ notities"); draw(); return; }
+      if (e.ctrlKey && e.key === "l") { e.preventDefault(); onSplitCmd?.("focus-right"); setStatus("▶ split");    draw(); return; }
+      if (e.ctrlKey && e.key === "j") { e.preventDefault();
+        // Ctrl+J: als split open → focus rechts, anders snippet-expand
+        if (onSplitCmd) { onSplitCmd("focus-right"); setStatus("▶ split"); }
+        else if (!expandSnippet(s)) setStatus("geen snippet");
+        draw(); return; }
+      if (e.ctrlKey && e.key === "k") { e.preventDefault(); onSplitCmd?.("focus-left");  setStatus("◀ notities"); draw(); return; }
 
       // Ctrl+N / Ctrl+P — lokale completion (vim-stijl)
       if (e.ctrlKey && (e.key === "n" || e.key === "N")) {
@@ -1517,12 +1525,7 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
         break;
       case " ": setStatus(""); buildMatches(s,""); break; // nohlsearch
       case "Escape": setStatus(""); break;
-      case "w":
-        if (e.ctrlKey) { e.preventDefault(); onSplitCmd?.("focus-right"); return; }
-        break;
-      case "W":
-        if (e.ctrlKey) { e.preventDefault(); onSplitCmd?.("focus-left"); return; }
-        break;
+      // Ctrl+H/J/K/L worden al afgevangen vóór de switch — zie boven
     }
 
     clamp();
@@ -4116,13 +4119,115 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, addJob, upd
                       importPreview, setImportPreview}) => {
   const { useState, useRef, useCallback, useEffect } = React;
 
+  // ── Import-modus: "url" of "mail" ─────────────────────────────────────────
+  const [importMode, setImportMode] = useState("url");  // "url" | "mail"
+
   const [url,        setUrl]       = useState("");
   const [busy,       setBusy]      = useState(false);
   const [importing,  setImporting] = useState(false);
   const [error,      setError]     = useState(null);
-  // preview leeft in App-state (importPreview) zodat hij tab-wissels overleeft.
-  // Lokale edit-state wordt direct gevuld bij mount als importPreview al bestaat,
-  // én herschreven wanneer importPreview verandert (nieuw resultaat).
+
+  // ── Thunderbird state ──────────────────────────────────────────────────────
+  const [mailList,       setMailList]       = useState([]);    // [{id,subject,from,date,urls,snippet}]
+  const [mailLoading,    setMailLoading]    = useState(false);
+  const [mailError,      setMailError]      = useState(null);
+  const [mailSelected,   setMailSelected]   = useState(new Set()); // geselecteerde mail-ids
+  const [mailPath,       setMailPath]       = useState("");    // handmatig pad
+  const [mailExpanded,   setMailExpanded]   = useState(null);  // id van uitgeklapte mail
+  const [mailImporting,  setMailImporting]  = useState(false);
+  const [mailImportProg, setMailImportProg] = useState(null);  // "3/7"
+  const [mailResults,    setMailResults]    = useState([]);    // [{url, ok, title, error}]
+
+  const loadMailbox = useCallback(async () => {
+    setMailLoading(true); setMailError(null); setMailList([]);
+    try {
+      const res = await fetch("/api/mail/inbox", {
+        method: "POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({path: mailPath.trim(), max: 300}),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        setMailList(data.mails || []);
+        if (!data.mails?.length)
+          setMailError("Geen mails met URLs gevonden in de inbox.");
+      } else {
+        setMailError(data.error || "Inbox laden mislukt.");
+      }
+    } catch(e) { setMailError(e.message); }
+    finally { setMailLoading(false); }
+  }, [mailPath]);
+
+  const toggleMailSelect = (id) => {
+    setMailSelected(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
+
+  const selectAllMails = () => {
+    setMailSelected(new Set(mailList.map(m => m.id)));
+  };
+
+  const deselectAll = () => setMailSelected(new Set());
+
+  // Alle unieke URLs van geselecteerde mails
+  const selectedUrls = React.useMemo(() => {
+    const urls = [];
+    const seen = new Set();
+    for (const m of mailList) {
+      if (!mailSelected.has(m.id)) continue;
+      for (const u of (m.urls || [])) {
+        if (!seen.has(u)) { seen.add(u); urls.push(u); }
+      }
+    }
+    return urls;
+  }, [mailList, mailSelected]);
+
+  const doMailImport = useCallback(async () => {
+    if (!selectedUrls.length) return;
+    setMailImporting(true); setMailResults([]);
+    const results = [];
+    for (let i = 0; i < selectedUrls.length; i++) {
+      setMailImportProg(`${i+1}/${selectedUrls.length}`);
+      const u = selectedUrls[i];
+      try {
+        const res = await fetch("/api/import-url", {
+          method: "POST",
+          headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({url: u, model: llmModel||"llama3.2-vision"}),
+        });
+        const data = await res.json();
+        if (data.ok) {
+          // Sla direct op als notitie
+          let domain = "";
+          try { domain = new URL(u).hostname.replace("www.","").split(".")[0]; } catch {}
+          await onAddNote({
+            id:      genId(),
+            title:   data.title || domain || u.slice(0,50),
+            content: (data.markdown||"") + "\n\n---\n🌐 **Bron:** [" + u + "](" + u + ")\n📬 *Geïmporteerd uit Gmail*",
+            tags:    ["import", "gmail", domain].filter(Boolean),
+            created: new Date().toISOString(),
+            modified: new Date().toISOString(),
+          });
+          if (data.images?.length && onRefreshImages) onRefreshImages();
+          results.push({url: u, ok: true, title: data.title||u.slice(0,50)});
+          addJob && addJob({id: genId(), type:"import", label:"📬 "+u.slice(0,40)+"…",
+            status:"done", result: data.title||u.slice(0,40)});
+        } else {
+          results.push({url: u, ok: false, error: data.error||"mislukt"});
+        }
+      } catch(e) {
+        results.push({url: u, ok: false, error: e.message});
+      }
+    }
+    setMailResults(results);
+    setMailImporting(false);
+    setMailImportProg(null);
+  }, [selectedUrls, llmModel, onAddNote, onRefreshImages, addJob]);
+
+  // ── URL-import state (ongewijzigd) ─────────────────────────────────────────
   const initFromPreview = (p) => {
     if (!p) return { md: "", title: "", tags: [] };
     let domain = "";
@@ -4141,58 +4246,42 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, addJob, upd
   const [renderMode, setRenderMode] = useState(true);
   const [selectedImages, setSelectedImages] = useState(new Set());
   const urlRef       = useRef(null);
-  const prevPreview  = useRef(importPreview); // detecteer echte wijzigingen
+  const prevPreview  = useRef(importPreview);
 
-  // Herschrijf edit-state alleen als importPreview echt verandert (nieuw resultaat)
   useEffect(() => {
-    if (importPreview === prevPreview.current) return; // zelfde object, geen actie
+    if (importPreview === prevPreview.current) return;
     prevPreview.current = importPreview;
     if (!importPreview) return;
     const {md, title, tags: newTags} = initFromPreview(importPreview);
-    setEditMd(md);
-    setEditTitle(title);
-    setTags(newTags);
-    setSaved(false);
-    setImporting(false);
+    setEditMd(md); setEditTitle(title); setTags(newTags);
+    setSaved(false); setImporting(false);
   }, [importPreview]);
 
   const doImport = useCallback(() => {
     const u = url.trim();
     if (!u) return;
-    setBusy(true);
-    setError(null);
-    setImporting(true);   // toon wacht-scherm op import-tab
-    setImportPreview(null);
-    setSaved(false);
+    setBusy(true); setError(null); setImporting(true);
+    setImportPreview(null); setSaved(false);
     setTimeout(() => setBusy(false), 400);
-
     const jid = genId();
     let shortUrl = u.replace(/^https?:\/\//,"").slice(0,38);
     addJob && addJob({id:jid, type:"import", label:"🌐 Importeren: "+shortUrl+"…"});
-
     (async () => {
       try {
         const res = await api.importUrl({url: u, model: llmModel||"llama3.2-vision"});
         if (res?.ok) {
-          setImportPreview(res);          // opslaan in App-state (overleeft tab-wissel)
+          setImportPreview(res);
           if (res.images?.length && onRefreshImages) onRefreshImages();
-          updateJob && updateJob(jid,{
-            status:"done",
-            result: res.title?.slice(0,44)||"Klaar",
-            importResult: res,            // bewaar voor klik in job-dropdown
-          });
+          updateJob && updateJob(jid,{status:"done", result: res.title?.slice(0,44)||"Klaar", importResult: res});
         } else {
           const msg = res?.error || "Import mislukt";
-          setError(msg);
-          setImporting(false);
+          setError(msg); setImporting(false);
           updateJob && updateJob(jid,{status:"error", error:msg});
         }
       } catch(e) {
-        setError(e.message);
-        setImporting(false);
+        setError(e.message); setImporting(false);
         updateJob && updateJob(jid,{status:"error", error:e.message});
       }
-      // importing=false komt via useEffect zodra importPreview gezet wordt
     })();
   }, [url, llmModel, onRefreshImages, addJob, updateJob]);
 
@@ -4202,18 +4291,13 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, addJob, upd
     if (selectedImages.size > 0 && importPreview.images?.length) {
       const pickedLinks = importPreview.images
         .filter(img => selectedImages.has(img.name))
-        .map(img => `![[img:${img.name}]]`)
-        .join("\n\n");
+        .map(img => `![[img:${img.name}]]`).join("\n\n");
       content += "\n\n" + pickedLinks;
     }
     content += "\n\n---\n🌐 **Bron:** [" + importPreview.url + "](" + importPreview.url + ")";
     await onAddNote({
-      id:      genId(),
-      title:   editTitle,
-      content,
-      tags,
-      created: new Date().toISOString(),
-      modified: new Date().toISOString(),
+      id: genId(), title: editTitle, content, tags,
+      created: new Date().toISOString(), modified: new Date().toISOString(),
     });
     setSaved(true);
   }, [importPreview, editTitle, editMd, tags, selectedImages, onAddNote]);
@@ -4225,340 +4309,267 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, addJob, upd
     setTimeout(()=>urlRef.current?.focus(), 50);
   };
 
+  // ── Tab-stijlen ────────────────────────────────────────────────────────────
+  const tabBtn = (id, icon, label) => React.createElement("button", {
+    key: id, onClick: () => setImportMode(id),
+    style: {
+      background: importMode===id ? W.bg : "none",
+      border: "none",
+      borderBottom: importMode===id ? `2px solid ${W.yellow}` : "2px solid transparent",
+      color: importMode===id ? W.statusFg : W.fgMuted,
+      padding: "0 18px", height: "100%", fontSize: "14px",
+      cursor: "pointer", letterSpacing: "0.4px", display:"flex",
+      alignItems:"center", gap:"6px", flexShrink:0,
+    }
+  }, icon, " ", label);
+
   return React.createElement("div",{
     style:{display:"flex",flexDirection:"column",height:"100%",overflow:"hidden"}
   },
 
-    // ── Toolbar ──────────────────────────────────────────────────────────────
+    // ── Tab-bar ──────────────────────────────────────────────────────────────
     React.createElement("div",{style:{
       background:W.statusBg, borderBottom:`1px solid ${W.splitBg}`,
-      padding:"10px 16px", display:"flex", alignItems:"center",
-      gap:"10px", flexShrink:0, flexWrap:"wrap"
+      display:"flex", alignItems:"center", flexShrink:0, height:"44px", gap:0,
     }},
-      React.createElement("span",{style:{fontSize:"14px",color:W.statusFg,
-        letterSpacing:"1.5px",fontWeight:"bold"}},"🌐 WEB IMPORT"),
-      React.createElement("span",{style:{fontSize:"14px",color:W.fgMuted}}),
+      tabBtn("url",  "🌐", "URL import"),
+      tabBtn("mail", "📬", "Gmail / Thunderbird"),
       React.createElement("div",{style:{flex:1}}),
-      importPreview && !saved && React.createElement("button",{
+      importMode==="url" && importPreview && !saved && React.createElement("button",{
         onClick:reset,
         style:{background:"none",border:`1px solid ${W.splitBg}`,color:W.fgMuted,
-               borderRadius:"4px",padding:"4px 10px",fontSize:"14px",cursor:"pointer"}
+               borderRadius:"4px",padding:"4px 10px",fontSize:"14px",cursor:"pointer",
+               marginRight:"12px"}
       },"+ nieuwe import")
     ),
 
-    // ── URL invoer (ook zichtbaar tijdens import) ────────────────────────────
-    !importPreview && React.createElement("div",{style:{
-      flex:1, display:"flex", flexDirection:"column",
-      alignItems:"center", justifyContent:"center",
-      padding:"32px 24px", gap:"20px"
-    }},
+    // ══════════════════════════════════════════════════════════════════════════
+    // Tab: URL import (originele flow)
+    // ══════════════════════════════════════════════════════════════════════════
+    importMode === "url" && React.createElement(React.Fragment, null,
 
-      // Wacht-scherm tijdens import
-      importing
-        ? React.createElement(React.Fragment, null,
-            React.createElement("div",{style:{
-              fontSize:"48px",lineHeight:1,animation:"ai-pulse 1.4s ease-in-out infinite"
-            }},"🌐"),
-            React.createElement("div",{style:{
-              fontSize:"15px",color:W.fgDim,textAlign:"center",lineHeight:"1.7",maxWidth:"460px"
-            }},
-              "Bezig met importeren…",
-              React.createElement("br"),
-              React.createElement("span",{style:{fontSize:"14px",color:W.fgMuted}},
-                url.replace(/^https?:\/\//,"").slice(0,60))
-            ),
-            React.createElement("div",{style:{
-              width:"320px",height:"3px",borderRadius:"2px",
-              background:"rgba(255,255,255,0.08)",overflow:"hidden"
-            }},
-              React.createElement("div",{style:{
-                height:"100%",width:"35%",borderRadius:"2px",background:W.blue,
-                animation:"progress-slide 1.4s ease-in-out infinite"
-              }})
-            ),
-            React.createElement("div",{style:{
-              fontSize:"14px",color:W.fgMuted,textAlign:"center",maxWidth:"420px",lineHeight:"1.6"
-            }},
-              "Je kunt de app gewoon blijven gebruiken. De import verschijnt hier zodra hij klaar is."),
-            React.createElement("button",{
-              onClick:()=>{ setImporting(false); setError(null); },
-              style:{background:"none",border:`1px solid ${W.splitBg}`,color:W.fgMuted,
-                     borderRadius:"6px",padding:"6px 16px",fontSize:"14px",cursor:"pointer"}
-            },"× annuleer")
-          )
-
-        // Normale URL-invoer
-        : React.createElement(React.Fragment, null,
-            React.createElement("div",{style:{fontSize:"48px",lineHeight:1}},"🌐"),
-            React.createElement("div",{style:{fontSize:"15px",color:W.fgDim,
-              textAlign:"center",lineHeight:"1.6",maxWidth:"460px"}},
-              "Plak een URL om de inhoud te importeren als Zettelkasten-notitie.",
-              React.createElement("br"),
-              React.createElement("span",{style:{fontSize:"14px",color:W.fgMuted}},
-                "De AI verwijdert navigatie, advertenties en rommel — zoals Instapaper.")),
-
-            React.createElement("div",{style:{
-              display:"flex", gap:"10px", width:"100%", maxWidth:"560px"
-            }},
-              React.createElement("input",{
-                ref:urlRef,
-                type:"url",
-                value:url,
-                autoFocus:true,
-                onChange:e=>setUrl(e.target.value),
-                onKeyDown:e=>{ if(e.key==="Enter") doImport(); },
-                placeholder:"https://example.com/artikel",
-                style:{flex:1, background:W.bg2, border:`1px solid ${W.splitBg}`,
-                       borderRadius:"6px", padding:"10px 14px", color:W.fg,
-                       fontSize:"14px", outline:"none",
-                       boxShadow: url ? `0 0 0 2px rgba(138,198,242,0.25)` : "none"}
-              }),
-              React.createElement("button",{
-                onClick:doImport,
-                disabled:busy||!url.trim(),
-                style:{background:W.blue, color:W.bg, border:"none",
-                       borderRadius:"6px", padding:"10px 22px",
-                       fontSize:"14px", fontWeight:"bold", cursor:"pointer",
-                       opacity:busy||!url.trim()?0.5:1, whiteSpace:"nowrap"}
-              }, "→ Importeren")
-            ),
-
-            error && React.createElement("div",{style:{
-              color:W.orange, fontSize:"14px", background:"rgba(229,120,109,0.08)",
-              border:`1px solid rgba(229,120,109,0.25)`, borderRadius:"6px",
-              padding:"10px 16px", maxWidth:"560px", width:"100%"
-            }}, "⚠ "+error)
-          )
-    ),
-
-    // ── Preview & bewerken ───────────────────────────────────────────────────
-    importPreview && !saved && React.createElement("div",{style:{
-      flex:1, display:"flex", gap:0, overflow:"hidden"
-    }},
-
-      // Linker kolom: bewerken
-      React.createElement("div",{style:{
+      !importPreview && React.createElement("div",{style:{
         flex:1, display:"flex", flexDirection:"column",
-        borderRight:`1px solid ${W.splitBg}`, overflow:"hidden"
+        alignItems:"center", justifyContent:"center",
+        padding:"32px 24px", gap:"20px"
       }},
-        // Meta-balk
-        React.createElement("div",{style:{
-          padding:"10px 14px", borderBottom:`1px solid ${W.splitBg}`,
-          background:"rgba(0,0,0,0.15)", flexShrink:0, display:"flex",
-          flexDirection:"column", gap:"6px"
-        }},
-          React.createElement("div",{style:{fontSize:"9px",color:W.fgMuted,
-            letterSpacing:"1px"}},"TITEL"),
-          React.createElement("input",{
-            value:editTitle,
-            onChange:e=>setEditTitle(e.target.value),
-            style:{background:W.bg, border:`1px solid ${W.splitBg}`,
-                   borderRadius:"4px", padding:"6px 10px", color:W.fg,
-                   fontSize:"14px", outline:"none", fontWeight:"bold"}
-          }),
-          React.createElement("div",{style:{fontSize:"9px",color:W.fgMuted,
-            letterSpacing:"1px",marginTop:"4px"}},"TAGS"),
-          React.createElement(TagEditor,{tags, onChange:setTags,
-            allTags:[...(allTags||[]),"import","artikel","onderzoek","referentie"]})
-        ),
-        // Markdown editor met render/broncode toggle
-        React.createElement("div",{style:{
-          flex:1, display:"flex", flexDirection:"column", overflow:"hidden"
-        }},
-          React.createElement("div",{style:{
-            padding:"5px 14px", borderBottom:`1px solid ${W.splitBg}`,
-            background:"rgba(0,0,0,0.12)", flexShrink:0,
-            display:"flex", alignItems:"center", justifyContent:"space-between"
-          }},
-            React.createElement("span",{style:{fontSize:"14px",color:W.fgMuted,letterSpacing:"1px"}},
-              "INHOUD"),
-            React.createElement("div",{style:{display:"flex",gap:"4px"}},
-              React.createElement("button",{
-                onClick:()=>setRenderMode(true),
-                style:{
-                  background: renderMode ? "rgba(138,198,242,0.12)" : "none",
-                  border:`1px solid ${renderMode ? "rgba(138,198,242,0.4)" : W.splitBg}`,
-                  color: renderMode ? W.blue : W.fgMuted,
-                  borderRadius:"4px", padding:"2px 9px", fontSize:"14px",
-                  cursor:"pointer", transition:"all .12s"
-                }
-              },"🎨 weergave"),
-              React.createElement("button",{
-                onClick:()=>setRenderMode(false),
-                style:{
-                  background: !renderMode ? "rgba(138,198,242,0.12)" : "none",
-                  border:`1px solid ${!renderMode ? "rgba(138,198,242,0.4)" : W.splitBg}`,
-                  color: !renderMode ? W.blue : W.fgMuted,
-                  borderRadius:"4px", padding:"2px 9px", fontSize:"14px",
-                  cursor:"pointer", transition:"all .12s"
-                }
-              },"✏ bewerken")
-            )
-          ),
-          renderMode
-            ? React.createElement("div",{
-                className:"mdv",
-                style:{flex:1, overflowY:"auto", padding:"20px 28px",
-                       lineHeight:"1.85", background:W.bg},
-                dangerouslySetInnerHTML:{__html: renderMd(editMd)}
-              })
-            : React.createElement("textarea",{
-                value:editMd,
-                onChange:e=>setEditMd(e.target.value),
-                spellCheck:false,
-                style:{flex:1, background:W.bg, border:"none", padding:"14px 16px",
-                       color:W.fg, fontSize:"14px", lineHeight:"1.7",
-                       outline:"none", resize:"none", fontFamily:"'Hack','Courier New',monospace"}
-              })
-        )
-      ),
-
-      // Rechter kolom: metadata + opslaan
-      React.createElement("div",{style:{
-        width:"260px", flexShrink:0, display:"flex",
-        flexDirection:"column", background:W.bg2,
-        padding:"16px", gap:"14px", overflowY:"auto"
-      }},
-        React.createElement("div",{style:{fontSize:"9px",color:W.fgMuted,
-          letterSpacing:"1px"}},"BRON"),
-        React.createElement("div",{style:{fontSize:"14px",color:W.blue,
-          wordBreak:"break-all",lineHeight:"1.5"}}, importPreview.url),
-
-        // Afbeeldingen selecteren
-        importPreview.images?.length > 0 && React.createElement(React.Fragment, null,
-          React.createElement("div",{style:{borderTop:`1px solid ${W.splitBg}`,paddingTop:"10px"}}),
-          React.createElement("div",{style:{
-            display:"flex", alignItems:"center", justifyContent:"space-between",
-            marginBottom:"8px", flexShrink:0
-          }},
-            React.createElement("div",{style:{fontSize:"9px",color:W.fgMuted,letterSpacing:"1px"}},
-              "🖼 AFBEELDINGEN (" + importPreview.images.length + ")",
-              React.createElement("span",{style:{
-                marginLeft:"6px", fontSize:"9px",
-                color: selectedImages.size>0 ? W.comment : W.fgMuted
-              }}, selectedImages.size>0 ? `${selectedImages.size} geselecteerd` : "geen geselecteerd")
-            ),
-            selectedImages.size > 0 && React.createElement("button",{
-              onClick:()=>setSelectedImages(new Set()),
-              style:{background:"none",border:"none",color:W.fgMuted,
-                     fontSize:"9px",cursor:"pointer",padding:"0",textDecoration:"underline"}
-            },"wis alles")
-          ),
-          // Scrollbaar grid van klikbare thumbnails
-          React.createElement("div",{style:{
-            display:"grid", gridTemplateColumns:"repeat(3, 1fr)", gap:"5px",
-            maxHeight:"260px", overflowY:"auto",
-            scrollbarWidth:"thin", scrollbarColor:`${W.splitBg} transparent`,
-            paddingRight:"2px",
-          }},
-            importPreview.images.map(img => {
-              const sel = selectedImages.has(img.name);
-              return React.createElement("div",{
-                key:img.name,
-                onClick:()=>{
-                  setSelectedImages(prev => {
-                    const next = new Set(prev);
-                    sel ? next.delete(img.name) : next.add(img.name);
-                    return next;
-                  });
-                },
-                title: img.name,
-                style:{
-                  position:"relative", cursor:"pointer",
-                  borderRadius:"5px", overflow:"hidden",
-                  border:`2px solid ${sel ? W.comment : "rgba(255,255,255,0.06)"}`,
-                  boxShadow: sel ? `0 0 0 1px ${W.comment}` : "none",
-                  transition:"border 0.12s, box-shadow 0.12s",
-                  aspectRatio:"1", background:"rgba(0,0,0,0.3)",
-                }
-              },
-                React.createElement("img",{
-                  src:"/api/image/"+encodeURIComponent(img.name),
-                  style:{width:"100%",height:"100%",objectFit:"cover",display:"block"},
-                  onError: e => {
-                    // Toon plaatsnaam als het plaatje niet laadt
-                    e.target.style.display = "none";
-                    e.target.parentNode.style.display = "flex";
-                    e.target.parentNode.style.alignItems = "center";
-                    e.target.parentNode.style.justifyContent = "center";
-                    e.target.parentNode.style.fontSize = "8px";
-                    e.target.parentNode.style.color = W.fgMuted;
-                    e.target.parentNode.style.padding = "4px";
-                    e.target.parentNode.style.wordBreak = "break-all";
-                    e.target.parentNode.innerText = img.name;
-                  }
+        importing
+          ? React.createElement(React.Fragment, null,
+              React.createElement("div",{style:{fontSize:"48px",lineHeight:1,animation:"ai-pulse 1.4s ease-in-out infinite"}},"🌐"),
+              React.createElement("div",{style:{fontSize:"15px",color:W.fgDim,textAlign:"center",lineHeight:"1.7",maxWidth:"460px"}},
+                "Bezig met importeren…",React.createElement("br"),
+                React.createElement("span",{style:{fontSize:"14px",color:W.fgMuted}},url.replace(/^https?:\/\//,"").slice(0,60))),
+              React.createElement("div",{style:{width:"320px",height:"3px",borderRadius:"2px",background:"rgba(255,255,255,0.08)",overflow:"hidden"}},
+                React.createElement("div",{style:{height:"100%",width:"35%",borderRadius:"2px",background:W.blue,animation:"progress-slide 1.4s ease-in-out infinite"}})),
+              React.createElement("div",{style:{fontSize:"14px",color:W.fgMuted,textAlign:"center",maxWidth:"420px",lineHeight:"1.6"}},"Je kunt de app gewoon blijven gebruiken. De import verschijnt hier zodra hij klaar is."),
+              React.createElement("button",{onClick:()=>{setImporting(false);setError(null);},style:{background:"none",border:`1px solid ${W.splitBg}`,color:W.fgMuted,borderRadius:"6px",padding:"6px 16px",fontSize:"14px",cursor:"pointer"}},"× annuleer"))
+          : React.createElement(React.Fragment, null,
+              React.createElement("div",{style:{fontSize:"48px",lineHeight:1}},"🌐"),
+              React.createElement("div",{style:{fontSize:"15px",color:W.fgDim,textAlign:"center",lineHeight:"1.6",maxWidth:"460px"}},
+                "Plak een URL om de inhoud te importeren als Zettelkasten-notitie.",
+                React.createElement("br"),
+                React.createElement("span",{style:{fontSize:"14px",color:W.fgMuted}},"De AI verwijdert navigatie, advertenties en rommel — zoals Instapaper.")),
+              React.createElement("div",{style:{display:"flex",gap:"10px",width:"100%",maxWidth:"560px"}},
+                React.createElement("input",{
+                  ref:urlRef, type:"url", value:url, autoFocus:true,
+                  onChange:e=>setUrl(e.target.value),
+                  onKeyDown:e=>{ if(e.key==="Enter") doImport(); },
+                  placeholder:"https://example.com/artikel",
+                  style:{flex:1,background:W.bg2,border:`1px solid ${W.splitBg}`,borderRadius:"6px",padding:"10px 14px",color:W.fg,fontSize:"14px",outline:"none",boxShadow:url?`0 0 0 2px rgba(138,198,242,0.25)`:"none"}
                 }),
-                sel && React.createElement("div",{style:{
-                  position:"absolute",inset:0,
-                  background:"rgba(159,202,86,0.3)",
-                  display:"flex",alignItems:"center",justifyContent:"center",
-                  fontSize:"20px", fontWeight:"bold",
-                }},"✓"),
-                !sel && React.createElement("div",{style:{
-                  position:"absolute",inset:0,
-                  background:"rgba(0,0,0,0.3)",
-                  transition:"background 0.12s",
-                }})
-              );
-            })
-          ),
-          React.createElement("div",{style:{
-            fontSize:"9px",color:W.fgMuted,marginTop:"5px",lineHeight:"1.5"
-          }}, "Klik om mee te nemen in de notitie. Alle afbeeldingen staan in de Plaatjes tab.")
-        ),
-
-        React.createElement("div",{style:{borderTop:`1px solid ${W.splitBg}`,paddingTop:"12px"}}),
-
-        React.createElement("div",{style:{fontSize:"9px",color:W.fgMuted,
-          letterSpacing:"1px"}},"STATISTIEKEN"),
-        React.createElement("div",{style:{fontSize:"14px",color:W.fgDim,lineHeight:"1.8"}},
-          "📝 "+editMd.length+" tekens",
-          React.createElement("br"),
-          "📄 "+editMd.split("\n").filter(Boolean).length+" regels",
-          React.createElement("br"),
-          "🏷 "+tags.length+" tags"
-        ),
-
-        React.createElement("div",{style:{borderTop:`1px solid ${W.splitBg}`,paddingTop:"12px"}}),
-
-        React.createElement("button",{
-          onClick:saveNote,
-          style:{background:W.comment, color:W.bg, border:"none",
-                 borderRadius:"6px", padding:"10px 0", fontSize:"14px",
-                 fontWeight:"bold", cursor:"pointer", width:"100%"}
-        },"✓ Opslaan als notitie"),
-
-        React.createElement("button",{
-          onClick:reset,
-          style:{background:"none", color:W.fgMuted,
-                 border:`1px solid ${W.splitBg}`,
-                 borderRadius:"6px", padding:"8px 0", fontSize:"14px",
-                 cursor:"pointer", width:"100%"}
-        },"✕ Annuleren")
+                React.createElement("button",{
+                  onClick:doImport, disabled:busy||!url.trim(),
+                  style:{background:W.blue,color:W.bg,border:"none",borderRadius:"6px",padding:"10px 22px",fontSize:"14px",fontWeight:"bold",cursor:"pointer",opacity:busy||!url.trim()?0.5:1,whiteSpace:"nowrap"}
+                },"→ Importeren")),
+              error && React.createElement("div",{style:{color:W.orange,fontSize:"14px",background:"rgba(229,120,109,0.08)",border:`1px solid rgba(229,120,109,0.25)`,borderRadius:"6px",padding:"10px 16px",maxWidth:"560px",width:"100%"}},"⚠ "+error))
       )
     ),
 
-    // ── Opgeslagen bevestiging ────────────────────────────────────────────────
-    saved && React.createElement("div",{style:{
-      flex:1, display:"flex", flexDirection:"column",
-      alignItems:"center", justifyContent:"center",
-      gap:"16px", color:W.fgMuted
-    }},
-      React.createElement("div",{style:{fontSize:"48px"}},"✓"),
-      React.createElement("div",{style:{fontSize:"16px",color:W.comment,fontWeight:"bold"}},
-        "Opgeslagen als notitie"),
-      React.createElement("div",{style:{fontSize:"14px",color:W.fgDim}},
-        editTitle),
-      React.createElement("div",{style:{display:"flex",gap:"10px",marginTop:"8px"}},
+    // ══════════════════════════════════════════════════════════════════════════
+    // Tab: Thunderbird/Gmail inbox
+    // ══════════════════════════════════════════════════════════════════════════
+    importMode === "mail" && React.createElement("div",{
+      style:{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}
+    },
+
+      // Sub-toolbar: laden + pad
+      React.createElement("div",{style:{
+        background:W.bg2,borderBottom:`1px solid ${W.splitBg}`,
+        padding:"8px 14px",display:"flex",alignItems:"center",
+        gap:"8px",flexShrink:0,flexWrap:"wrap"
+      }},
+        React.createElement("span",{style:{fontSize:"14px",color:W.fgMuted}},"Thunderbird inbox:"),
+        React.createElement("input",{
+          value:mailPath,
+          onChange:e=>setMailPath(e.target.value),
+          placeholder:"Leeg = automatisch zoeken  ·  of: /Users/naam/Library/Thunderbird/…",
+          style:{flex:1,minWidth:"260px",background:W.bg3,border:`1px solid ${W.splitBg}`,
+                 borderRadius:"4px",color:W.fg,padding:"5px 10px",
+                 fontSize:"13px",outline:"none"}
+        }),
         React.createElement("button",{
-          onClick:reset,
-          style:{background:W.blue,color:W.bg,border:"none",borderRadius:"6px",
-                 padding:"8px 20px",fontSize:"14px",fontWeight:"bold",cursor:"pointer"}
-        },"+ nieuw importeren")
+          onClick:loadMailbox,
+          disabled:mailLoading,
+          style:{background:W.blue,color:W.bg,border:"none",borderRadius:"5px",
+                 padding:"6px 16px",fontSize:"14px",fontWeight:"bold",cursor:"pointer",
+                 opacity:mailLoading?0.5:1,whiteSpace:"nowrap"}
+        }, mailLoading ? "⏳ Laden…" : "📂 Inbox laden"),
+        mailList.length > 0 && React.createElement(React.Fragment, null,
+          React.createElement("span",{style:{fontSize:"13px",color:W.fgMuted}},
+            mailList.length+" mails ·"),
+          React.createElement("button",{
+            onClick:selectAllMails,
+            style:{background:"none",border:`1px solid ${W.splitBg}`,color:W.fgDim,
+                   borderRadius:"4px",padding:"3px 8px",fontSize:"13px",cursor:"pointer"}
+          },"✓ alles"),
+          React.createElement("button",{
+            onClick:deselectAll,
+            style:{background:"none",border:`1px solid ${W.splitBg}`,color:W.fgDim,
+                   borderRadius:"4px",padding:"3px 8px",fontSize:"13px",cursor:"pointer"}
+          },"× geen"),
+          React.createElement("button",{
+            onClick:doMailImport,
+            disabled:mailImporting||mailSelected.size===0,
+            style:{background:mailSelected.size>0?"rgba(159,202,86,0.85)":"rgba(159,202,86,0.2)",
+                   color:W.bg,border:"none",borderRadius:"5px",
+                   padding:"6px 18px",fontSize:"14px",fontWeight:"bold",cursor:"pointer",
+                   opacity:mailSelected.size===0||mailImporting?0.5:1,whiteSpace:"nowrap",
+                   transition:"all 0.15s"}
+          }, mailImporting ? `⏳ ${mailImportProg||"…"} importeren` : `📥 Importeer ${mailSelected.size||""} ${mailSelected.size===1?"mail":"mails"}`)
+        )
+      ),
+
+      // Foutmelding
+      mailError && React.createElement("div",{style:{
+        padding:"10px 16px",color:W.orange,background:"rgba(229,120,109,0.08)",
+        borderBottom:`1px solid rgba(229,120,109,0.2)`,fontSize:"14px",flexShrink:0
+      }},
+        "⚠ ",mailError,
+        React.createElement("br"),
+        React.createElement("span",{style:{fontSize:"13px",color:W.fgMuted}},
+          "Tip: voer het pad naar je Thunderbird profiel in, bijv: ",
+          React.createElement("code",{style:{color:W.comment}},"~/.thunderbird/xxxx.default/Mail/Local Folders/Inbox"))
+      ),
+
+      // Import-resultaten
+      mailResults.length > 0 && React.createElement("div",{style:{
+        padding:"8px 14px",background:"rgba(159,202,86,0.06)",
+        borderBottom:`1px solid rgba(159,202,86,0.15)`,
+        display:"flex",flexWrap:"wrap",gap:"6px",flexShrink:0
+      }},
+        React.createElement("span",{style:{fontSize:"13px",color:W.comment,fontWeight:"bold"}},
+          `✓ ${mailResults.filter(r=>r.ok).length}/${mailResults.length} geïmporteerd:`),
+        mailResults.map((r,i)=>React.createElement("span",{
+          key:i,
+          style:{fontSize:"12px",padding:"2px 8px",borderRadius:"10px",
+                 background:r.ok?"rgba(159,202,86,0.15)":"rgba(229,120,109,0.15)",
+                 color:r.ok?W.comment:W.orange}
+        }, r.ok?"✓ "+(r.title||"").slice(0,30):"✗ "+(r.error||"").slice(0,30)))
+      ),
+
+      // Mail-lijst
+      React.createElement("div",{style:{flex:1,overflowY:"auto"}},
+        mailList.length === 0 && !mailLoading && !mailError &&
+          React.createElement("div",{style:{
+            display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
+            height:"100%",gap:"14px",color:W.fgMuted,padding:"32px"
+          }},
+            React.createElement("div",{style:{fontSize:"48px"}},"📬"),
+            React.createElement("div",{style:{fontSize:"15px",textAlign:"center",maxWidth:"420px",lineHeight:"1.7"}},
+              "Klik op 'Inbox laden' om je Thunderbird inbox te lezen.",
+              React.createElement("br"),
+              React.createElement("span",{style:{fontSize:"13px",color:W.fgMuted}},
+                "Alleen mails mét URLs worden getoond. Vink de interessante aan en klik 'Importeer'.")
+          )
+        ),
+
+        mailList.map(mail => {
+          const isSel = mailSelected.has(mail.id);
+          const isExp = mailExpanded === mail.id;
+          return React.createElement("div",{
+            key:mail.id,
+            style:{
+              borderBottom:`1px solid ${W.splitBg}`,
+              background:isSel?"rgba(159,202,86,0.08)":"transparent",
+              transition:"background 0.1s",
+            }
+          },
+            // Mail-rij
+            React.createElement("div",{
+              style:{display:"flex",alignItems:"flex-start",gap:"10px",
+                     padding:"10px 14px",cursor:"pointer"},
+              onClick:()=>toggleMailSelect(mail.id)
+            },
+              // Checkbox
+              React.createElement("div",{
+                style:{width:"18px",height:"18px",borderRadius:"3px",flexShrink:0,marginTop:"1px",
+                       border:`2px solid ${isSel?W.comment:W.splitBg}`,
+                       background:isSel?"rgba(159,202,86,0.85)":"transparent",
+                       display:"flex",alignItems:"center",justifyContent:"center",
+                       color:W.bg,fontSize:"12px",transition:"all 0.1s"}
+              }, isSel&&"✓"),
+              // Mail-info
+              React.createElement("div",{style:{flex:1,minWidth:0}},
+                React.createElement("div",{style:{
+                  display:"flex",alignItems:"baseline",gap:"8px",flexWrap:"wrap"
+                }},
+                  React.createElement("span",{style:{
+                    fontSize:"14px",fontWeight:isSel?"bold":"normal",
+                    color:isSel?W.statusFg:W.fg,
+                    overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:"320px"
+                  }},mail.subject),
+                  React.createElement("span",{style:{fontSize:"13px",color:W.fgMuted,flexShrink:0}},
+                    mail.date ? new Date(mail.date).toLocaleDateString("nl",{day:"2-digit",month:"short"}) : "")
+                ),
+                React.createElement("div",{style:{fontSize:"13px",color:W.fgMuted,marginTop:"2px"}},
+                  mail.from),
+                // URLs als chips
+                React.createElement("div",{style:{display:"flex",flexWrap:"wrap",gap:"4px",marginTop:"6px"}},
+                  (mail.urls||[]).map((u,i)=>{
+                    let domain="";
+                    try{domain=new URL(u).hostname.replace("www.","");}catch{}
+                    return React.createElement("span",{
+                      key:i,
+                      style:{fontSize:"12px",background:"rgba(138,198,242,0.1)",
+                             border:"1px solid rgba(138,198,242,0.25)",
+                             borderRadius:"10px",padding:"1px 8px",color:"#8ac6f2",
+                             maxWidth:"220px",overflow:"hidden",textOverflow:"ellipsis",
+                             whiteSpace:"nowrap",cursor:"default"}
+                    },domain||u.slice(0,40));
+                  })
+                )
+              ),
+              // Uitklap-knop
+              React.createElement("button",{
+                onClick:e=>{e.stopPropagation();setMailExpanded(isExp?null:mail.id);},
+                style:{background:"none",border:"none",color:W.fgMuted,cursor:"pointer",
+                       fontSize:"14px",padding:"2px 6px",flexShrink:0}
+              }, isExp?"▲":"▼")
+            ),
+            // Uitgeklapte snippet + volledige URL-lijst
+            isExp && React.createElement("div",{style:{
+              padding:"0 14px 12px 42px",fontSize:"13px",color:W.fgDim,lineHeight:"1.6"
+            }},
+              mail.snippet && React.createElement("div",{style:{
+                fontStyle:"italic",color:W.fgMuted,marginBottom:"8px",
+                borderLeft:`3px solid ${W.splitBg}`,paddingLeft:"10px"
+              }},mail.snippet),
+              React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:"3px"}},
+                (mail.urls||[]).map((u,i)=>React.createElement("a",{
+                  key:i, href:u, target:"_blank", rel:"noopener",
+                  style:{color:"#8ac6f2",fontSize:"13px",
+                         overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",
+                         display:"block",maxWidth:"500px"}
+                },u))
+              )
+            )
+          );
+        })
       )
     )
   );
 };
+
 
 
 // ── Mindmap ────────────────────────────────────────────────────────────────────
@@ -9100,8 +9111,8 @@ const App = () => {
                    display:"flex",alignItems:"center",gap:"6px"}
           },
             React.createElement("kbd",{style:{background:W.bg3,border:`1px solid ${W.splitBg}`,
-              borderRadius:"3px",padding:"1px 5px",fontSize:"10px",color:W.fgDim}},"Ctrl+W"),
-            React.createElement("span",{style:{color:W.fgMuted}},"focus wisselen"),
+              borderRadius:"3px",padding:"1px 5px",fontSize:"10px",color:W.fgDim}},"^H/^L"),
+            React.createElement("span",{style:{color:W.fgMuted}},"← →"),
             React.createElement("button",{
               onClick:()=>{setSplitMode(false);setSplitFocus("left");},
               style:{background:"none",border:"none",color:W.orange,cursor:"pointer",
@@ -9157,10 +9168,12 @@ const App = () => {
           return React.createElement("div",{
             style:{flex:1,display:"flex",overflow:"hidden"},
             onKeyDown: e => {
-              // Ctrl+W + h/l/←/→ wisselen focus
-              if(e.ctrlKey && e.key==="w") {
-                e.preventDefault();
-                setSplitFocus(f => f==="left"?"right":"left");
+              // Ctrl+H/K → links, Ctrl+L/J → rechts (conform vimrc nnoremap <C-H> <C-W><C-H>)
+              if(e.ctrlKey && (e.key==="h"||e.key==="k"||e.key==="H"||e.key==="K")) {
+                e.preventDefault(); setSplitFocus("left");
+              }
+              if(e.ctrlKey && (e.key==="l"||e.key==="j"||e.key==="L"||e.key==="J")) {
+                e.preventDefault(); setSplitFocus("right");
               }
             },
             tabIndex:0
