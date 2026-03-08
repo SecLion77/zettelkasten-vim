@@ -466,12 +466,20 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
   const [mode,       setModeState] = useState("INSERT");
   const [cmdBuf,     setCmdBuf]    = useState("");
   const [statusMsg,  setStatus]    = useState("");
-  const [spellLang,  setSpell]     = useState("auto");  // altijd aan
-  const spellCycle = ["auto","en","nl","off"];
+  const [spellLang,  setSpell]     = useState("nl");    // standaard Nederlands
+  const spellCycle = ["nl","en","off"];
 
   // Completion popup state
   const [compList,   setCompList]  = useState([]);   // [{word, source}]
-  const [compIdx,    setCompIdx]   = useState(0);    // geselecteerde index
+  const [compIdx,    setCompIdx]   = useState(0);
+
+  // Scroll geselecteerd completion-item in beeld na pijltjesnavigatie
+  React.useEffect(() => {
+    const list = document.querySelector("[data-comp-list]");
+    if (!list) return;
+    const items = list.querySelectorAll("[data-comp-item]");
+    if (items[compIdx]) items[compIdx].scrollIntoView({ block: "nearest" });
+  }, [compIdx]);    // geselecteerde index
   const [compOpen,   setCompOpen]  = useState(false);
   const [compPos,    setCompPos]   = useState({x:0, y:0}); // popup positie in px
   const [aiLoading,  setAiLoading] = useState(false);
@@ -1386,6 +1394,27 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
     }
 
     // ────────────────────────── NORMAL ──────────────────────────────────────
+
+    // Completion popup open? Dan pijltjes + Tab/Enter onderscheppen
+    if (compRef.current.open) {
+      if (e.key === "Escape") {
+        e.preventDefault(); closeCompletion(); draw(); return;
+      }
+      if (e.key === "ArrowDown" || e.key === "j") {
+        e.preventDefault(); e.stopPropagation();
+        const ni = Math.min(compRef.current.idx + 1, compRef.current.list.length - 1);
+        compRef.current.idx = ni; setCompIdx(ni); draw(); return;
+      }
+      if (e.key === "ArrowUp" || e.key === "k") {
+        e.preventDefault(); e.stopPropagation();
+        const ni = Math.max(compRef.current.idx - 1, 0);
+        compRef.current.idx = ni; setCompIdx(ni); draw(); return;
+      }
+      if (e.key === "Tab" || e.key === "Enter") {
+        e.preventDefault(); acceptCompletion(s); draw(); return;
+      }
+    }
+
     e.preventDefault();
     const {row,col} = s.cur;
     const line = s.lines[row];
@@ -1835,6 +1864,7 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
 
       // ── Completion popup ──────────────────────────────────────────────────
       compOpen && compList.length > 0 && React.createElement("div", {
+        "data-comp-list": "1",
         style: {
           position: "fixed",
           left: compPos.x + "px",
@@ -1846,7 +1876,8 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
           boxShadow: "0 4px 20px rgba(0,0,0,0.5)",
           minWidth: "200px",
           maxWidth: "340px",
-          overflow: "hidden",
+          overflowY: "auto",
+          maxHeight: "240px",
           pointerEvents: "none",  // toetsafvang blijft bij het canvas
         }
       },
@@ -1867,6 +1898,7 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
         ...compList.map((item, idx) =>
           React.createElement("div", {
             key: idx,
+            "data-comp-item": idx,
             style: {
               padding: "5px 12px",
               background: idx === compIdx ? W.blue+"22" : "transparent",
