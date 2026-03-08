@@ -475,6 +475,11 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
   const [compOpen,   setCompOpen]  = useState(false);
   const [compPos,    setCompPos]   = useState({x:0, y:0}); // popup positie in px
   const [aiLoading,  setAiLoading] = useState(false);
+
+  // AI taalverbetering state
+  const [aiImprove,    setAiImprove]    = useState(null);   // {original, improved} of null
+  const [aiImproving,  setAiImproving]  = useState(false);  // bezig met verbeteren
+  const [aiImproveLang,setAiImproveLang]= useState("auto"); // "auto"|"nl"|"en"
   const compRef    = useRef({list:[], idx:0, open:false});
 
   // Spell check state — set van {row, col, len} fout-posities
@@ -1026,6 +1031,47 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
     }
     setAiLoading(false);
   }, [llmModel]);
+
+  // ── AI taalverbetering ────────────────────────────────────────────────────
+  const triggerImprove = React.useCallback(async () => {
+    if (!llmModel) { setStatus("Geen AI model — stel in via Notebook tab"); return; }
+    const s = S.current;
+    const text = s.lines.join("\n").trim();
+    if (!text) { setStatus("Geen tekst om te verbeteren"); return; }
+    const lang = aiImproveLang === "auto"
+      ? (/\b(de|het|een|en|van|in|is|dat|dit|met|ik|je|we)\b/i.test(text) ? "nl" : "en")
+      : aiImproveLang;
+    setAiImproving(true);
+    setStatus("\u{1F916} AI taalverbetering\u2026");
+    try {
+      const resp = await fetch("/api/llm/improve-text", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({ text, lang, model: llmModel }),
+      });
+      const data = await resp.json();
+      if (data.improved) {
+        setAiImprove({ original: text, improved: data.improved });
+        setStatus("\u2713 AI suggestie klaar \u2014 bekijk onderaan");
+      } else {
+        setStatus("AI fout: " + (data.error || "onbekend"));
+      }
+    } catch(e) {
+      setStatus("AI fout: " + e.message.slice(0, 50));
+    }
+    setAiImproving(false);
+  }, [llmModel, aiImproveLang]);
+
+  const acceptImprove = React.useCallback(() => {
+    if (!aiImprove) return;
+    const s = S.current;
+    pushUndo(s);
+    s.lines = aiImprove.improved.split("\n");
+    clamp(); emit(s); draw();
+    setAiImprove(null);
+    setStatus("\u2713 Tekst vervangen door AI-verbetering");
+  }, [aiImprove]);
+
 
   // ── Keyboard handler — ALLES hier, geen browser-escape meer ──────────────
   const handleKey = useCallback((e) => {
