@@ -21,6 +21,7 @@ const NoteEditor = ({
   showLinkMenu = false,
   onToggleLinkMenu,
   linkMenuContent = null,
+  onSplitCmd = null,  // doorgeven aan VimEditor
 }) => {
   const { useState, useRef, useEffect } = React;
 
@@ -151,6 +152,7 @@ const NoteEditor = ({
       },
       llmModel,
       allNotesText,
+      onSplitCmd,
     })
   );
 };

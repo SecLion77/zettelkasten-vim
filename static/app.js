@@ -458,7 +458,10 @@ const CompletionEngine = (() => {
 
 const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange,
                     allTags=[], goyoMode=false, onToggleGoyo, onEditorRef, onModeChange=()=>{},
-                    llmModel="", allNotesText=""}) => {
+                    llmModel="", allNotesText="",
+                    onSplitCmd=null,    // (cmd) => void  — :vs/:sp/Ctrl+W-navigatie
+                    onPasteBlock=null,  // (block) => void — plak geciteerd blok in editor
+                    }) => {
 
   const { useState, useEffect, useRef, useCallback } = React;
 
@@ -776,8 +779,15 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
       if (wm) { SpellEngine.learnWord(wm[1]); scheduleSpellCheck(); setStatus(`geleerd: ${wm[1]}`); }
       return;
     }
+    // ── Split-navigatie (delegeer aan parent via onSplitCmd) ─────────────────
+    if (cmd==="vs" || cmd==="vsp")   { onSplitCmd?.("vs"); setStatus("split: verticaal"); return; }
+    if (cmd==="sp" || cmd==="split") { onSplitCmd?.("sp"); setStatus("split: horizontaal"); return; }
+    if (cmd==="q" || cmd==="close")  { onSplitCmd?.("close"); return; }
+    if (cmd==="only")                { onSplitCmd?.("only"); setStatus("split gesloten"); return; }
+    if (/^e\s+/.test(cmd))           { onSplitCmd?.("edit:"+cmd.slice(2).trim()); return; }
+    if (/^vsp\s+/.test(cmd))         { onSplitCmd?.("vs:"+cmd.slice(4).trim()); return; }
     setStatus(`onbekend: :${cmd}`);
-  }, [noteTags, onTagsChange, onSave, onEscape, onToggleGoyo, spellLang]);
+  }, [noteTags, onTagsChange, onSave, onEscape, onToggleGoyo, spellLang, onSplitCmd]);
 
   // ── Spell check engine ────────────────────────────────────────────────────
   // Detecteert taal automatisch op basis van tekenfrequentie.
@@ -1507,6 +1517,12 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
         break;
       case " ": setStatus(""); buildMatches(s,""); break; // nohlsearch
       case "Escape": setStatus(""); break;
+      case "w":
+        if (e.ctrlKey) { e.preventDefault(); onSplitCmd?.("focus-right"); return; }
+        break;
+      case "W":
+        if (e.ctrlKey) { e.preventDefault(); onSplitCmd?.("focus-left"); return; }
+        break;
     }
 
     clamp();
@@ -2598,7 +2614,7 @@ const TextLayerMount = ({textLayer, width, height}) => {
 };
 
 // ── PDF Viewer ─────────────────────────────────────────────────────────────────
-const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, onAutoSummarize, onDeletePdf}) => {
+const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, onAutoSummarize, onDeletePdf, onPasteToNote=null}) => {
   const [pdfDoc,     setPdfDoc]     = useState(null);
   const [pdfFile,    setPdfFile]    = useState(null);
   const [pageNum,    setPageNum]    = useState(1);   // huidige zichtbare pagina (voor annotaties)
@@ -3198,6 +3214,22 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
             ),
             React.createElement("div",{style:{display:"flex",gap:"8px"}},
               React.createElement("button",{onClick:saveHighlight,style:{background:activeColor.border,color:W.bg,border:"none",borderRadius:"4px",padding:"6px 16px",fontSize:"14px",cursor:"pointer",fontWeight:"bold"}},"✓ Opslaan"),
+              onPasteToNote && React.createElement("button",{
+                onClick:()=>{
+                  onPasteToNote({
+                    text: pendingSel,
+                    source: pdfFile?.name || "PDF",
+                    page: pageNum,
+                    url: null,
+                  });
+                  setPendingSel(null);
+                  window.getSelection()?.removeAllRanges();
+                },
+                title:"Plak geselecteerde tekst met bronvermelding in open notitie",
+                style:{background:"rgba(159,202,86,0.15)",color:W.comment,
+                       border:"1px solid rgba(159,202,86,0.3)",borderRadius:"4px",
+                       padding:"6px 12px",fontSize:"14px",cursor:"pointer"}
+              },"📋 → notitie"),
               React.createElement("button",{onClick:()=>{setPendingSel(null);window.getSelection()?.removeAllRanges();},style:{background:"none",color:W.fgMuted,border:`1px solid ${W.splitBg}`,borderRadius:"4px",padding:"6px 12px",fontSize:"14px",cursor:"pointer"}},"Esc")
             )
           )
@@ -3378,13 +3410,14 @@ const useWindowSize = () => {
 
 const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote, setAiStatus,
                         notes, onDeleteNote, imgNotes, setImgNotes, allTags,
-                        addJob, updateJob}) => {
+                        addJob, updateJob, onPasteToNote=null}) => {
   const { useState, useRef, useCallback, useEffect, useMemo } = React;
 
   const [busy,          setBusy]         = useState(null);
   const [descriptions,  setDescs]        = useState({});
   const [lightbox,      setLightbox]     = useState(null);
   const [dragOver,      setDragOver]     = useState(false);
+  const [descFilter,    setDescFilter]   = useState("");  // zoek in beschrijvingen
 
   // Annotatie state — identiek aan PDF
   const [annotations,   setAnnotations]  = useState(imgNotes||[]);
@@ -3545,7 +3578,14 @@ const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote, setAiStatu
 
   const onDrop = (e) => { e.preventDefault(); setDragOver(false); upload(e.dataTransfer.files); };
 
-  const imgs = serverImages || [];
+  // Filter op naam OF beschrijving
+  const imgs = (serverImages || []).filter(img => {
+    if (!descFilter.trim()) return true;
+    const q = descFilter.toLowerCase();
+    if (img.name.toLowerCase().includes(q)) return true;
+    const desc = descriptions[img.name] || "";
+    return desc.toLowerCase().includes(q);
+  });
 
   return React.createElement("div", {
     style:{display:"flex",height:"100%",overflow:"hidden",position:"relative"}
@@ -3576,6 +3616,15 @@ const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote, setAiStatu
                  borderRadius:"4px",padding:"2px 8px",fontSize:"14px",cursor:"pointer"}
         },"× sluiten"),
         React.createElement("div",{style:{flex:1}}),
+        // Zoekbalk: naam + beschrijving
+        React.createElement("input",{
+          value: descFilter,
+          onChange: e => setDescFilter(e.target.value),
+          placeholder: "zoek naam of beschrijving…",
+          style:{background:W.bg3,border:`1px solid ${descFilter?W.blue:W.splitBg}`,
+                 borderRadius:"5px",color:W.fg,padding:"4px 10px",fontSize:"13px",
+                 width:"200px",outline:"none"}
+        }),
         React.createElement("span",{style:{fontSize:"14px",color:W.fgMuted}},
           activeImg ? "klik op afbeelding om een annotatie te plaatsen" : "klik ✏ om te annoteren"),
         React.createElement("button",{
@@ -3816,6 +3865,19 @@ const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote, setAiStatu
                            border:"1px solid rgba(138,198,242,0.2)",color:"#a8d8f0",
                            borderRadius:"4px",padding:"4px",fontSize:"14px",cursor:"pointer"}
                   },"📝"),
+                  // Plakken in open notitie (split-modus)
+                  onPasteToNote && React.createElement("button",{
+                    onClick:()=>onPasteToNote({
+                      text: (desc ? `![[img:${img.name}]]\n\n${desc}` : `![[img:${img.name}]]`),
+                      source: img.name,
+                      page: null,
+                      url: `/api/image/${encodeURIComponent(img.name)}`,
+                    }),
+                    title:"Plak afbeelding + beschrijving in open notitie",
+                    style:{flex:1,background:"rgba(159,202,86,0.08)",
+                           border:"1px solid rgba(159,202,86,0.25)",color:W.comment,
+                           borderRadius:"4px",padding:"4px",fontSize:"14px",cursor:"pointer"}
+                  },"📋"),
                   React.createElement("button",{
                     onClick:()=>deleteImg(img.name),
                     style:{background:"rgba(229,120,109,0.08)",
@@ -7995,7 +8057,7 @@ const MarkdownWithMermaid = ({ content, notes, renderMode, isMobile, onClick, on
 // ── FuzzySearch ────────────────────────────────────────────────────────────────
 // FZF-stijl zoeken over notities én vault-PDFs (per pagina + regelnummer).
 // Resultaten zijn inline bewerkbaar en opslaan als Zettelkasten notitie.
-const FuzzySearch = ({ notes, allTags, onOpenNote, onAddNote, onUpdateNote }) => {
+const FuzzySearch = ({ notes, allTags, onOpenNote, onAddNote, onUpdateNote, onPasteToNote=null }) => {
   const { useState, useEffect, useRef, useCallback, useMemo } = React;
 
   const [query,      setQuery]      = useState("");
@@ -8326,6 +8388,23 @@ const FuzzySearch = ({ notes, allTags, onOpenNote, onAddNote, onUpdateNote }) =>
             : `📝 Notitie${r.line > 1 ? `  ·  regel ${r.line}` : ""}`
         ),
 
+        // Plakken in open notitie (alleen in split-modus zichtbaar)
+        onPasteToNote && React.createElement("button", {
+          onClick: () => {
+            const text = r.excerpt || es.content || "";
+            onPasteToNote({
+              text,
+              source: r.type === "pdf" ? r.source : (r.title || "Notitie"),
+              page:   r.type === "pdf" ? r.page : null,
+              url:    null,
+            });
+          },
+          title: "Plak fragment met bronvermelding in open notitie",
+          style: { background:"rgba(138,198,242,0.15)", border:`1px solid rgba(138,198,242,0.4)`,
+                   borderRadius:"5px", color:"#8ac6f2", fontSize:"12px", cursor:"pointer",
+                   padding:"4px 12px", marginBottom:"10px", display:"flex", alignItems:"center", gap:"6px" }
+        }, "📋 Plak in notitie"),
+
         // Excerpt (alleen-lezen context)
         r.excerpt && React.createElement(React.Fragment, null,
           React.createElement("div", { style: css.fieldLabel }, "Gevonden fragment"),
@@ -8496,8 +8575,41 @@ const App = () => {
   // ── Notities-state (gedelegeerd aan NoteStore + NotesTab) ───────────────────
   const [notes,    setNotes]   = useState([]);   // gespiegeld vanuit NoteStore
   const [goyoMode, setGoyoMode] = useState(false); // App-level: beïnvloedt topbar
-  const [splitMode, setSplitMode] = useState(false);
-  const [splitTab,  setSplitTab]  = useState("pdf");
+  const [splitMode,  setSplitMode]  = useState(false);
+  const [splitTab,   setSplitTab]   = useState("pdf");
+  const [splitFocus, setSplitFocus] = useState("left");  // "left" | "right"
+  // Queue van blokken die in de linker notitie geplakt moeten worden
+  // {text, source, page, url} — afkomstig van PDF/search/images rechter paneel
+  const [pasteQueue, setPasteQueue] = useState([]);
+
+  // Verwerk VIM split-commando's vanuit VimEditor
+  const handleSplitCmd = React.useCallback((cmd) => {
+    if (cmd === "vs") { setSplitMode(true); setSplitFocus("right"); }
+    else if (cmd === "close" || cmd === "only") { setSplitMode(false); setSplitFocus("left"); }
+    else if (cmd === "focus-right") { if (splitMode) setSplitFocus("right"); }
+    else if (cmd === "focus-left")  { setSplitFocus("left"); }
+    else if (cmd.startsWith("edit:")) {
+      // :e notitienaam — open notitie in huidige focus
+      const title = cmd.slice(5).trim();
+      const found = notes.find(n => n.title?.toLowerCase() === title.toLowerCase());
+      if (found) setSelId(found.id);
+    }
+  }, [splitMode, notes]);
+
+  // Plak een blok (uit rechter paneel) in de actieve notitie links
+  const handlePasteToNote = React.useCallback((block) => {
+    // block = {text, source, page, url}
+    const lines = [];
+    lines.push("");
+    lines.push("> [!cite]");
+    if (block.source) lines.push(`> **Bron:** ${block.source}`);
+    if (block.page)   lines.push(`> **Pagina:** ${block.page}`);
+    if (block.url)    lines.push(`> **URL:** ${block.url}`);
+    lines.push(">");
+    block.text.split("\n").forEach(l => lines.push("> " + l));
+    lines.push("");
+    setPasteQueue(q => [...q, lines.join("\n")]);
+  }, []);
   const [selId,    setSelId]   = useState(null);
   const [tab,      setTab]     = useState("notes");
   const [pdfNotes,     setPdfNotes]    = useState([]);
@@ -8640,6 +8752,9 @@ const App = () => {
     onSidebarToggle: open => setSidebarOpen(typeof open === "boolean" ? open : p => !p),
     goyoMode,
     onGoyoChange:   setGoyoMode,
+    onSplitCmd:     handleSplitCmd,
+    pasteQueue,
+    onPasteConsumed: () => setPasteQueue(q => q.slice(1)),
   });
 
   // Houd sidebarOverlay hier — het is App-layout, niet notitie-logica
@@ -8974,24 +9089,110 @@ const App = () => {
         // Split-screen modus
         if(splitMode && isDesktop) {
           const splitTabs = tabs.filter(t=>t.id!=="notes");
-          return React.createElement("div",{style:{flex:1,display:"flex",overflow:"hidden"}},
-            React.createElement("div",{style:{flex:1,display:"flex",overflow:"hidden",
-              borderRight:`2px solid ${W.splitBg}`,minWidth:0}}, notesTabEl),
-            React.createElement("div",{style:{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",minWidth:0}},
+          const focusL = splitFocus==="left";
+          const focusBorderL = focusL ? `2px solid ${W.blue}` : `2px solid ${W.splitBg}`;
+          const focusBorderR = !focusL ? `2px solid ${W.blue}` : `2px solid ${W.splitBg}`;
+
+          // Ctrl+W l/h schakelen via globale keydown
+          const splitKeyHint = React.createElement("div",{
+            style:{fontSize:"11px",color:W.fgMuted,padding:"0 10px",
+                   borderLeft:`1px solid ${W.splitBg}`,marginLeft:"auto",flexShrink:0,
+                   display:"flex",alignItems:"center",gap:"6px"}
+          },
+            React.createElement("kbd",{style:{background:W.bg3,border:`1px solid ${W.splitBg}`,
+              borderRadius:"3px",padding:"1px 5px",fontSize:"10px",color:W.fgDim}},"Ctrl+W"),
+            React.createElement("span",{style:{color:W.fgMuted}},"focus wisselen"),
+            React.createElement("button",{
+              onClick:()=>{setSplitMode(false);setSplitFocus("left");},
+              style:{background:"none",border:"none",color:W.orange,cursor:"pointer",
+                     fontSize:"16px",padding:"0 4px",marginLeft:"4px",lineHeight:1}
+            },"✕")
+          );
+
+          // renderRightTab — zelfde als renderTab maar met onPasteToNote
+          const renderRightTab = (t) => {
+            if(t==="pdf") return React.createElement("div",{style:{flex:1,overflow:"hidden"}},
+              React.createElement(PDFViewer,{pdfNotes,setPdfNotes,allTags,serverPdfs,
+                onPasteToNote: handlePasteToNote,
+                onRefreshPdfs:refreshPdfs,
+                onDeletePdf:async(fname)=>{
+                  const stem=fname.replace(/\.pdf$/i,"");
+                  const linked=notes.filter(n=>n.tags?.includes("samenvatting")&&(n.title?.includes(stem)||n.content?.includes(fname)));
+                  for(const n of linked){ await NoteStore.remove(n.id); }
+                  if(linked.length) setNotes([...NoteStore.getAll()]);
+                  const remaining = AnnotationStore.getAll().filter(a => a.file !== fname);
+                  await AnnotationStore.setAll(remaining);
+                },
+                onAutoSummarize:(fname)=>{
+                  const stem=fname.replace(/\.pdf$/i,"");
+                  const jid=genId();
+                  addJob({id:jid,type:"summarize",label:"🧠 Samenvatten: "+stem.slice(0,26)+"…"});
+                  (async()=>{
+                    try{
+                      const res=await PDFService.summarizePdf(fname,llmModel);
+                      if(res?.ok&&res.summary){
+                        const note={id:genId(),title:"Samenvatting — "+stem,
+                          content:"*Automatisch gegenereerd door Notebook LLM*\n\n"+res.summary+"\n\n---\n📄 **Bron:** [[pdf:"+fname+"]]",
+                          tags:["samenvatting","pdf"],created:new Date().toISOString(),modified:new Date().toISOString()};
+                        await NoteStore.save(note); setNotes([...NoteStore.getAll()]);
+                        updateJob(jid,{status:"done",result:"Opgeslagen"});
+                      } else throw new Error(res?.error||"mislukt");
+                    } catch(e){ updateJob(jid,{status:"error",error:e.message}); }
+                  })();
+                }}));
+            if(t==="images") return React.createElement("div",{style:{flex:1,overflow:"hidden"}},
+              React.createElement(ImagesGallery,{serverImages,onRefresh:refreshImages,llmModel,setAiStatus,notes,imgNotes,setImgNotes,allTags,
+                addJob,updateJob,
+                onPasteToNote: handlePasteToNote,
+                onDeleteNote: id=>{ NoteStore.remove(id).then(()=>setNotes([...NoteStore.getAll()])); },
+                onAddNote:async(note)=>{ await NoteStore.save(note); setNotes([...NoteStore.getAll()]); }}));
+            if(t==="search") return React.createElement("div",{style:{flex:1,overflow:"hidden"}},
+              React.createElement(FuzzySearch,{notes,allTags,
+                onPasteToNote: handlePasteToNote,
+                onOpenNote:(id)=>{setSelId(id);setTab("notes");},
+                onAddNote:async(note)=>{const saved=await NoteStore.save(note);setNotes([...NoteStore.getAll()]);setSelId(saved.id);setTab("notes");}}));
+            return renderTab(t);
+          };
+
+          return React.createElement("div",{
+            style:{flex:1,display:"flex",overflow:"hidden"},
+            onKeyDown: e => {
+              // Ctrl+W + h/l/←/→ wisselen focus
+              if(e.ctrlKey && e.key==="w") {
+                e.preventDefault();
+                setSplitFocus(f => f==="left"?"right":"left");
+              }
+            },
+            tabIndex:0
+          },
+            // Linker paneel — notities editor
+            React.createElement("div",{
+              onClick:()=>setSplitFocus("left"),
+              style:{flex:1,display:"flex",overflow:"hidden",
+                borderRight:focusBorderL,minWidth:0,
+                outline:"none",transition:"border-color 0.15s"}
+            }, notesTabEl),
+            // Rechter paneel — PDF/Plaatjes/Zoeken/etc
+            React.createElement("div",{
+              onClick:()=>setSplitFocus("right"),
+              style:{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",minWidth:0,
+                borderLeft:focusBorderR,transition:"border-color 0.15s"}
+            },
               React.createElement("div",{style:{
                 background:W.bg2,borderBottom:`1px solid ${W.splitBg}`,
                 padding:"0",display:"flex",alignItems:"center",flexShrink:0,height:"36px"
               }},
                 splitTabs.map(({id,icon,label})=>React.createElement("button",{
-                  key:id, onClick:()=>setSplitTab(id),
+                  key:id, onClick:e=>{e.stopPropagation();setSplitTab(id);setSplitFocus("right");},
                   style:{background:splitTab===id?W.bg:"none",
                          border:"none",borderBottom:splitTab===id?`2px solid ${W.yellow}`:"2px solid transparent",
                          color:splitTab===id?W.statusFg:W.fgMuted,
                          padding:"0 14px",height:"100%",fontSize:"14px",
                          cursor:"pointer",letterSpacing:"0.5px",flexShrink:0}
-                },icon," ",label))
+                },icon," ",label)),
+                splitKeyHint
               ),
-              renderTab(splitTab)
+              renderRightTab(splitTab)
             )
           );
         }

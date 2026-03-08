@@ -23,8 +23,22 @@ const NotesTab = ({
   onSidebarToggle,
   goyoMode = false,
   onGoyoChange,
+  onSplitCmd = null,       // doorgeven aan NoteEditor → VimEditor
+  pasteQueue = [],         // blokken klaar om in de editor te plakken
+  onPasteConsumed = null,  // () => void — na verwerking
 }) => {
   const { useState, useRef, useMemo, useCallback, useEffect } = React;
+
+  // Verwerk paste-queue: plak eerste blok in open editor
+  useEffect(() => {
+    if (!pasteQueue.length) return;
+    const block = pasteQueue[0];
+    const ref = contentRef.current;
+    if (ref?.insertAtCursor) {
+      ref.insertAtCursor(block);
+    }
+    onPasteConsumed?.();
+  }, [pasteQueue]);
 
   // ── Lokale UI-state (behoort alleen tot NotesTab) ─────────────────────────
   const [vimMode,       setVimMode]       = useState(false);
@@ -299,6 +313,7 @@ const NotesTab = ({
         showLinkMenu,
         onToggleLinkMenu: () => { setShowLinkMenu(v => !v); setLinkSearch(""); setLinkTypeFilter("all"); },
         linkMenuContent:  showLinkMenu ? buildLinkDropdown() : null,
+        onSplitCmd,
       })
     : React.createElement("div", { style: { flex: 1, display: "flex", overflow: "hidden" } },
         React.createElement(NotePreview, {
