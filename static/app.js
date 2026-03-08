@@ -487,7 +487,7 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
   // AI taalverbetering state
   const [aiImprove,    setAiImprove]    = useState(null);   // {original, improved} of null
   const [aiImproving,  setAiImproving]  = useState(false);  // bezig met verbeteren
-  const [aiImproveLang,setAiImproveLang]= useState("auto"); // "auto"|"nl"|"en"
+  const [aiImproveLang,setAiImproveLang]= useState("nl");  // "nl"|"en"|"auto"
   const compRef    = useRef({list:[], idx:0, open:false});
 
   // Spell check state — set van {row, col, len} fout-posities
@@ -538,6 +538,7 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
       S.current.lines = value.split("\n");
       clamp();
       draw();
+      scheduleSpellCheck();  // spellcheck bij wisselen/laden van notitie
     }
   }, [value]);
 

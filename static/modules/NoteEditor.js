@@ -96,7 +96,7 @@ const NoteEditor = ({
       { label: "◎ focus", show: true,        onClick: onToggleGoyo,
         active: goyoMode, color: goyoMode ? W.comment : W.fgMuted },
       { label: "✓ opslaan", show: true,       onClick: () => { handleSave(); onClose?.(); },
-        color: W.comment, fgColor: W.bg, bold: true },
+        color: W.bg, fgColor: W.bg, bg: "rgba(159,202,86,0.85)", bold: true },
       { label: "✕ sluiten", show: true,       onClick: onClose,     color: W.fgMuted },
       { label: "🗑 del",    show: !isMobile,  onClick: onDelete,    color: W.orange },
     ].filter(b => b.show).map((b, i) => React.createElement("button", {
