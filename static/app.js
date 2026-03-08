@@ -320,17 +320,165 @@ const FONT_SIZE = 13;
 const LINE_H    = 22;   // vaste regelhoogte in pixels
 const PAD_LEFT  = 8;    // tekst-padding links van content
 
+// ── Spellcheck woordenlijst (basiswoordenboek EN + NL ingebakken) ─────────────
+// We gebruiken de browser-native spellcheck via een verborgen <textarea> techniek:
+// woorden worden gecheckt door tijdelijk in een spellcheck-enabled element te plaatsen.
+// Daarnaast houden we een eigen "learned words" set bij (per sessie + vault-woorden).
+const SpellEngine = (() => {
+  // Cache: word → {ok: bool, checked: bool}
+  const _cache   = new Map();
+  const _learned = new Set();   // gebruiker-toegevoegde woorden
+  let   _ta      = null;        // verborgen textarea voor native spellcheck
+
+  // Bouw een verborgen textarea die de browser laat spellchecken
+  const _getTa = (lang) => {
+    if (!_ta) {
+      _ta = document.createElement("textarea");
+      _ta.setAttribute("spellcheck","true");
+      Object.assign(_ta.style, {
+        position:"fixed", top:"-9999px", left:"-9999px",
+        width:"200px", height:"50px", opacity:0,
+      });
+      document.body.appendChild(_ta);
+    }
+    _ta.lang = lang === "nl" ? "nl" : "en";
+    return _ta;
+  };
+
+  // Synchrone check via execCommand("insertText") + getComputedStyle trick.
+  // Browser-spellcheck is inherent asynchroon/niet-programmeerbaar,
+  // dus gebruiken we een robuustere aanpak: woordenlijst-gebaseerd.
+  // Kleine ingebakken lijst van veelgemaakte fouten + Hunspell-achtige regels.
+
+  // Basis-patroon: woord is OK als het overeenkomt met bekende patronen
+  const _okPatterns = [
+    /^\d+([.,]\d+)?$/,                  // getallen
+    /^[A-Z]{2,}$/,                       // afkortingen
+    /^[a-z]{1,2}$/,                      // korte lidwoorden etc
+    /^https?:\/\//,                      // URLs
+    /^[\w.-]+@[\w.-]+\.\w+$/,           // emails
+    /^\[\[.*\]\]$/,                      // wiki-links
+  ];
+
+  // We doen een check via het browser-spellcheck API op een verborgen input.
+  // Dit werkt in moderne browsers die 'spellcheck' ondersteunen.
+  const _checkViaInput = (() => {
+    const inp = document.createElement("input");
+    inp.setAttribute("spellcheck","true");
+    inp.type = "text";
+    Object.assign(inp.style, {position:"fixed",top:"-9999px",left:"-9999px",width:"1px"});
+    let _mounted = false;
+    return { el: inp, mount() { if(!_mounted){document.body.appendChild(inp);_mounted=true;} } };
+  })();
+
+  return {
+    learnWord(w) { _learned.add(w.toLowerCase()); _cache.set(w.toLowerCase(), true); },
+    isLearned(w) { return _learned.has(w.toLowerCase()); },
+
+    // Snelle heuristieke check — geen async, werkt per karakter
+    check(word, lang) {
+      if (!word || word.length < 2) return true;
+      const lw = word.toLowerCase();
+      if (_learned.has(lw)) return true;
+      if (_cache.has(lw)) return _cache.get(lw);
+
+      // Patroon-checks
+      for (const p of _okPatterns) if (p.test(word)) { _cache.set(lw, true); return true; }
+
+      // Cijfer-woord combo (bijv "20px", "H2O")
+      if (/\d/.test(word)) { _cache.set(lw, true); return true; }
+
+      // Apostrof-vormen
+      if (/'\w{1,3}$/.test(word)) { const base=word.split("'")[0]; return this.check(base,lang); }
+
+      // Browser native check via een tijdelijke trick:
+      // Zet het woord in een textarea met spellcheck=true en kijk of er
+      // een markering op zit. Helaas is dit NIET synchroon beschikbaar.
+      // Terugvaloptie: markeer woorden die NIET in onze vault-woordenlijst zitten.
+      // (Vault-woordenlijst wordt extern gevuld door VimEditor)
+      return null; // null = onbekend (niet markeren)
+    },
+
+    // Vault-woorden instellen (alle woorden uit de notities)
+    setVaultWords(words) {
+      for (const w of words) _learned.add(w.toLowerCase());
+    },
+  };
+})();
+
+// ── Completion Engine — Trie + AI ─────────────────────────────────────────────
+// Verzamelt woorden uit alle notities en biedt prefix-zoeken.
+const CompletionEngine = (() => {
+  // Eenvoudige gesorteerde lijst voor prefix-matching (snel genoeg tot 100k woorden)
+  let   _words    = [];  // gesorteerde unieke woorden
+  let   _built    = false;
+  const _MIN_LEN  = 3;   // minimale woordlengte om in de lijst op te nemen
+
+  const _tokenize = (text) =>
+    (text.match(/[a-zA-ZÀ-ÿ\u0100-\u017F\u0180-\u024F'-]{3,}/g) || [])
+      .map(w => w.replace(/^'+|'+$/g,"").toLowerCase())
+      .filter(w => w.length >= _MIN_LEN);
+
+  return {
+    build(notesText) {
+      const freq = new Map();
+      for (const w of _tokenize(notesText)) freq.set(w, (freq.get(w)||0)+1);
+      // Sorteer op frequentie desc, dan alfabetisch
+      _words = [...freq.entries()]
+        .sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0]))
+        .map(([w])=>w);
+      _built = true;
+    },
+
+    // Voeg woorden toe van de huidige buffer (live bijhouden)
+    addFromBuffer(text) {
+      const news = _tokenize(text).filter(w => !_words.includes(w));
+      if (news.length) _words = [...new Set([..._words, ...news])];
+    },
+
+    // Prefix-zoeken → top-N suggesties
+    suggest(prefix, n=8) {
+      if (!prefix || prefix.length < 2) return [];
+      const lp = prefix.toLowerCase();
+      const out = [];
+      for (const w of _words) {
+        if (w.startsWith(lp) && w !== lp) {
+          out.push(w);
+          if (out.length >= n) break;
+        }
+      }
+      return out;
+    },
+
+    isBuilt() { return _built; },
+  };
+})();
+
+
+
 const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange,
-                    allTags=[], goyoMode=false, onToggleGoyo, onEditorRef}) => {
+                    allTags=[], goyoMode=false, onToggleGoyo, onEditorRef, onModeChange=()=>{},
+                    llmModel="", allNotesText=""}) => {
 
   const { useState, useEffect, useRef, useCallback } = React;
 
   // ── React state (alleen voor re-render van statusbalk/tags) ────────────────
-  const [mode,     setModeState] = useState("INSERT");
-  const [cmdBuf,   setCmdBuf]    = useState("");
-  const [statusMsg,setStatus]    = useState("");
-  const [spellLang,setSpell]     = useState("off");
+  const [mode,       setModeState] = useState("INSERT");
+  const [cmdBuf,     setCmdBuf]    = useState("");
+  const [statusMsg,  setStatus]    = useState("");
+  const [spellLang,  setSpell]     = useState("off");
   const spellCycle = ["off","en","nl"];
+
+  // Completion popup state
+  const [compList,   setCompList]  = useState([]);   // [{word, source}]
+  const [compIdx,    setCompIdx]   = useState(0);    // geselecteerde index
+  const [compOpen,   setCompOpen]  = useState(false);
+  const [aiLoading,  setAiLoading] = useState(false);
+  const compRef    = useRef({list:[], idx:0, open:false});
+
+  // Spell check state — set van {row, col, len} fout-posities
+  const spellErrors = useRef(new Map()); // row → [{col,len,word}]
+  const spellTimer  = useRef(null);
 
   // ── Alle editor-staat in één ref → nooit stale in event-handlers ──────────
   const S = useRef({
@@ -604,8 +752,262 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
     if (cmd==="goyo")         { onToggleGoyo?.(); return; }
     if (cmd==="spell"||cmd==="sp") { const i=(spellCycle.indexOf(spellLang)+1)%3; setSpell(spellCycle[i]); setStatus(`spell: ${spellCycle[i]}`); return; }
     if (cmd==="wrap")         { setStatus("wrap: aan (standaard)"); return; }
+    // Spell: :spell+ voegt huidig woord toe aan geleerde woorden
+    if (cmd==="spell+" || cmd==="sp+") {
+      const s2 = S.current;
+      const {row,col} = s2.cur;
+      const before = s2.lines[row].slice(0, col);
+      const wm = before.match(/([a-zA-ZÀ-ÿ'-]+)$/);
+      if (wm) { SpellEngine.learnWord(wm[1]); scheduleSpellCheck(); setStatus(`geleerd: ${wm[1]}`); }
+      return;
+    }
     setStatus(`onbekend: :${cmd}`);
   }, [noteTags, onTagsChange, onSave, onEscape, onToggleGoyo, spellLang]);
+
+  // ── Spell check engine ────────────────────────────────────────────────────
+  // Detecteert taal automatisch op basis van tekenfrequentie.
+  // Gebruikt de browser-native spellcheck via een verborgen <div contenteditable>.
+
+  // Verborgen contenteditable voor native spellcheck (eenmalig aangemaakt)
+  const spellDiv = useRef(null);
+  const getSpellDiv = useCallback((lang) => {
+    if (!spellDiv.current) {
+      const d = document.createElement("div");
+      d.contentEditable = "true";
+      d.setAttribute("spellcheck","true");
+      Object.assign(d.style, {
+        position:"fixed",top:"-9999px",left:"-9999px",
+        width:"600px",fontSize:"16px",lineHeight:"1.5",
+        background:"white",color:"black",padding:"4px",
+        whiteSpace:"pre-wrap",opacity:"0",pointerEvents:"none",
+      });
+      document.body.appendChild(d);
+      spellDiv.current = d;
+    }
+    spellDiv.current.lang = lang === "nl" ? "nl" : "en";
+    return spellDiv.current;
+  }, []);
+
+  // Detecteer taal automatisch: NL heeft 'ij','aa','oo','ee','uu','sch','ng' hoog;
+  // EN heeft 'th','wh','ing','tion','ed' hoog.
+  const detectLang = useCallback((text) => {
+    const lc = text.toLowerCase();
+    const nlScore = (lc.match(/\b(de|het|een|en|in|van|te|dat|dit|met|ik|je|we|ze|ook|aan|er|maar|om|nog|al|wel|geen|meer|op|uit)\b/g)||[]).length;
+    const enScore = (lc.match(/\b(the|and|for|that|with|this|are|was|have|from|they|will|been|not|can|but|what|all|your|which|their|would|there|about|can|more|also|into|some|than|then)\b/g)||[]).length;
+    return nlScore > enScore ? "nl" : "en";
+  }, []);
+
+  // Spellcheck één regel — geeft terug: [{col, len, word}]
+  const checkLine = useCallback((line, lang) => {
+    if (!line.trim()) return [];
+    const errors = [];
+    // Splits op woordgrenzen
+    const wordRe = /[a-zA-ZÀ-ÿ\u0100-\u017F\u0180-\u024F'-]{2,}/g;
+    let m;
+    while ((m = wordRe.exec(line)) !== null) {
+      const word = m[0].replace(/^'+|'+$/g, "");
+      if (word.length < 2) continue;
+      // Skip: getallen, afkortingen, links, code
+      if (/\d/.test(word)) continue;
+      if (/^[A-Z]{2,}$/.test(word)) continue;           // afkorting
+      if (SpellEngine.isLearned(word)) continue;
+      // Gebruik gecachede check
+      const ok = SpellEngine.check(word, lang);
+      if (ok === false) errors.push({col: m.index, len: word.length, word});
+    }
+    return errors;
+  }, []);
+
+  // Plan een spellcheck voor de hele buffer (gespreid over frames)
+  // Grammaticafouten: row → [{col,len,msg,type}]
+  const grammarErrors = useRef(new Map());
+
+  const scheduleSpellCheck = useCallback(() => {
+    if (spellLang === "off") {
+      spellErrors.current.clear();
+      grammarErrors.current.clear();
+      draw();
+      return;
+    }
+    clearTimeout(spellTimer.current);
+    spellTimer.current = setTimeout(async () => {
+      const s    = S.current;
+      const lang = spellLang;  // "en", "nl", of "auto" — server detecteert auto
+
+      // Verzamel unieke woorden
+      const wordRe   = /[a-zA-ZÀ-ÿ\u0100-\u017F\u0180-\u024F'-]{3,}/g;
+      const allWords = new Set();
+      for (const line of s.lines) {
+        let m;
+        wordRe.lastIndex = 0;
+        while ((m = wordRe.exec(line)) !== null) {
+          const w = m[0].replace(/^'+|'+$/g, "");
+          if (w.length >= 3 && !/\d/.test(w) && !/^[A-Z]{2,}$/.test(w))
+            allWords.add(w);
+        }
+      }
+
+      // Vraag server: spellcheck + grammatica in één call
+      let spellRes = {}, grammarRes = [], detectedLang = lang;
+      try {
+        const resp = await fetch("/api/spellcheck", {
+          method:  "POST",
+          headers: {"Content-Type": "application/json"},
+          body:    JSON.stringify({
+            words: [...allWords],
+            lines: s.lines,
+            lang,
+          }),
+        });
+        const data = await resp.json();
+        // Nieuwe API: {spell: {word: {spell,grammar}}, grammar: [...], lang: "en"|"nl"}
+        spellRes      = data.spell   || data.results || {};
+        grammarRes    = data.grammar || [];
+        detectedLang  = data.lang    || lang;
+      } catch(_) { /* server niet beschikbaar */ }
+
+      // ── Spellfouten per regel bouwen ────────────────────────────────────
+      const newSpell = new Map();
+      s.lines.forEach((line, row) => {
+        const errs = [];
+        let m2;
+        wordRe.lastIndex = 0;
+        while ((m2 = wordRe.exec(line)) !== null) {
+          const word = m2[0].replace(/^'+|'+$/g, "");
+          if (word.length < 3) continue;
+          if (/\d/.test(word) || /^[A-Z]{2,}$/.test(word)) continue;
+          if (SpellEngine.isLearned(word)) continue;
+          const entry = spellRes[word] || spellRes[m2[0]];
+          // entry.spell === false → spelfout
+          if (entry && entry.spell === false) {
+            errs.push({col: m2.index, len: word.length, word, type: "spell"});
+          }
+        }
+        if (errs.length) newSpell.set(row, errs);
+      });
+      spellErrors.current = newSpell;
+
+      // ── Grammaticafouten per regel bouwen ───────────────────────────────
+      const newGrammar = new Map();
+      for (const err of grammarRes) {
+        const row = err.row;
+        if (!newGrammar.has(row)) newGrammar.set(row, []);
+        newGrammar.get(row).push(err);
+      }
+      grammarErrors.current = newGrammar;
+
+      // Taaldetectie tonen in statusbalk als auto
+      if (lang === "auto" && detectedLang !== lang) {
+        setStatus(`spell: auto → ${detectedLang}`);
+      }
+      draw();
+    }, 800);
+  }, [spellLang, detectLang]);
+
+
+  // Spellcheck opnieuw plannen bij taalwissel of tekstwijziging
+  useEffect(() => {
+    if (spellLang !== "off") {
+      // Leer alle vault-woorden zodat ze niet als fout worden gemarkeerd
+      if (allNotesText) {
+        const vaultWords = (allNotesText.match(/[a-zA-ZÀ-ÿ'-]{3,}/g) || []);
+        SpellEngine.setVaultWords(vaultWords);
+      }
+      scheduleSpellCheck();
+    } else {
+      spellErrors.current.clear();
+    }
+  }, [spellLang, scheduleSpellCheck]);
+
+  // Bouw completion engine bij mount + als allNotesText verandert
+  useEffect(() => {
+    if (allNotesText) CompletionEngine.build(allNotesText);
+  }, [allNotesText]);
+
+  // ── Completion helpers ────────────────────────────────────────────────────
+  // Haal het woord links van de cursor op
+  const getWordBeforeCursor = (s) => {
+    const line = s.lines[s.cur.row];
+    const before = line.slice(0, s.cur.col);
+    const m = before.match(/[a-zA-ZÀ-ÿ'-]{2,}$/);
+    return m ? m[0] : "";
+  };
+
+  // Sluit de completion popup
+  const closeCompletion = useCallback(() => {
+    compRef.current = {list:[], idx:0, open:false};
+    setCompList([]); setCompOpen(false);
+  }, []);
+
+  // Accepteer de geselecteerde suggestie
+  const acceptCompletion = useCallback((s, idx) => {
+    const list = compRef.current.list;
+    if (!list.length) return;
+    const chosen = list[idx ?? compRef.current.idx];
+    if (!chosen) return;
+    const prefix = getWordBeforeCursor(s);
+    const suffix = chosen.word.slice(prefix.length);
+    if (suffix) {
+      for (const ch of suffix) insertChar(s, ch);
+      emit(s); scrollToCursor(s); draw();
+    }
+    closeCompletion();
+  }, [closeCompletion]);
+
+  // Trigger lokale completion
+  const triggerLocalCompletion = useCallback((s) => {
+    const prefix = getWordBeforeCursor(s);
+    if (prefix.length < 2) { closeCompletion(); return; }
+    // Bouw ook uit huidige buffer
+    CompletionEngine.addFromBuffer(s.lines.join("\n"));
+    const suggestions = CompletionEngine.suggest(prefix, 8)
+      .map(w => ({word: w, source: "local"}));
+    if (!suggestions.length) { closeCompletion(); return; }
+    compRef.current = {list: suggestions, idx: 0, open: true};
+    setCompList(suggestions); setCompIdx(0); setCompOpen(true);
+  }, [closeCompletion]);
+
+  // Trigger AI completion via Ollama
+  const triggerAICompletion = useCallback(async (s) => {
+    if (!llmModel) { setStatus("Geen AI model ingesteld (zie Notebook tab)"); return; }
+    const prefix = getWordBeforeCursor(s);
+    const line   = s.lines[s.cur.row];
+    const ctx    = s.lines.slice(Math.max(0, s.cur.row-3), s.cur.row+1).join("\n");
+    setAiLoading(true);
+    setStatus("🤖 AI suggesties…");
+    try {
+      const resp = await fetch("/api/llm/chat", {
+        method: "POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({
+          model: llmModel,
+          messages: [{
+            role: "user",
+            content: `Je bent een tekst-completion assistent. Geef 5 korte woordsuggesties voor de volgende tekst. De cursor staat na het woord "${prefix}". Context:\n\n${ctx}\n\nGeef ALLEEN de 5 woorden/korte zinsdelen, elk op een eigen regel, zonder nummering, zonder uitleg. Suggesties moeten logisch aansluiten op de context en dezelfde taal gebruiken als de tekst.`
+          }],
+          stream: false,
+          options: {temperature: 0.3, num_predict: 60}
+        })
+      });
+      const data = await resp.json();
+      const text = data.message?.content || data.response || "";
+      const aiWords = text.split("\n")
+        .map(w => w.trim().replace(/^[-•*]\s*/, "").replace(/^\d+\.\s*/, ""))
+        .filter(w => w.length > 0 && w.length < 60)
+        .slice(0,5)
+        .map(w => ({word: w, source: "ai"}));
+      if (aiWords.length) {
+        compRef.current = {list: aiWords, idx: 0, open: true};
+        setCompList(aiWords); setCompIdx(0); setCompOpen(true);
+        setStatus("");
+      } else {
+        setStatus("Geen AI suggesties");
+      }
+    } catch(e) {
+      setStatus("AI fout: " + e.message.slice(0,40));
+    }
+    setAiLoading(false);
+  }, [llmModel]);
 
   // ── Keyboard handler — ALLES hier, geen browser-escape meer ──────────────
   const handleKey = useCallback((e) => {
@@ -614,9 +1016,35 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
 
     // ────────────────────────── INSERT ──────────────────────────────────────
     if (m === "INSERT") {
+      // Completion popup navigatie — heeft prioriteit
+      if (compRef.current.open) {
+        if (e.key === "Escape") {
+          e.preventDefault(); closeCompletion(); draw(); return;
+        }
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          const ni = Math.min(compRef.current.idx+1, compRef.current.list.length-1);
+          compRef.current.idx = ni; setCompIdx(ni); return;
+        }
+        if (e.key === "ArrowUp") {
+          e.preventDefault();
+          const ni = Math.max(compRef.current.idx-1, 0);
+          compRef.current.idx = ni; setCompIdx(ni); return;
+        }
+        if (e.key === "Tab" || e.key === "Enter") {
+          e.preventDefault(); acceptCompletion(s); return;
+        }
+        // Andere toetsen: sluit popup en handel normaal af
+        if (!e.ctrlKey && !e.metaKey && (e.key.length === 1 || e.key === "Backspace")) {
+          closeCompletion();
+          // doorval naar normale afhandeling hieronder
+        }
+      }
+
       // Escape — altijd onderscheppen, preventDefault, eigen afhandeling
       if (e.key === "Escape") {
         e.preventDefault();
+        closeCompletion();
         setMode("NORMAL");
         setStatus("");
         draw();
@@ -626,17 +1054,48 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
       if (e.ctrlKey && e.key === "s") { e.preventDefault(); onSave(); setStatus("opgeslagen ✓"); draw(); return; }
       if (e.ctrlKey && e.key === "j") { e.preventDefault(); if (!expandSnippet(s)) setStatus("geen snippet"); draw(); return; }
 
-      // Pijltjes
-      if (e.key === "ArrowLeft")  { e.preventDefault(); s.cur.col = Math.max(0, s.cur.col-1); scrollToCursor(s); draw(); return; }
-      if (e.key === "ArrowRight") { e.preventDefault(); s.cur.col = Math.min(s.lines[s.cur.row].length, s.cur.col+1); scrollToCursor(s); draw(); return; }
-      if (e.key === "ArrowUp")    { e.preventDefault(); if(s.cur.row>0){s.cur.row--;s.cur.col=Math.min(s.cur.col,s.lines[s.cur.row].length);} scrollToCursor(s); draw(); return; }
-      if (e.key === "ArrowDown")  { e.preventDefault(); if(s.cur.row<s.lines.length-1){s.cur.row++;s.cur.col=Math.min(s.cur.col,s.lines[s.cur.row].length);} scrollToCursor(s); draw(); return; }
-      if (e.key === "Home")       { e.preventDefault(); s.cur.col=0; draw(); return; }
-      if (e.key === "End")        { e.preventDefault(); s.cur.col=s.lines[s.cur.row].length; draw(); return; }
+      // Ctrl+N / Ctrl+P — lokale completion (vim-stijl)
+      if (e.ctrlKey && (e.key === "n" || e.key === "N")) {
+        e.preventDefault();
+        if (compRef.current.open) {
+          const ni = (compRef.current.idx + 1) % compRef.current.list.length;
+          compRef.current.idx = ni; setCompIdx(ni);
+        } else {
+          triggerLocalCompletion(s);
+        }
+        return;
+      }
+      if (e.ctrlKey && (e.key === "p" || e.key === "P")) {
+        e.preventDefault();
+        if (compRef.current.open) {
+          const ni = (compRef.current.idx - 1 + compRef.current.list.length) % compRef.current.list.length;
+          compRef.current.idx = ni; setCompIdx(ni);
+        } else {
+          triggerLocalCompletion(s);
+        }
+        return;
+      }
+
+      // Ctrl+Space — AI completion
+      if (e.ctrlKey && e.key === " ") {
+        e.preventDefault();
+        triggerAICompletion(s);
+        return;
+      }
+
+      // Pijltjes — sluit completion als open, dan navigeren
+      if (e.key === "ArrowLeft")  { e.preventDefault(); closeCompletion(); s.cur.col = Math.max(0, s.cur.col-1); scrollToCursor(s); draw(); return; }
+      if (e.key === "ArrowRight") { e.preventDefault(); closeCompletion(); s.cur.col = Math.min(s.lines[s.cur.row].length, s.cur.col+1); scrollToCursor(s); draw(); return; }
+      if (e.key === "ArrowUp")    { e.preventDefault(); closeCompletion(); if(s.cur.row>0){s.cur.row--;s.cur.col=Math.min(s.cur.col,s.lines[s.cur.row].length);} scrollToCursor(s); draw(); return; }
+      if (e.key === "ArrowDown")  { e.preventDefault(); closeCompletion(); if(s.cur.row<s.lines.length-1){s.cur.row++;s.cur.col=Math.min(s.cur.col,s.lines[s.cur.row].length);} scrollToCursor(s); draw(); return; }
+      if (e.key === "Home")       { e.preventDefault(); closeCompletion(); s.cur.col=0; draw(); return; }
+      if (e.key === "End")        { e.preventDefault(); closeCompletion(); s.cur.col=s.lines[s.cur.row].length; draw(); return; }
 
       if (e.key === "Tab") {
         e.preventDefault();
-        if (!expandSnippet(s)) { insertChar(s,"    "); emit(s); }
+        if (!compRef.current.open) {
+          if (!expandSnippet(s)) { insertChar(s,"    "); emit(s); }
+        }
         draw(); return;
       }
 
@@ -652,7 +1111,10 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
         s.lines.splice(row+1, 0, indent + extra + after);
         s.cur.row++;
         s.cur.col = indent.length + extra.length;
-        scheduleUndo(s); emit(s); scrollToCursor(s); draw(); return;
+        closeCompletion();
+        scheduleUndo(s); emit(s); scrollToCursor(s);
+        if (spellLang !== "off") scheduleSpellCheck();
+        draw(); return;
       }
 
       if (e.key === "Backspace") {
@@ -668,6 +1130,9 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
           s.lines.splice(row, 1);
           s.cur.row--;
         }
+        // Update completion na delete
+        if (compRef.current.open) triggerLocalCompletion(s);
+        if (spellLang !== "off") scheduleSpellCheck();
         scheduleUndo(s); emit(s); scrollToCursor(s); draw(); return;
       }
 
@@ -680,6 +1145,7 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
           s.lines[row] = s.lines[row] + s.lines[row+1];
           s.lines.splice(row+1, 1);
         }
+        if (spellLang !== "off") scheduleSpellCheck();
         scheduleUndo(s); emit(s); draw(); return;
       }
 
@@ -689,14 +1155,30 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
         e.preventDefault();
         insertChar(s, e.key + closer);
         s.cur.col--;
+        closeCompletion();
         scheduleUndo(s); emit(s); draw(); return;
       }
 
-      // Gewone tekens
+      // Gewone tekens — trigger completion na woordtekens
       if (e.key.length === 1 && !e.ctrlKey && !e.metaKey) {
         e.preventDefault();
         insertChar(s, e.key);
-        scheduleUndo(s); emit(s); scrollToCursor(s); draw(); return;
+        scheduleUndo(s); emit(s); scrollToCursor(s);
+        // Spellcheck plannen na woordgrens
+        if (spellLang !== "off" && /[\s.,!?;:]/.test(e.key)) scheduleSpellCheck();
+        // Completion: bij alfabetische tekens automatisch lokale suggesties
+        if (/[a-zA-ZÀ-ÿ']/.test(e.key)) {
+          const prefix = getWordBeforeCursor(s);
+          if (prefix.length >= 3) {
+            triggerLocalCompletion(s);
+          } else if (prefix.length < 2) {
+            closeCompletion();
+          }
+        } else {
+          // Scheidingsteken: sluit completion
+          closeCompletion();
+        }
+        draw(); return;
       }
       return;
     }
@@ -922,11 +1404,51 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
 
       // Tekst — met basis syntaxiskleuring
       drawLine(ctx, line, nw, y, cw, isCur);
+
+      if (spellLang !== "off") {
+        // Helper: teken squiggly lijn
+        const squiggly = (ex, ey, ew, color) => {
+          ctx.beginPath();
+          ctx.strokeStyle = color;
+          ctx.lineWidth   = 1.5;
+          const amp = 1.8, freq = 4;
+          ctx.moveTo(ex, ey);
+          for (let px = 0; px <= ew; px += freq / 2) {
+            ctx.lineTo(ex + px, ey + Math.sin(px / (freq / (2 * Math.PI))) * amp);
+          }
+          ctx.stroke();
+        };
+
+        ctx.save();
+        // ── Spellfouten: rode golvende lijn ───────────────────────────────
+        if (spellErrors.current.has(li)) {
+          for (const err of spellErrors.current.get(li)) {
+            squiggly(
+              nw + err.col * cw,
+              y + LINE_H - 3,
+              err.len * cw,
+              "rgba(239,68,68,0.90)"   // rood
+            );
+          }
+        }
+        // ── Grammaticafouten: oranje dubbele lijn ─────────────────────────
+        if (grammarErrors.current.has(li)) {
+          for (const err of grammarErrors.current.get(li)) {
+            const color = err.type === "style"
+              ? "rgba(156,163,175,0.75)"   // grijs voor stijltips
+              : "rgba(245,158,11,0.90)";   // oranje voor grammaticafouten
+            squiggly(nw + err.col * cw, y + LINE_H - 3, err.len * cw, color);
+            squiggly(nw + err.col * cw, y + LINE_H - 1, err.len * cw, color);
+          }
+        }
+        ctx.restore();
+      }
     }
 
     // ── Cursor ────────────────────────────────────────────────────────────
     if (curRow >= s.scroll && curRow < s.scroll + s.visRows + 1) {
       const cx = nw + curCol * cw;
+
       const cy = (curRow - s.scroll) * LINE_H;
       const m  = s.mode;
 
@@ -973,16 +1495,34 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
 
     // Statusbericht of hint
     let stxt = "";
+    let stxtColor = W.fgMuted;
+
     if (s.mode === "COMMAND") stxt = ":" + s.cmdBuf + "█";
     else if (s.mode === "SEARCH") stxt = "/" + s.cmdBuf + "█";
     else if (statusMsg) stxt = "  " + statusMsg;
-    else if (s.mode === "INSERT")
-      stxt = "  -- INSERT --  Esc=NORMAL  Ctrl+J=snippet  Ctrl+S=opslaan";
-    else
-      stxt = `  ${s.lines.length}L  |  i=INSERT  :w=opslaan  :wq=sluiten  /=zoeken  n/N=volgende`;
+    else {
+      // Kijk of cursor op een spell/grammaticafout staat → toon foutmelding
+      const curSpell   = spellErrors.current.get(curRow)   || [];
+      const curGrammar = grammarErrors.current.get(curRow) || [];
+      const spellHit   = curSpell.find(e => curCol >= e.col && curCol < e.col + e.len);
+      const gramHit    = curGrammar.find(e => curCol >= e.col && curCol < e.col + e.len);
 
-    ctx.fillStyle = W.fgMuted;
+      if (gramHit) {
+        stxt      = `  ⚠ ${gramHit.msg}`;
+        stxtColor = gramHit.type === "style" ? W.fgMuted : W.orange;
+      } else if (spellHit) {
+        stxt      = `  ✗ Onbekend woord: '${spellHit.word}'  (:spell+ om te leren)`;
+        stxtColor = "rgba(239,68,68,0.9)";
+      } else if (s.mode === "INSERT") {
+        stxt = "  -- INSERT --  Ctrl+N=completion  Ctrl+Space=AI  :spell en/nl/auto/off";
+      } else {
+        stxt = `  ${s.lines.length}L  |  i=INSERT  :w=opslaan  :wq=sluiten  /=zoeken`;
+      }
+    }
+
+    ctx.fillStyle = stxtColor;
     ctx.fillText(stxt, badgeW + 6, sbY + 4);
+
 
     // Positie rechts (ln:col)
     const posStr = `${curRow+1}:${curCol+1}`;
@@ -1059,6 +1599,18 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
   // ── Render ────────────────────────────────────────────────────────────────
   const modeColor = mode==="INSERT" ? W.comment : mode==="COMMAND" ? W.orange : mode==="SEARCH" ? W.purple : W.blue;
 
+  // Bereken cursor-pixelpositie voor de completion popup
+  const getCursorPx = () => {
+    const s   = S.current;
+    const cv  = cvRef.current;
+    if (!cv) return {x:0,y:0};
+    const rect = cv.getBoundingClientRect();
+    const nw   = numColsWidth(s);
+    const x    = rect.left + nw + s.cur.col * s.charW;
+    const y    = rect.top  + (s.cur.row - s.scroll + 1) * LINE_H;
+    return {x, y};
+  };
+
   return React.createElement("div", {
     style: {display:"flex", flexDirection:"column", height:"100%", background:W.bg}
   },
@@ -1075,7 +1627,7 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
         onRemove: t => onTagsChange(noteTags.filter(x => x!==t))
       }))
     ),
-    // Canvas-gebied
+    // Canvas-gebied + completion popup overlay
     React.createElement("div", {
       style: {flex:1, position:"relative", overflow:"hidden"},
       onClick: () => inputRef.current?.focus(),
@@ -1088,6 +1640,81 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
       },
     },
       React.createElement("canvas", {ref:cvRef, style:{display:"block"}}),
+
+      // ── Completion popup ──────────────────────────────────────────────────
+      compOpen && compList.length > 0 && React.createElement("div", {
+        style: {
+          position: "fixed",
+          left: (() => { const {x} = getCursorPx(); return Math.min(x, window.innerWidth - 240) + "px"; })(),
+          top:  (() => { const {y} = getCursorPx(); return (y + 2) + "px"; })(),
+          zIndex: 9999,
+          background: W.bg2,
+          border: `1px solid ${W.blue}`,
+          borderRadius: "5px",
+          boxShadow: "0 4px 20px rgba(0,0,0,0.5)",
+          minWidth: "200px",
+          maxWidth: "340px",
+          overflow: "hidden",
+          pointerEvents: "none",  // toetsafvang blijft bij het canvas
+        }
+      },
+        // Popup header
+        React.createElement("div", {
+          style: {
+            padding: "3px 10px",
+            background: W.lineNrBg,
+            borderBottom: `1px solid ${W.splitBg}`,
+            fontSize: "10px", color: W.fgMuted,
+            display: "flex", justifyContent: "space-between",
+          }
+        },
+          React.createElement("span", null, aiLoading ? "🤖 AI…" : "💡 Completion"),
+          React.createElement("span", null, "↑↓ Tab=accepteer  Esc=sluiten")
+        ),
+        // Suggesties
+        ...compList.map((item, idx) =>
+          React.createElement("div", {
+            key: idx,
+            style: {
+              padding: "5px 12px",
+              background: idx === compIdx ? W.blue+"22" : "transparent",
+              borderLeft: idx === compIdx ? `3px solid ${W.blue}` : "3px solid transparent",
+              fontSize: "13px",
+              color: idx === compIdx ? W.fg : W.fgDim,
+              fontFamily: "'Hack','Courier New',monospace",
+              display: "flex", alignItems: "center", gap: "8px",
+              borderBottom: idx < compList.length-1 ? `1px solid ${W.splitBg}` : "none",
+            }
+          },
+            // Bron-badge
+            React.createElement("span", {
+              style: {
+                fontSize: "9px", padding: "1px 5px", borderRadius: "8px",
+                background: item.source === "ai" ? W.purple+"33" : W.comment+"33",
+                color:      item.source === "ai" ? W.purple      : W.comment,
+                flexShrink: 0,
+              }
+            }, item.source === "ai" ? "AI" : "↩"),
+            // Woord
+            React.createElement("span", {style:{flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}},
+              item.word
+            )
+          )
+        )
+      ),
+
+      // ── Spell-indicator (rechts boven in editor) ─────────────────────────
+      spellLang !== "off" && React.createElement("div", {
+        style: {
+          position: "absolute", top: "6px", right: "8px",
+          fontSize: "10px", color: W.fgMuted,
+          background: W.bg2 + "cc", borderRadius: "4px",
+          padding: "2px 6px", letterSpacing: "0.5px",
+          border: `1px solid ${W.splitBg}`,
+          pointerEvents: "none",
+        }
+      }, `spell:${spellLang}  :spell+ = woord leren`),
+
       // Onzichtbaar input-element — vangt ALLES af, inclusief Escape
       // readOnly + size=1 → browser toont niks, maar events komen wél binnen
       React.createElement("input", {
@@ -1638,7 +2265,8 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
   const [pageNum,    setPageNum]    = useState(1);   // huidige zichtbare pagina (voor annotaties)
   const [numPages,   setNumPages]   = useState(0);
   const [scale,      setScale]      = useState(1.4);
-  const [highlights, setHighlights] = useState(pdfNotes||[]);
+  // highlights gespiegeld vanuit AnnotationStore
+  const [highlights, setHighlights] = useState(AnnotationStore.getAll());
   const [pendingSel, setPendingSel] = useState(null);
   const [selPos,     setSelPos]     = useState({x:0,y:0});
   const [editingId,  setEditingId]  = useState(null);
@@ -1800,7 +2428,7 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
     let savedName=file.name;
     setSummarizeErr(null);
     try{
-      const res=await api.uploadPdf(file);
+      const res=await PDFService.uploadPdf(file);
       if(res?.name) savedName=res.name;
       onRefreshPdfs?.();
     }catch(err){ console.error("upload:",err); }
@@ -1827,7 +2455,7 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
   const openFromServer=async(name)=>{
     setShowLibrary(false); setIsLoading(true);
     try{
-      const ab=await api.fetchPdfBlob(name);
+      const ab=await PDFService.fetchPdfBlob(name);
       await loadPdf(ab,name);
     }catch(err){console.error(err);}
     setIsLoading(false);
@@ -1914,6 +2542,15 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
     };
   }, [showSelectionPopup]);
 
+  // Subscribe op AnnotationStore — blijft in sync met andere tabs
+  React.useEffect(() => {
+    const unsub = AnnotationStore.subscribe(all => {
+      setHighlights([...all]);
+      setPdfNotes([...all]);
+    });
+    return unsub;
+  }, []);
+
   const saveHighlight=async()=>{
     if(!pendingSel)return;
     // Bewaar rects als fractie van de canvas-afmeting zodat ze schaalbaar zijn
@@ -1927,25 +2564,18 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
              page:pageNum,file:pdfFile?.name||"PDF",
              colorId:activeColor.id,rects,
              created:new Date().toISOString()};
-    const updated=[...highlights,h];
-    setHighlights(updated);
-    setPdfNotes(updated);
-    await api.post("/annotations",updated);
+    await AnnotationStore.add(h);
     setPendingSel(null); setQuickNote(""); setQuickTags([]);
     pendingRectsRef.current=[];
     window.getSelection()?.removeAllRanges();
   };
 
   const updateHighlight=async(id,patch)=>{
-    const updated=highlights.map(h=>h.id===id?{...h,...patch}:h);
-    setHighlights(updated); setPdfNotes(updated);
-    await api.post("/annotations",updated);
+    await AnnotationStore.update(id, patch);
   };
 
   const removeHighlight=async(id)=>{
-    const updated=highlights.filter(h=>h.id!==id);
-    setHighlights(updated); setPdfNotes(updated);
-    await api.post("/annotations",updated);
+    await AnnotationStore.remove(id);
     if(editingId===id)setEditingId(null);
   };
 
@@ -2018,7 +2648,7 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
             onClick:async()=>{
               if(!confirm(`Verwijder "${pdfFile.name}" en alle annotaties?`)) return;
               const name=pdfFile.name;
-              await api.deletePdf(name);
+              await PDFService.deletePdf(name);
               setPdfDoc(null); setPdfFile(null);
               onRefreshPdfs?.();
               onDeletePdf?.(name);
@@ -2057,7 +2687,7 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
                 onClick:async(e)=>{
                   e.stopPropagation();
                   if(!confirm(`Verwijder "${p.name}" en alle annotaties?`)) return;
-                  await api.deletePdf(p.name);
+                  await PDFService.deletePdf(p.name);
                   onRefreshPdfs?.();
                   onDeletePdf?.(p.name);
                   // Als deze PDF open is, sluit dan de viewer
@@ -3131,7 +3761,7 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, addJob, upd
     setBusy(true);
     setError(null);
     setImporting(true);   // toon wacht-scherm op import-tab
-    setPreview(null);
+    setImportPreview(null);
     setSaved(false);
     setTimeout(() => setBusy(false), 400);
 
@@ -3185,7 +3815,7 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, addJob, upd
       modified: new Date().toISOString(),
     });
     setSaved(true);
-  }, [preview, editTitle, editMd, tags, selectedImages, onAddNote]);
+  }, [importPreview, editTitle, editMd, tags, selectedImages, onAddNote]);
 
   const reset = () => {
     setUrl(""); setImportPreview(null); setEditMd(""); setEditTitle("");
@@ -5874,9 +6504,26 @@ const LLMNotebook = ({notes, pdfNotes, serverPdfs, serverImages, allTags, onAddN
   const [savingNote,    setSavingNote]   = useState(false);
   const [mmPending,     setMmPending]    = useState(false);   // mindmap genereren
 
+  const [ctxExtPdfs,    setCtxExtPdfs]   = useState([]);   // absolute paden
+  const [extPdfFiles,   setExtPdfFiles]  = useState([]);   // {name,path,dir,size}
+  const [extPdfDirs,    setExtPdfDirs]   = useState([]);   // geconfigureerde mappen
+  const [newExtDir,     setNewExtDir]    = useState("");
+  const [showExtPdfs,   setShowExtPdfs]  = useState(true);
+  const [extPdfLoading, setExtPdfLoading]= useState(false);
+  const [extPdfSearch,  setExtPdfSearch]  = useState("");
+  const [showExtPanel,  setShowExtPanel]  = useState(false);
+  const [browseItems,   setBrowseItems]   = useState([]);
+  const [browsePath,    setBrowsePath]    = useState("");
+  const [browseParent,  setBrowseParent]  = useState("");
+  const [browseLoading, setBrowseLoading] = useState(false);
+  const [browseError,   setBrowseError]   = useState("");
+  const [browseMode,    setBrowseMode]    = useState("dirs");  // "dirs" | "browser"
+  const [selectedDirs,  setSelectedDirs]  = useState(new Set());
+
   const chatEndRef  = useRef(null);
   const inputRef    = useRef(null);
   const abortRef    = useRef(null);  // AbortController voor streaming
+  const browseCacheRef = useRef({});  // pad → items cache
 
   // ── Ollama status check ───────────────────────────────────────────────────
   // Sync model met parent (gedeeld llmModel)
@@ -5906,6 +6553,68 @@ const LLMNotebook = ({notes, pdfNotes, serverPdfs, serverImages, allTags, onAddN
 
   useEffect(() => { checkOllama(); }, []);
 
+  const browseTo = useCallback(async (path) => {
+    const key = path==null ? "" : path;
+
+    // Toon gecachede inhoud direct — geen laadvertraging
+    if (browseCacheRef.current[key]) {
+      const cached = browseCacheRef.current[key];
+      setBrowseItems(cached.items);
+      setBrowsePath(cached.path);
+      setBrowseParent(cached.parent);
+      setBrowseError("");
+      // Haal op de achtergrond toch vers op (stille refresh)
+    } else {
+      setBrowseLoading(true);
+    }
+
+    setBrowseError("");
+    try {
+      const r = await fetch("/api/browse?path="+encodeURIComponent(key));
+      if (!r.ok) throw new Error("HTTP "+r.status);
+      const d = await r.json();
+      if (d.error) {
+        setBrowseError(d.error);
+        setBrowseItems([]);
+      } else {
+        const result = {
+          items:  d.items||[],
+          path:   d.path||"",
+          parent: d.parent!=null ? d.parent : ""
+        };
+        browseCacheRef.current[key] = result;
+        setBrowseItems(result.items);
+        setBrowsePath(result.path);
+        setBrowseParent(result.parent);
+      }
+    } catch(e) {
+      if (!browseCacheRef.current[key])  // alleen fout tonen als er geen cache is
+        setBrowseError("Verbindingsfout: "+e.message);
+    }
+    setBrowseLoading(false);
+  }, []);
+
+  const loadExtPdfs = useCallback(async () => {
+    setExtPdfLoading(true);
+    try {
+      const r = await fetch("/api/ext-pdfs");
+      const d = await r.json();
+      setExtPdfDirs(d.dirs || []);
+      setExtPdfFiles(d.files || []);
+    } catch(e) {}
+    setExtPdfLoading(false);
+  }, []);
+
+  useEffect(() => { loadExtPdfs(); }, []);
+
+  const saveExtDirs = async (dirs) => {
+    setExtPdfDirs(dirs);
+    await fetch("/api/ext-pdfs", {method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({dirs})});
+    await loadExtPdfs();
+  };
+
   // ── Auto-scroll naar onderste bericht ────────────────────────────────────
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -5916,13 +6625,15 @@ const LLMNotebook = ({notes, pdfNotes, serverPdfs, serverImages, allTags, onAddN
     const nCount = ctxNotes.length;
     const pCount = ctxPdfs.length;
     const iCount = ctxImages.length;
-    if (!nCount && !pCount && !iCount) return null;
+    const eCount = ctxExtPdfs.length;
+    if (!nCount && !pCount && !iCount && !eCount) return null;
     const parts = [];
     if (nCount) parts.push(nCount+" notitie"+(nCount>1?"s":""));
     if (pCount) parts.push(pCount+" PDF"+(pCount>1?"'s":""));
+    if (eCount) parts.push(eCount+" extern PDF"+(eCount>1?"'s":""));
     if (iCount) parts.push(iCount+" afb.");
     return parts.join(" + ");
-  }, [ctxNotes, ctxPdfs, ctxImages]);
+  }, [ctxNotes, ctxPdfs, ctxImages, ctxExtPdfs]);
 
   // ── Gefilterde notities voor context-selector ─────────────────────────────
   const filteredNotes = useMemo(() => {
@@ -5962,9 +6673,10 @@ const LLMNotebook = ({notes, pdfNotes, serverPdfs, serverImages, allTags, onAddN
       const body = JSON.stringify({
         model,
         messages: history.map(m => ({ role: m.role, content: m.content })),
-        context_notes:  ctxNotes,
-        context_pdfs:   ctxPdfs,
-        context_images: ctxImages,
+        context_notes:    ctxNotes,
+        context_pdfs:     ctxPdfs,
+        context_images:   ctxImages,
+        context_ext_pdfs: ctxExtPdfs,
       });
 
       const resp = await fetch("/api/llm/chat", {
@@ -6317,7 +7029,7 @@ const LLMNotebook = ({notes, pdfNotes, serverPdfs, serverImages, allTags, onAddN
               )
             );
           })
-        )
+        ),
       )
     ),
 
@@ -6350,6 +7062,23 @@ const LLMNotebook = ({notes, pdfNotes, serverPdfs, serverImages, allTags, onAddN
         !contextSummary && React.createElement("span",{
           style:{fontSize:"14px",color:W.fgMuted}
         },"geen context geselecteerd"),
+
+        // Externe PDF's knop
+        React.createElement("button", {
+          onClick:()=>{ setShowExtPanel(p=>!p); if(!showExtPanel) browseTo(""); },
+          style:{background:showExtPanel?"rgba(180,140,255,0.2)":"none",
+                 border:`1px solid ${showExtPanel?"rgba(180,140,255,0.5)":W.splitBg}`,
+                 color:showExtPanel?"rgba(180,140,255,0.9)":W.fgMuted,
+                 borderRadius:"5px",padding:"4px 10px",fontSize:"14px",cursor:"pointer",
+                 display:"flex",alignItems:"center",gap:"5px"}
+        },
+          React.createElement("span",null,"📂"),
+          "ext. PDF's",
+          ctxExtPdfs.length>0 && React.createElement("span",{style:{
+            background:"rgba(180,140,255,0.3)",borderRadius:"8px",
+            padding:"0 5px",fontSize:"9px",color:"rgba(180,140,255,0.9)"}},
+            ctxExtPdfs.length)
+        ),
 
         React.createElement("div",{style:{flex:1}}),
 
@@ -6585,6 +7314,285 @@ const LLMNotebook = ({notes, pdfNotes, serverPdfs, serverImages, allTags, onAddN
           `Context: ${ctxNotes.length} notitie(s) + ${ctxPdfs.length} PDF(s) meegestuurd als systeem-prompt`
         )
       )
+    ),
+
+    // ── Rechter zijbalk: Externe PDF's ──────────────────────────────────────
+    showExtPanel && React.createElement("div", {
+      style:{
+        width:"300px", flexShrink:0, background:W.bg2,
+        borderLeft:`1px solid ${W.splitBg}`,
+        display:"flex", flexDirection:"column", overflow:"hidden",
+      }
+    },
+
+      // Header
+      React.createElement("div",{style:{
+        padding:"10px 12px", borderBottom:`1px solid ${W.splitBg}`,
+        flexShrink:0, background:W.bg2
+      }},
+        React.createElement("div",{style:{display:"flex",alignItems:"center",marginBottom:"8px"}},
+          React.createElement("span",{style:{
+            fontSize:"14px",fontWeight:"bold",color:"rgba(180,140,255,0.9)",
+            letterSpacing:"1.5px",flex:1
+          }},"📂 EXTERNE PDF'S"),
+          React.createElement("button",{
+            onClick:()=>setShowExtPanel(false),
+            style:{background:"none",border:"none",color:W.fgMuted,
+                   fontSize:"18px",cursor:"pointer",padding:"0 2px",lineHeight:1}
+          },"×")
+        ),
+        // Modus tabs
+        React.createElement("div",{style:{display:"flex",gap:"4px",marginBottom:"8px"}},
+          ["dirs","browser"].map(m=>
+            React.createElement("button",{key:m,
+              onClick:()=>{ setBrowseMode(m); if(m==="browser") browseTo(browsePath||""); },
+              style:{flex:1,background:browseMode===m?"rgba(180,140,255,0.15)":"none",
+                     border:`1px solid ${browseMode===m?"rgba(180,140,255,0.4)":W.splitBg}`,
+                     borderRadius:"4px",padding:"4px 0",fontSize:"11px",cursor:"pointer",
+                     color:browseMode===m?"rgba(180,140,255,0.9)":W.fgMuted}
+            }, m==="dirs" ? "📋 Mijn mappen" : "🗂 Bladeren")
+          )
+        ),
+
+        // Geselecteerde teller + wis
+        ctxExtPdfs.length > 0 && React.createElement("div",{style:{
+          display:"flex",alignItems:"center",gap:"6px",
+          background:"rgba(180,140,255,0.08)",border:"1px solid rgba(180,140,255,0.2)",
+          borderRadius:"5px",padding:"4px 8px"
+        }},
+          React.createElement("span",{style:{fontSize:"11px",color:"rgba(180,140,255,0.8)",flex:1}},
+            ctxExtPdfs.length+" PDF"+(ctxExtPdfs.length>1?"'s":"")+" geselecteerd"),
+          React.createElement("button",{
+            onClick:()=>setCtxExtPdfs([]),
+            style:{background:"none",border:"none",color:W.orange,
+                   fontSize:"11px",cursor:"pointer",padding:0}
+          },"× wis")
+        )
+      ),
+
+      // ── MODUS: Mijn mappen ──────────────────────────────────────────────
+      browseMode==="dirs" && React.createElement("div",{
+        style:{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}
+      },
+        // Pad toevoegen
+        React.createElement("div",{style:{padding:"8px 10px",borderBottom:`1px solid ${W.splitBg}`,flexShrink:0}},
+          React.createElement("div",{style:{fontSize:"9px",color:"rgba(180,140,255,0.5)",
+            letterSpacing:"1px",marginBottom:"5px"}},"MAP TOEVOEGEN"),
+          React.createElement("div",{style:{display:"flex",gap:"4px"}},
+            React.createElement("input",{
+              value:newExtDir, onChange:e=>setNewExtDir(e.target.value),
+              placeholder:"/pad/naar/map",
+              onKeyDown:e=>{ if(e.key==="Enter"&&newExtDir.trim()){
+                saveExtDirs([...extPdfDirs,newExtDir.trim()]); setNewExtDir("");
+              }},
+              style:{flex:1,background:W.bg,border:`1px solid rgba(180,140,255,0.3)`,
+                     borderRadius:"4px",padding:"5px 7px",color:"rgba(180,140,255,0.8)",
+                     fontSize:"11px",outline:"none",fontFamily:"'Hack',monospace"}
+            }),
+            React.createElement("button",{
+              onClick:()=>{ if(!newExtDir.trim()) return;
+                saveExtDirs([...extPdfDirs,newExtDir.trim()]); setNewExtDir(""); },
+              style:{background:"rgba(180,140,255,0.15)",border:"1px solid rgba(180,140,255,0.3)",
+                     borderRadius:"4px",padding:"5px 10px",color:"rgba(180,140,255,0.8)",
+                     fontSize:"13px",cursor:"pointer"}
+            },"+"),
+            React.createElement("button",{
+              onClick:loadExtPdfs, disabled:extPdfLoading,
+              title:"Vernieuwen",
+              style:{background:"none",border:`1px solid ${W.splitBg}`,
+                     borderRadius:"4px",padding:"5px 7px",color:W.fgMuted,
+                     fontSize:"11px",cursor:"pointer"}
+            }, extPdfLoading?"…":"↻")
+          )
+        ),
+
+        // Geconfigureerde mappen
+        extPdfDirs.length > 0 && React.createElement("div",{
+          style:{padding:"6px 10px",borderBottom:`1px solid ${W.splitBg}`,flexShrink:0}
+        },
+          extPdfDirs.map((d,i)=>
+            React.createElement("div",{key:i,style:{display:"flex",alignItems:"center",
+              gap:"5px",padding:"3px 0",borderBottom:`1px solid rgba(255,255,255,0.03)`}},
+              React.createElement("span",{
+                onClick:()=>{ setBrowseMode("browser"); browseTo(d); },
+                style:{flex:1,fontSize:"10px",color:"rgba(180,140,255,0.7)",
+                  overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",
+                  fontFamily:"'Hack',monospace",cursor:"pointer",
+                  padding:"2px 0",
+                  textDecoration:"underline",textDecorationColor:"rgba(180,140,255,0.3)"}
+              }, "📁 "+d),
+              React.createElement("button",{
+                onClick:()=>saveExtDirs(extPdfDirs.filter((_,j)=>j!==i)),
+                style:{background:"none",border:"none",color:W.orange,
+                       fontSize:"12px",cursor:"pointer",padding:"0 2px",flexShrink:0}
+              },"×")
+            )
+          )
+        ),
+
+        // Zoekbalk
+        React.createElement("div",{style:{padding:"6px 10px",borderBottom:`1px solid ${W.splitBg}`,flexShrink:0}},
+          React.createElement("input",{
+            value:extPdfSearch, onChange:e=>setExtPdfSearch(e.target.value),
+            placeholder:"🔍 PDF zoeken in mappen…",
+            style:{width:"100%",background:W.bg,
+                   border:`1px solid ${extPdfSearch?"rgba(180,140,255,0.5)":W.splitBg}`,
+                   borderRadius:"4px",padding:"5px 8px",color:W.fg,
+                   fontSize:"11px",outline:"none",boxSizing:"border-box",fontFamily:"inherit"}
+          })
+        ),
+
+        // PDF-lijst
+        React.createElement("div",{style:{flex:1,overflowY:"auto"}},
+          (() => {
+            const filtered = extPdfFiles.filter(f=>
+              !extPdfSearch||f.name.toLowerCase().includes(extPdfSearch.toLowerCase()));
+            if(filtered.length===0) return React.createElement("div",{style:{
+              padding:"20px",fontSize:"11px",color:W.fgMuted,textAlign:"center",lineHeight:"1.8"}},
+              extPdfDirs.length===0 ? "Voeg een map toe\nom PDF's te laden"
+              : extPdfLoading ? "Laden…"
+              : extPdfSearch ? "Geen resultaten"
+              : "Geen PDF's gevonden");
+            return filtered.map(f => {
+              const sel = ctxExtPdfs.includes(f.path);
+              return React.createElement("div",{key:f.path,
+                onClick:()=>setCtxExtPdfs(prev=>sel?prev.filter(x=>x!==f.path):[...prev,f.path]),
+                style:{padding:"7px 12px",borderBottom:`1px solid rgba(255,255,255,0.03)`,
+                       cursor:"pointer",display:"flex",alignItems:"flex-start",gap:"8px",
+                       background:sel?"rgba(180,140,255,0.1)":"transparent",
+                       borderLeft:`3px solid ${sel?"rgba(180,140,255,0.6)":"transparent"}`}
+              },
+                React.createElement("div",{style:{width:"15px",height:"15px",borderRadius:"3px",
+                  flexShrink:0,marginTop:"1px",
+                  background:sel?"rgba(180,140,255,0.3)":"transparent",
+                  border:`1.5px solid ${sel?"rgba(180,140,255,0.7)":"rgba(255,255,255,0.15)"}`,
+                  display:"flex",alignItems:"center",justifyContent:"center"}},
+                  sel&&React.createElement("span",{style:{fontSize:"10px",
+                    color:"rgba(180,140,255,1)",lineHeight:1,fontWeight:"bold"}},"✓")),
+                React.createElement("div",{style:{minWidth:0,flex:1}},
+                  React.createElement("div",{style:{fontSize:"12px",
+                    color:sel?"rgba(180,140,255,0.95)":W.fgDim,
+                    overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},
+                    "📄 "+f.name),
+                  React.createElement("div",{style:{fontSize:"9px",color:"rgba(180,140,255,0.35)",
+                    marginTop:"1px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",
+                    fontFamily:"'Hack',monospace"}},
+                    f.path.replace(f.name,""))
+                )
+              );
+            });
+          })()
+        )
+      ),
+
+      // ── MODUS: Bladeren ─────────────────────────────────────────────────
+      browseMode==="browser" && React.createElement("div",{
+        style:{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}
+      },
+        // Pad-broodkruimel + terug
+        React.createElement("div",{style:{
+          padding:"6px 10px",borderBottom:`1px solid ${W.splitBg}`,
+          flexShrink:0,display:"flex",alignItems:"center",gap:"6px"
+        }},
+          browseParent !== "" && React.createElement("button",{
+            onClick:()=>browseTo(browseParent),
+            style:{background:"none",border:`1px solid ${W.splitBg}`,borderRadius:"4px",
+                   padding:"3px 8px",color:W.fgMuted,fontSize:"13px",cursor:"pointer",
+                   flexShrink:0}
+          },"← terug"),
+          browsePath==="" && React.createElement("button",{
+            onClick:()=>browseTo(""),
+            style:{background:"none",border:`1px solid ${W.splitBg}`,borderRadius:"4px",
+                   padding:"3px 8px",color:W.fgMuted,fontSize:"13px",cursor:"pointer"}
+          },"🏠 roots"),
+          React.createElement("span",{style:{
+            fontSize:"10px",color:"rgba(180,140,255,0.5)",overflow:"hidden",
+            textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1,
+            fontFamily:"'Hack',monospace"
+          }}, browsePath||"Kies een map"),
+          browseLoading && React.createElement("span",{style:{fontSize:"11px",color:W.fgMuted}},"⏳")
+        ),
+
+        // Selecteer hele map als PDF-bron
+        browsePath && React.createElement("div",{style:{
+          padding:"5px 10px",borderBottom:`1px solid ${W.splitBg}`,
+          flexShrink:0,display:"flex",gap:"6px"
+        }},
+          React.createElement("button",{
+            onClick:()=>{
+              if(!extPdfDirs.includes(browsePath))
+                saveExtDirs([...extPdfDirs, browsePath]);
+            },
+            disabled:extPdfDirs.includes(browsePath),
+            style:{flex:1,background:"rgba(180,140,255,0.1)",
+                   border:"1px solid rgba(180,140,255,0.3)",borderRadius:"4px",
+                   padding:"4px 0",fontSize:"10px",
+                   color:extPdfDirs.includes(browsePath)?"rgba(180,140,255,0.35)":"rgba(180,140,255,0.8)",
+                   cursor:extPdfDirs.includes(browsePath)?"default":"pointer"}
+          }, extPdfDirs.includes(browsePath)?"✓ Map al toegevoegd":"＋ Voeg map toe als bron")
+        ),
+
+        // Foutmelding
+        browseError && React.createElement("div",{style:{
+          margin:"8px 10px",padding:"8px 10px",
+          background:"rgba(229,120,109,0.1)",border:"1px solid rgba(229,120,109,0.3)",
+          borderRadius:"5px",fontSize:"11px",color:W.orange,lineHeight:"1.5"
+        }}, "⚠ "+browseError),
+
+        // Bestanden & mappen lijst
+        React.createElement("div",{style:{flex:1,overflowY:"auto"}},
+          browseLoading
+            ? React.createElement("div",{style:{padding:"20px",fontSize:"11px",
+                color:W.fgMuted,textAlign:"center"}},"⏳ Laden…")
+            : browseItems.length===0 && !browseError
+              ? React.createElement("div",{style:{padding:"20px",fontSize:"11px",
+                  color:W.fgMuted,textAlign:"center",lineHeight:"1.8"}},
+                  "Klik op een map om te bladeren,\nof klik 🏠 om te starten")
+              : browseItems.map((item,i)=>{
+                  const isPdf = item.type==="pdf";
+                  const isDir = item.type==="dir";
+                  const sel   = isPdf && ctxExtPdfs.includes(item.path);
+                  return React.createElement("div",{key:item.path+i,
+                    onClick:()=>{
+                      if(isDir) browseTo(item.path);
+                      else if(isPdf)
+                        setCtxExtPdfs(prev=>sel?prev.filter(x=>x!==item.path):[...prev,item.path]);
+                    },
+                    style:{padding:"7px 12px",
+                           borderBottom:`1px solid rgba(255,255,255,0.03)`,
+                           cursor:"pointer",display:"flex",alignItems:"center",gap:"8px",
+                           background:sel?"rgba(180,140,255,0.1)":"transparent",
+                           borderLeft:`3px solid ${sel?"rgba(180,140,255,0.6)":"transparent"}`,
+                    }
+                  },
+                    // Checkbox voor PDFs, map-icon voor dirs
+                    isPdf
+                      ? React.createElement("div",{style:{width:"15px",height:"15px",
+                          borderRadius:"3px",flexShrink:0,
+                          background:sel?"rgba(180,140,255,0.3)":"transparent",
+                          border:`1.5px solid ${sel?"rgba(180,140,255,0.7)":"rgba(255,255,255,0.15)"}`,
+                          display:"flex",alignItems:"center",justifyContent:"center"}},
+                          sel&&React.createElement("span",{style:{fontSize:"10px",
+                            color:"rgba(180,140,255,1)",lineHeight:1,fontWeight:"bold"}},"✓"))
+                      : React.createElement("span",{style:{fontSize:"15px",flexShrink:0}},"📁"),
+
+                    React.createElement("div",{style:{minWidth:0,flex:1}},
+                      React.createElement("div",{style:{
+                        fontSize:"12px",
+                        color: sel?"rgba(180,140,255,0.95)":isDir?W.fg:W.fgDim,
+                        overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",
+                        fontWeight:isDir?"500":"normal"
+                      }}, item.name),
+                      React.createElement("div",{style:{fontSize:"9px",
+                        color:"rgba(180,140,255,0.35)",marginTop:"1px"}},
+                        isPdf && item.size ? Math.round(item.size/1024)+" KB" : "")
+                    ),
+                    isDir && React.createElement("span",{style:{color:W.fgMuted,fontSize:"13px",
+                      flexShrink:0}}, "›")
+                  );
+                })
+        )
+      )
     )
   );
 };
@@ -6645,35 +7653,525 @@ const MarkdownWithMermaid = ({ content, notes, renderMode, isMobile, onClick, on
   );
 };
 
+// ── FuzzySearch ────────────────────────────────────────────────────────────────
+// FZF-stijl zoeken over notities én vault-PDFs (per pagina + regelnummer).
+// Resultaten zijn inline bewerkbaar en opslaan als Zettelkasten notitie.
+const FuzzySearch = ({ notes, allTags, onOpenNote, onAddNote, onUpdateNote }) => {
+  const { useState, useEffect, useRef, useCallback, useMemo } = React;
+
+  const [query,      setQuery]      = useState("");
+  const [results,    setResults]    = useState([]);
+  const [loading,    setLoading]    = useState(false);
+  const [error,      setError]      = useState(null);
+  const [selIdx,     setSelIdx]     = useState(null);   // welk resultaat geselecteerd
+  const [editState,  setEditState]  = useState({});     // {id → {title, content, tags, dirty}}
+  const [saving,     setSaving]     = useState({});     // {id → bool}
+  const [saved,      setSaved]      = useState({});     // {id → bool}  (groen vinkje)
+  const [tagInput,   setTagInput]   = useState({});     // {id → string}
+  const [typeFilter, setTypeFilter] = useState("all"); // "all" | "note" | "pdf"
+  const inputRef = useRef(null);
+  const debRef   = useRef(null);
+
+  // Focust altijd het zoekveld bij mount
+  useEffect(() => { inputRef.current?.focus(); }, []);
+
+  // Gefilterde resultaten op basis van typeFilter
+  const filteredResults = useMemo(() =>
+    typeFilter === "all" ? results : results.filter(r => r.type === typeFilter),
+    [results, typeFilter]
+  );
+
+  // Debounced zoekfunctie
+  const doSearch = useCallback((q) => {
+    if (!q.trim()) { setResults([]); setSelIdx(null); setError(null); return; }
+    setLoading(true); setError(null);
+    fetch("/api/search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query: q }),
+    })
+      .then(r => r.json())
+      .then(d => {
+        if (d.error) { setError(d.error); setResults([]); }
+        else {
+          setResults(d.results || []);
+          setSelIdx(d.results?.length ? 0 : null);
+        }
+        setLoading(false);
+      })
+      .catch(e => { setError(e.message); setLoading(false); });
+  }, []);
+
+  const handleQueryChange = (q) => {
+    setQuery(q);
+    clearTimeout(debRef.current);
+    debRef.current = setTimeout(() => doSearch(q), 280);
+  };
+
+  // Toetsenbord navigatie (pijl op/neer, Enter opent)
+  // Edit state initialiseren voor een resultaat
+  const openEdit = (r, idx) => {
+    const key = resultKey(r, idx);
+    setSelIdx(idx);
+    if (!editState[key]) {
+      setEditState(s => ({ ...s, [key]: {
+        title:   r.type === "note" ? r.title : suggestTitle(r),
+        content: r.type === "note" ? (r.content||"") : suggestContent(r),
+        tags:    r.type === "note" ? (r.tags||[]) : suggestTags(r),
+        dirty:   false,
+        isNew:   r.type !== "note",  // PDF-hits worden nieuwe notities
+      }}));
+    }
+  };
+
+  const resultKey = (r, idx) => r.type === "note" ? ("note-"+r.id) : ("pdf-"+idx);
+
+  const suggestTitle = (r) =>
+    r.source ? `Aantekening — ${r.source} p.${r.page}` : r.title;
+
+  const suggestContent = (r) => {
+    const bron = r.type === "pdf"
+      ? `📄 **Bron:** [[pdf:${r.source}]]  —  pagina ${r.page}, regel ${r.line}\n\n`
+      : "";
+    return bron + (r.excerpt || "");
+  };
+
+  const suggestTags = (r) =>
+    r.type === "pdf" ? ["pdf", "excerpt"] : (r.tags || []);
+
+  // Highlight zoektermen in tekst
+  const highlight = (text, q) => {
+    if (!q.trim() || !text) return text;
+    const tokens = q.trim().split(/\s+/).filter(Boolean);
+    // Escape regex special chars
+    const pattern = tokens.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+    const re = new RegExp(`(${pattern})`, 'gi');
+    const parts = text.split(re);
+    return parts.map((p, i) =>
+      re.test(p)
+        ? React.createElement("mark", {
+            key: i,
+            style: { background: W.yellow+"44", color: W.fg, borderRadius: "2px",
+                     padding: "0 1px", fontWeight: "bold" }
+          }, p)
+        : p
+    );
+  };
+
+  // Opslaan — bijwerken of nieuw aanmaken
+  const handleSave = async (r, idx) => {
+    const key = resultKey(r, idx);
+    const es  = editState[key];
+    if (!es) return;
+    setSaving(s => ({ ...s, [key]: true }));
+    try {
+      const noteData = {
+        title:    es.title,
+        content:  es.content,
+        tags:     es.tags,
+        modified: new Date().toISOString(),
+      };
+      if (!es.isNew && r.type === "note" && r.id) {
+        // Bijwerken bestaande notitie
+        await onUpdateNote({ ...noteData, id: r.id });
+      } else {
+        // Nieuwe notitie aanmaken
+        const created = { ...noteData, id: genId(), created: new Date().toISOString() };
+        await onAddNote(created);
+      }
+      setEditState(s => ({ ...s, [key]: { ...es, dirty: false, isNew: false } }));
+      setSaved(s => ({ ...s, [key]: true }));
+      setTimeout(() => setSaved(s => ({ ...s, [key]: false })), 2200);
+    } catch(e) {
+      alert("Opslaan mislukt: " + e.message);
+    }
+    setSaving(s => ({ ...s, [key]: false }));
+  };
+
+  // Tag toevoegen vanuit tagInput
+  const addTag = (key, tag) => {
+    const t = tag.trim().toLowerCase().replace(/\s+/g, "-");
+    if (!t) return;
+    setEditState(s => {
+      const es = s[key]; if (!es) return s;
+      if (es.tags.includes(t)) return s;
+      return { ...s, [key]: { ...es, tags: [...es.tags, t], dirty: true } };
+    });
+    setTagInput(s => ({ ...s, [key]: "" }));
+  };
+
+  const removeTag = (key, tag) => {
+    setEditState(s => {
+      const es = s[key]; if (!es) return s;
+      return { ...s, [key]: { ...es, tags: es.tags.filter(t=>t!==tag), dirty: true } };
+    });
+  };
+
+  // ── Stijlen ───────────────────────────────────────────────────────────────
+  const css = {
+    root:   { display:"flex", flexDirection:"column", height:"100%", background:W.bg,
+               fontFamily:"'Hack', monospace, sans-serif", overflow:"hidden" },
+    header: { padding:"12px 16px 10px", borderBottom:`1px solid ${W.splitBg}`,
+               background:W.bg2, flexShrink:0 },
+    searchRow: { display:"flex", gap:"8px", alignItems:"center" },
+    input:  { flex:1, background:W.bg, border:`2px solid ${W.blue}`, borderRadius:"6px",
+               color:W.fg, padding:"8px 14px", fontSize:"15px", outline:"none",
+               fontFamily:"inherit", letterSpacing:"0.3px" },
+    meta:   { fontSize:"12px", color:W.fgMuted, marginTop:"6px" },
+    body:   { display:"flex", flex:1, overflow:"hidden" },
+    // Resultatenlijst links
+    list:   { width:"340px", flexShrink:0, overflowY:"auto", borderRight:`1px solid ${W.splitBg}` },
+    item:   (selected, type) => ({
+      padding:"10px 14px", cursor:"pointer", borderBottom:`1px solid ${W.splitBg}`,
+      background: selected ? (type==="note"?W.bg2+"ee":"rgba(230,180,0,0.08)") : "transparent",
+      borderLeft: selected ? `3px solid ${type==="note"?W.blue:W.yellow}` : "3px solid transparent",
+      transition:"background 0.1s",
+    }),
+    itemTitle: { fontSize:"13px", fontWeight:"bold", color:W.fg,
+                  whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" },
+    itemMeta:  { fontSize:"11px", color:W.fgMuted, marginTop:"3px" },
+    itemExcerpt: { fontSize:"11px", color:W.fgDim, marginTop:"4px",
+                    lineHeight:"1.5", display:"-webkit-box",
+                    WebkitLineClamp:2, WebkitBoxOrient:"vertical", overflow:"hidden" },
+    badge: (type) => ({
+      display:"inline-block", fontSize:"10px", padding:"1px 6px", borderRadius:"10px",
+      marginRight:"5px", fontWeight:"bold",
+      background: type==="note" ? W.blue+"33" : W.yellow+"33",
+      color:       type==="note" ? W.blue      : W.yellow,
+      border: `1px solid ${type==="note" ? W.blue+"66" : W.yellow+"66"}`,
+    }),
+    // Editor rechts
+    editor: { flex:1, display:"flex", flexDirection:"column", overflow:"hidden" },
+    editorInner: { flex:1, overflowY:"auto", padding:"16px 20px" },
+    editorEmpty: { flex:1, display:"flex", alignItems:"center", justifyContent:"center",
+                    flexDirection:"column", gap:"12px", color:W.fgMuted },
+    fieldLabel: { fontSize:"11px", color:W.fgMuted, letterSpacing:"1px",
+                   textTransform:"uppercase", marginBottom:"4px" },
+    titleInput: { width:"100%", background:W.bg2, border:`1px solid ${W.splitBg}`,
+                   borderRadius:"4px", color:W.fg, padding:"6px 10px",
+                   fontSize:"15px", fontWeight:"bold", outline:"none", boxSizing:"border-box",
+                   fontFamily:"inherit" },
+    textarea: { width:"100%", background:W.bg, border:`1px solid ${W.splitBg}`,
+                 borderRadius:"4px", color:W.fg, padding:"8px 10px",
+                 fontSize:"13px", outline:"none", boxSizing:"border-box",
+                 fontFamily:"'Hack', monospace", lineHeight:"1.65", resize:"vertical" },
+    tagPill: { display:"inline-flex", alignItems:"center", gap:"4px",
+                background:W.bg2, border:`1px solid ${W.splitBg}`, borderRadius:"12px",
+                padding:"2px 8px", fontSize:"12px", color:W.comment },
+    tagX: { cursor:"pointer", color:W.fgMuted, marginLeft:"2px" },
+    saveBar: { padding:"10px 16px", borderTop:`1px solid ${W.splitBg}`,
+                background:W.bg2, display:"flex", alignItems:"center", gap:"10px",
+                flexShrink:0 },
+    saveBtn: (s) => ({
+      padding:"6px 18px", borderRadius:"5px", border:"none", cursor:"pointer",
+      fontWeight:"bold", fontSize:"13px", fontFamily:"inherit",
+      background: s ? W.green : W.blue, color: W.bg,
+      opacity: s ? 0.7 : 1,
+    }),
+    openBtn: { padding:"6px 14px", borderRadius:"5px", border:`1px solid ${W.blue}`,
+                cursor:"pointer", fontSize:"13px", fontFamily:"inherit",
+                background:"transparent", color:W.blue },
+    sourceBox: { background:W.bg2, borderLeft:`3px solid ${W.yellow}`,
+                  padding:"8px 12px", borderRadius:"0 4px 4px 0",
+                  fontSize:"12px", color:W.yellow, marginBottom:"14px" },
+    excerptBox: { background:W.bg, border:`1px solid ${W.splitBg}`, borderRadius:"4px",
+                   padding:"8px 12px", fontSize:"12px", color:W.fgDim,
+                   fontFamily:"'Hack', monospace", lineHeight:"1.6", marginBottom:"14px",
+                   whiteSpace:"pre-wrap" },
+  };
+
+  // ── Render resultatenlijst ────────────────────────────────────────────────
+  // Score → kleur (groen=hoog, geel=midden, grijs=laag)
+  const scoreColor = (sc) => sc > 300 ? W.green : sc > 100 ? W.yellow : W.fgMuted;
+  const maxScore   = useMemo(() => results.reduce((m,r) => Math.max(m, r.score||0), 1), [results]);
+
+  const renderList = () => {
+    if (loading) return React.createElement("div", { style:{padding:"20px",color:W.fgMuted,fontSize:"13px"} },
+      "⏳ Zoeken in notities en PDFs…");
+    if (error)  return React.createElement("div", { style:{padding:"20px",color:W.red,fontSize:"13px"} },
+      "⚠️ " + error);
+    if (!query.trim()) return React.createElement("div", { style:{padding:"20px",color:W.fgMuted,fontSize:"13px"} },
+      React.createElement("div",{style:{fontSize:"32px",marginBottom:"12px"}},"🔍"),
+      React.createElement("div",{style:{fontWeight:"bold",marginBottom:"8px",color:W.fg}},"FZF Zoeken"),
+      React.createElement("div",null,"Doorzoek alle notities en volledige PDF-inhoud."),
+      React.createElement("div",{style:{marginTop:"10px",display:"flex",flexDirection:"column",gap:"5px"}}),
+      React.createElement("div",{style:{color:W.fgDim,marginTop:"8px"}},"• Spatie = AND  (meerdere woorden)"),
+      React.createElement("div",{style:{color:W.fgDim}},"• ↑↓ navigeert resultaten  ·  Enter opent"),
+      React.createElement("div",{style:{color:W.fgDim}},"• Fuzzy: typ letters in volgorde, geen exacte match nodig"),
+      React.createElement("div",{style:{color:W.fgDim}},"• PDF-hits tonen pagina + regelnummer")
+    );
+    if (!filteredResults.length) return React.createElement("div",{style:{padding:"20px",color:W.fgMuted,fontSize:"13px"}},
+      results.length
+        ? `Geen ${typeFilter === "note" ? "notitie" : "PDF"}-resultaten — ${results.length} resultaten totaal`
+        : `Geen resultaten voor "${query}"`
+    );
+
+    return filteredResults.map((r, idx) => {
+      const key = resultKey(r, idx);
+      const sel = selIdx === idx;
+      const es  = editState[key];
+      const isNote = r.type === "note";
+      const sc  = r.score || 0;
+      const barW = Math.round((sc / maxScore) * 100);
+
+      return React.createElement("div", {
+        key, style: css.item(sel, r.type),
+        onClick: () => openEdit(r, idx),
+      },
+        // Titel rij: badge + titel
+        React.createElement("div", { style:{ display:"flex", alignItems:"flex-start", gap:"6px", marginBottom:"3px" } },
+          React.createElement("span", { style: css.badge(r.type) },
+            isNote ? "📝" : "📄"
+          ),
+          React.createElement("div", { style: css.itemTitle },
+            isNote ? highlight(r.title, query) : highlight(r.source, query)
+          )
+        ),
+        // Meta-regel: bron + pagina/regel
+        React.createElement("div", { style: css.itemMeta },
+          isNote
+            ? React.createElement("span", null,
+                (r.tags||[]).slice(0,4).map(t =>
+                  React.createElement("span",{key:t,style:{color:W.blue,marginRight:"4px"}},"#"+t)
+                ),
+                r.line > 1 && React.createElement("span",{style:{color:W.fgDim}},` · regel ${r.line}`)
+              )
+            : React.createElement("span", null,
+                React.createElement("span",{style:{color:W.yellow,fontWeight:"bold"}},"p."+r.page),
+                React.createElement("span",{style:{color:W.fgDim}},`  ·  r.${r.line}  ·  `),
+                React.createElement("span",{style:{color:W.fgMuted}}, r.source.length>28 ? "…"+r.source.slice(-26) : r.source)
+              )
+        ),
+        // Score-balk
+        React.createElement("div",{style:{height:"2px",background:W.splitBg,borderRadius:"1px",margin:"4px 0",overflow:"hidden"}},
+          React.createElement("div",{style:{height:"100%",width:barW+"%",background:scoreColor(sc),borderRadius:"1px",transition:"width 0.2s"}})
+        ),
+        // Excerpt
+        r.excerpt && React.createElement("div", { style: css.itemExcerpt },
+          highlight(r.excerpt, query)
+        ),
+        // Bewerkingsindicator
+        es?.dirty && React.createElement("div", { style:{fontSize:"10px",color:W.yellow,marginTop:"4px"} },
+          "● gewijzigd"
+        )
+      );
+    });
+  };
+
+  // ── Render editor rechts ──────────────────────────────────────────────────
+  const renderEditor = () => {
+    if (selIdx === null || !filteredResults[selIdx]) return React.createElement("div", { style: css.editorEmpty },
+      React.createElement("div",{style:{fontSize:"48px"}},"🔍"),
+      React.createElement("div",{style:{fontSize:"14px"}},"Selecteer een resultaat om te bewerken")
+    );
+
+    const r   = filteredResults[selIdx];
+    const key = resultKey(r, selIdx);
+    const es  = editState[key];
+    const isSaving = saving[key];
+    const isSaved  = saved[key];
+
+    if (!es) return React.createElement("div", { style: css.editorEmpty },
+      React.createElement("div",null,"Klik op een resultaat om te openen")
+    );
+
+    const fieldSep = React.createElement("div", { style:{marginBottom:"14px"} });
+
+    return React.createElement(React.Fragment, null,
+      React.createElement("div", { style: css.editorInner },
+
+        // Bronmelding
+        React.createElement("div", { style: css.sourceBox },
+          r.type === "pdf"
+            ? `📄 ${r.source}  ·  pagina ${r.page}  ·  regel ${r.line}`
+            : `📝 Notitie${r.line > 1 ? `  ·  regel ${r.line}` : ""}`
+        ),
+
+        // Excerpt (alleen-lezen context)
+        r.excerpt && React.createElement(React.Fragment, null,
+          React.createElement("div", { style: css.fieldLabel }, "Gevonden fragment"),
+          React.createElement("div", { style: css.excerptBox },
+            highlight(r.excerpt, query)
+          )
+        ),
+
+        // Titelfield
+        React.createElement("div", { style: css.fieldLabel }, "Titel"),
+        React.createElement("input", {
+          style: css.titleInput,
+          value: es.title,
+          onChange: e => setEditState(s => ({ ...s, [key]: { ...s[key], title: e.target.value, dirty: true } })),
+          placeholder: "Notitie-titel…",
+        }),
+        fieldSep,
+
+        // Inhoud
+        React.createElement("div", { style: css.fieldLabel }, "Inhoud"),
+        React.createElement("textarea", {
+          style: { ...css.textarea, minHeight:"220px" },
+          value: es.content,
+          rows: 14,
+          onChange: e => setEditState(s => ({ ...s, [key]: { ...s[key], content: e.target.value, dirty: true } })),
+          placeholder: "Notitie-inhoud (Markdown)…",
+        }),
+        fieldSep,
+
+        // Tags
+        React.createElement("div", { style: css.fieldLabel }, "Tags"),
+        React.createElement("div", { style:{ display:"flex", flexWrap:"wrap", gap:"6px", marginBottom:"8px" } },
+          (es.tags||[]).map(tag =>
+            React.createElement("span", { key: tag, style: css.tagPill },
+              "#" + tag,
+              React.createElement("span", {
+                style: css.tagX,
+                onClick: () => removeTag(key, tag)
+              }, "×")
+            )
+          )
+        ),
+        React.createElement("input", {
+          style: { ...css.titleInput, fontSize:"12px", padding:"4px 8px", width:"auto", minWidth:"160px" },
+          value:  tagInput[key] || "",
+          placeholder: "tag toevoegen…",
+          onChange: e => setTagInput(s => ({ ...s, [key]: e.target.value })),
+          onKeyDown: e => {
+            if (["Enter","Tab",","," "].includes(e.key)) {
+              e.preventDefault();
+              addTag(key, tagInput[key]||"");
+            }
+          }
+        }),
+        fieldSep,
+
+        // Zettelkasten-info box
+        es.isNew && React.createElement("div", {
+          style:{ background:W.bg2, border:`1px solid ${W.green}44`, borderRadius:"6px",
+                  padding:"10px 14px", fontSize:"12px", color:W.comment,
+                  display:"flex", gap:"10px", alignItems:"flex-start" }
+        },
+          React.createElement("span",{style:{fontSize:"16px"}},"💡"),
+          React.createElement("div",null,
+            React.createElement("strong",{style:{color:W.green}},"Opslaan als Zettelkasten-notitie"),
+            React.createElement("div",{style:{marginTop:"4px"}},
+              "Dit PDF-fragment wordt een nieuwe notitie met automatische bronverwijzing. ",
+              "Je kunt de inhoud aanpassen vóór het opslaan."
+            )
+          )
+        ),
+      ),
+
+      // Save-balk
+      React.createElement("div", { style: css.saveBar },
+        React.createElement("button", {
+          style: css.saveBtn(isSaved),
+          disabled: isSaving,
+          onClick: () => handleSave(r, selIdx),
+        }, isSaving ? "⏳ opslaan…" : isSaved ? "✓ opgeslagen" : es.isNew ? "＋ Opslaan als notitie" : "💾 Wijzigingen opslaan"),
+
+        !es.isNew && r.type === "note" && r.id &&
+          React.createElement("button", {
+            style: css.openBtn,
+            onClick: () => onOpenNote(r.id),
+          }, "→ Open in editor"),
+
+        es.dirty && React.createElement("span", { style:{fontSize:"12px",color:W.yellow} },
+          "● Niet opgeslagen"
+        ),
+        isSaved && React.createElement("span", { style:{fontSize:"12px",color:W.green} },
+          "✓ Opgeslagen in vault"
+        ),
+      )
+    );
+  };
+
+  // ── Hoofd render ──────────────────────────────────────────────────────────
+  // Keyboard nav werkt op filteredResults
+  const handleKeyDown = (e) => {
+    if (!filteredResults.length) return;
+    if (e.key === "ArrowDown") { e.preventDefault(); setSelIdx(i => Math.min((i??-1)+1, filteredResults.length-1)); }
+    if (e.key === "ArrowUp")   { e.preventDefault(); setSelIdx(i => Math.max((i??1)-1, 0)); }
+    if (e.key === "Enter" && selIdx !== null) {
+      const r = filteredResults[selIdx];
+      if (r) openEdit(r, selIdx);
+    }
+  };
+
+  const nNotes = results.filter(r=>r.type==="note").length;
+  const nPdfs  = results.filter(r=>r.type==="pdf").length;
+
+  const filterBtnStyle = (active) => ({
+    padding:"3px 12px", borderRadius:"12px", fontSize:"11px", fontWeight:"bold",
+    cursor:"pointer", border:"none", fontFamily:"inherit",
+    background: active ? W.blue : W.bg,
+    color:       active ? W.bg   : W.fgMuted,
+    transition:"all 0.15s",
+  });
+
+  return React.createElement("div", { style: css.root },
+
+    // Zoekbalk header
+    React.createElement("div", { style: css.header },
+      React.createElement("div", { style: css.searchRow },
+        React.createElement("span", { style:{fontSize:"18px"} }, "🔍"),
+        React.createElement("input", {
+          ref: inputRef,
+          style: css.input,
+          value: query,
+          placeholder: "Fuzzy zoeken in notities en PDFs…  (spatie = AND, volgorde telt)",
+          onChange: e => handleQueryChange(e.target.value),
+          onKeyDown: handleKeyDown,
+          autoFocus: true,
+          spellCheck: false,
+        }),
+        loading && React.createElement("span", { style:{color:W.fgMuted,fontSize:"13px",marginLeft:"4px"} }, "⏳"),
+        query && React.createElement("span", {
+          style:{cursor:"pointer",color:W.fgMuted,fontSize:"16px",marginLeft:"4px",padding:"0 4px"},
+          onClick:()=>{ setQuery(""); setResults([]); setSelIdx(null); inputRef.current?.focus(); }
+        }, "×"),
+      ),
+      // Filter-tabs + teller
+      React.createElement("div", { style:{display:"flex",alignItems:"center",gap:"6px",marginTop:"8px",flexWrap:"wrap"} },
+        React.createElement("button", { style:filterBtnStyle(typeFilter==="all"), onClick:()=>setTypeFilter("all") },
+          `Alles${results.length ? " ("+results.length+")" : ""}`),
+        React.createElement("button", { style:filterBtnStyle(typeFilter==="note"), onClick:()=>setTypeFilter("note") },
+          `📝 Notities${nNotes ? " ("+nNotes+")" : ""}`),
+        React.createElement("button", { style:{...filterBtnStyle(typeFilter==="pdf"), background:typeFilter==="pdf"?W.yellow:W.bg, color:typeFilter==="pdf"?W.bg:W.fgMuted}, onClick:()=>setTypeFilter("pdf") },
+          `📄 PDF${nPdfs ? " ("+nPdfs+")" : ""}`),
+        results.length > 0 && React.createElement("span",{style:{fontSize:"11px",color:W.fgDim,marginLeft:"4px"}},
+          `${filteredResults.length} zichtbaar`
+        ),
+      ),
+    ),
+
+    // Body: lijst + editor
+    React.createElement("div", { style: css.body },
+      React.createElement("div", { style: css.list }, renderList()),
+      React.createElement("div", { style: css.editor }, renderEditor())
+    )
+  );
+};
+
 const App = () => {
   const { useState, useEffect, useRef, useMemo, useCallback } = React;
 
-  const [notes,        setNotes]       = useState([]);
-  const [selId,        setSelId]       = useState(null);
-  const [vimMode,      setVimMode]     = useState(false);
-  const [editTitle,    setEditTitle]   = useState("");
-  const [editContent,  setEditContent] = useState("");
-  const [editTags,     setEditTags]    = useState([]);
-  const [tab,          setTab]         = useState("notes");
-  const [splitMode,    setSplitMode]   = useState(false);   // split screen aan/uit
-  const [splitTab,     setSplitTab]    = useState("pdf");   // tab in rechter helft
-  const [search,       setSearch]      = useState("");
-  const [typeFilter,   setTypeFilter]  = useState("all");   // all|notes|pdf|images
+  // ── Notities-state (gedelegeerd aan NoteStore + NotesTab) ───────────────────
+  const [notes,    setNotes]   = useState([]);   // gespiegeld vanuit NoteStore
+  const [goyoMode, setGoyoMode] = useState(false); // App-level: beïnvloedt topbar
+  const [splitMode, setSplitMode] = useState(false);
+  const [splitTab,  setSplitTab]  = useState("pdf");
+  const [selId,    setSelId]   = useState(null);
+  const [tab,      setTab]     = useState("notes");
   const [pdfNotes,     setPdfNotes]    = useState([]);
   const [imgNotes,     setImgNotes]    = useState([]);
   const [serverPdfs,   setServerPdfs]  = useState([]);
   const [serverImages, setServerImages]= useState([]);
   const [llmModel,     setLlmModel]    = useState("llama3.2-vision");
   const [aiMindmap,    setAiMindmap]   = useState(null);
-  const [tagFilter,    setTagFilter]   = useState(null);
   const [showSettings, setShowSettings]= useState(false);
   const [vaultPath,    setVaultPath]   = useState("…");
-  const [goyoMode,     setGoyoMode]    = useState(false);
-  const [showMetaPanel,setShowMetaPanel]= useState(false); // meta-paneel rechts, standaard ingeklapt
   const [loaded,       setLoaded]      = useState(false);
   const [error,        setError]       = useState(null);
   const [sidebarOpen,  setSidebarOpen] = useState(false);
-  const [renderMode,    setRenderMode]  = useState("plain");
   const [aiStatus,      setAiStatus]    = useState(null);  // legacy (enkele taak)
   const [jobs,          setJobs]         = useState([]);    // [{id,type,label,status,result,error}]
   const [jobsPanelOpen, setJobsPanelOpen] = useState(false);
@@ -6696,17 +8194,6 @@ const App = () => {
 
   const runningJobs = jobs.filter(j => j.status==="running");
   const doneJobs    = jobs.filter(j => j.status!=="running");
-  const [showLinkMenu,  setShowLinkMenu] = useState(false);  // gecombineerde link-dropdown
-  const [linkSearch,    setLinkSearch]   = useState("");     // zoekterm in link-dropdown
-  const [linkTypeFilter,setLinkTypeFilter]= useState("all"); // all|notes|pdf|images
-
-  // Sluit link-dropdown bij klik buiten
-  React.useEffect(()=>{
-    if(!showLinkMenu) return;
-    const h=()=>{ setShowLinkMenu(false); setLinkSearch(""); };
-    setTimeout(()=>document.addEventListener("click",h),0);
-    return ()=>document.removeEventListener("click",h);
-  },[showLinkMenu]);
 
   // Sluit job-panel bij klik buiten
   React.useEffect(()=>{
@@ -6724,7 +8211,6 @@ const App = () => {
   // Op desktop sidebar altijd open; tablet/mobile via toggle
   const showSidebar  = isDesktop || sidebarOpen;
   const sidebarW     = isMobile ? Math.min(winW - 40, 320) : 240;
-  const showMeta     = isDesktop && !goyoMode && showMetaPanel;
 
   // ── CSS animaties voor AI indicator ──────────────────────────────────────
   React.useEffect(()=>{
@@ -6744,9 +8230,10 @@ const App = () => {
   useEffect(() => {
     const load = async () => {
       try {
-        const [ns,as,ias,ps,imgs,cfg] = await Promise.all([
-          api.get("/notes"), api.get("/annotations"), api.get("/img-annotations"),
-          api.get("/pdfs"),  api.get("/images"), api.get("/config"),
+        // NoteStore + AnnotationStore laden data — App spiegelt via subscribe
+        const [ns, as, ias, ps, imgs, cfg] = await Promise.all([
+          NoteStore.load(), AnnotationStore.load(), api.get("/img-annotations"),
+          api.get("/pdfs"), api.get("/images"), api.get("/config"),
         ]);
         setNotes(ns); setPdfNotes(as); setImgNotes(ias||[]); setServerPdfs(ps); setServerImages(imgs||[]);
         setVaultPath(cfg.vault_path || "…");
@@ -6756,106 +8243,24 @@ const App = () => {
         setError("Kan server niet bereiken.\nStart de server met: python3 server.py");
       }
     };
+    // Subscribe: NoteStore of AnnotationStore wijzigt → App-state bijwerken
+    const unsubNotes  = NoteStore.subscribe(ns => setNotes([...ns]));
+    const unsubAnnots = AnnotationStore.subscribe(as => setPdfNotes([...as]));
     load();
+    return () => { unsubNotes(); unsubAnnots(); };
   }, []);
 
-  const refreshPdfs   = async () => { setServerPdfs(await api.get("/pdfs")); };
+  const refreshPdfs   = async () => { setServerPdfs(await PDFService.listPdfs()); };
   const refreshImages = async () => { setServerImages(await api.get("/images")||[]); };
 
-  // ── Note helpers ──────────────────────────────────────────────────────────
-  const selNote    = notes.find(n => n.id === selId);
-  const allTags    = useMemo(() => [...new Set([
+  // ── Note helpers (allTags is nog nodig voor andere tabs) ─────────────────
+  const allTags = useMemo(() => [...new Set([
     ...notes.flatMap(n => n.tags||[]),
     ...pdfNotes.flatMap(p => p.tags||[])
   ])], [notes, pdfNotes]);
-  const sidebarTags = useMemo(() =>
-    [...new Set(notes.flatMap(n => n.tags||[]))],
-  [notes]);
 
-  const filtered = useMemo(() => {
-    const q = search.toLowerCase();
-    return notes.filter(n =>
-      (!q || n.title?.toLowerCase().includes(q)
-          || n.content?.toLowerCase().includes(q)
-          || (n.tags||[]).some(t => t.includes(q)))
-      && (!tagFilter || (n.tags||[]).includes(tagFilter))
-    );
-  }, [notes, search, tagFilter]);
-
-  const titleRef   = useRef(null);
-  const contentRef = useRef(null);
-
-  const todayHeader = () => {
-    const d   = new Date();
-    const dag = ["zondag","maandag","dinsdag","woensdag","donderdag","vrijdag","zaterdag"][d.getDay()];
-    return `${dag} ${String(d.getDate()).padStart(2,"0")}-${String(d.getMonth()+1).padStart(2,"0")}-${d.getFullYear()}`;
-  };
-
-  const newNote = async () => {
-    const id      = genId();
-    // Regel 1: datum  |  Regel 2: leeg  |  Regel 3: cursor begint hier
-    const content = `*${todayHeader()}*\n\n`;
-    const n = {id, title:"", content, tags:[],
-               created: new Date().toISOString(), modified: new Date().toISOString()};
-    const saved = await api.post("/notes", n);
-    setNotes(p => [saved,...p]); setSelId(id);
-    setEditTitle(""); setEditContent(content); setEditTags([]);
-    setVimMode(true);
-    setSidebarOpen(false);
-    // Focus titelinput — Enter springt naar regel 3 van de editor
-    setTimeout(() => { titleRef.current?.focus(); titleRef.current?.select(); }, 80);
-  };
-
-  const openEdit = () => {
-    if (!selNote) return;
-    setEditTitle(selNote.title);
-    setEditContent(selNote.content);
-    setEditTags(selNote.tags || []);
-    setVimMode(true);
-    setSidebarOpen(false);
-    setTimeout(() => { contentRef.current?.focus(); }, 80);
-  };
-
-  const save = async () => {
-    const updated = {...selNote, title:editTitle, content:editContent,
-      tags:[...new Set([...editTags,...extractTags(editContent)])]};
-    const saved = await api.put("/notes/"+selId, updated);
-    setNotes(prev => prev.map(n => n.id===selId ? saved : n));
-  };
-
-  const closeEdit = () => setVimMode(false);
-
-  const del = async () => {
-    if (!selNote || !window.confirm("Verwijder dit zettel?")) return;
-    await api.del("/notes/"+selId);
-    const rest = notes.filter(n => n.id !== selId);
-    setNotes(rest); setSelId(rest[0]?.id || null); setVimMode(false);
-  };
-
-  const backlinks = useMemo(() =>
-    selId ? notes.filter(n => extractLinks(n.content).includes(selId)) : [],
-  [notes, selId]);
-
-  const [mermaidEditNote, setMermaidEditNote] = React.useState(null); // {noteId, code}
-
-  const handleLink = e => {
-    // Mermaid mindmap blok klik → open editor
-    const mm = e.target.closest(".mermaid-mindmap-block");
-    if (mm) {
-      const code = mm.dataset.mermaid?.replace(/&#10;/g,"\n").replace(/&quot;/g,'"') || "";
-      setMermaidEditNote({ noteId: selId, code });
-      return;
-    }
-    const el = e.target.closest(".zlink"); if (!el) return;
-    const n  = notes.find(x => x.id===el.dataset.id || x.title===el.dataset.id);
-    if (n) { setSelId(n.id); setVimMode(false); }
-  };
-
-  const selectNote = (id) => {
-    setSelId(id);
-    setVimMode(false);
-    if (!isDesktop) setSidebarOpen(false); // sluit drawer na selectie
-  };
+  // Note-acties zijn gedelegeerd aan NotesTab + NoteStore.
+  // App ontvangt notificaties via NoteStore.subscribe (zie load-effect hierboven).
 
   // ── Error / loading ───────────────────────────────────────────────────────
   if (error) return React.createElement("div", {
@@ -6878,852 +8283,55 @@ const App = () => {
            height:"100vh",background:W.bg,color:W.blue,fontSize:"14px"}
   }, "Zettelkasten laden…");
 
-  // ── Sidebar inhoud ────────────────────────────────────────────────────────
-  const sidebarContent = React.createElement("div", {
-    style:{display:"flex",flexDirection:"column",height:"100%",background:W.bg2}
-  },
-    // Header
-    React.createElement("div", {
-      style:{padding:"8px 10px 6px",background:W.statusBg,
-             borderBottom:`1px solid ${W.splitBg}`,flexShrink:0}
-    },
-      !isDesktop && React.createElement("div", {
-        style:{display:"flex",justifyContent:"space-between",
-               alignItems:"center",marginBottom:"6px"}
-      },
-        React.createElement("span", {style:{fontSize:"14px",fontWeight:"bold",
-          letterSpacing:"1.5px",color:W.statusFg}}, "NOTITIES"),
-        React.createElement("button", {
-          onClick:()=>setSidebarOpen(false),
-          style:{background:"none",border:"none",color:W.fgMuted,
-                 fontSize:"18px",cursor:"pointer",padding:"0 4px",lineHeight:1}
-        }, "×")
-      ),
-      // Nieuw zettel — volle breedte, boven zoekbalk
-      React.createElement("button", {
-        onClick:newNote,
-        style:{background:W.blue,color:W.bg,border:"none",
-               borderRadius:"6px",padding:"8px 12px",fontSize:"14px",
-               cursor:"pointer",fontWeight:"bold",letterSpacing:"0.5px",
-               width:"100%",marginBottom:"7px",
-               display:"flex",alignItems:"center",justifyContent:"center",gap:"6px"}
-      },
-        React.createElement("span",{style:{fontSize:"16px",lineHeight:1}},"＋"),
-        "nieuw zettel"
-      ),
-      // Zoekbalk
-      React.createElement("input", {
-        value:search, onChange:e=>setSearch(e.target.value),
-        placeholder:"🔍 zoeken…",
-        style:{width:"100%",background:W.bg,
-               border:`1px solid ${search?W.blue:W.splitBg}`,
-               borderRadius:"6px",padding:"6px 9px",color:W.fg,
-               fontSize:"14px",outline:"none",
-               WebkitAppearance:"none",transition:"border-color 0.15s",
-               boxSizing:"border-box"}
-      })
-    ),
-    sidebarTags.length > 0 && React.createElement("div", {
-      style:{padding:"5px 8px",borderBottom:`1px solid ${W.splitBg}`,
-             background:"rgba(0,0,0,0.1)",flexShrink:0}
-    },
-      React.createElement(TagFilterBar,{tags:sidebarTags,activeTag:tagFilter,onChange:setTagFilter,compact:true,maxVisible:10})
-    ),
-    // Actieve filter badge
-    (tagFilter||search) && React.createElement("div",{style:{
-      padding:"3px 8px",borderBottom:`1px solid ${W.splitBg}`,
-      background:"rgba(159,202,86,0.04)",flexShrink:0,
-      display:"flex",gap:"5px",alignItems:"center",flexWrap:"wrap"
-    }},
-      React.createElement("span",{style:{fontSize:"9px",color:W.fgMuted}},
-        filtered.length+" resultaten"),
-      tagFilter && React.createElement("button",{
-        onClick:()=>setTagFilter(null),
-        style:{fontSize:"9px",background:"rgba(159,202,86,0.15)",color:W.comment,
-               border:"1px solid rgba(159,202,86,0.3)",borderRadius:"3px",
-               padding:"1px 6px",cursor:"pointer"}
-      },"#",tagFilter," ×"),
-      React.createElement("button",{
-        onClick:()=>{ setSearch(""); setTagFilter(null); },
-        style:{fontSize:"9px",background:"none",color:W.fgMuted,
-               border:"none",cursor:"pointer",marginLeft:"auto",padding:"1px 4px"}
-      },"× wis")
-    ),
-    // Notities-lijst
-    React.createElement("div", {style:{flex:1,overflowY:"auto",WebkitOverflowScrolling:"touch"}},
-      filtered.length===0
-        ? React.createElement("div",{style:{padding:"24px 12px",color:W.fgMuted,
-            fontSize:"14px",textAlign:"center",lineHeight:"1.8"}},
-            search||tagFilter ? "Geen resultaten" : "Nog geen notities")
-        : filtered.map(n => {
-            const sel = n.id === selId;
-            return React.createElement("div", {
-              key:n.id,
-              onClick:()=>selectNote(n.id),
-              style:{padding:"9px 12px",borderBottom:`1px solid ${W.splitBg}`,
-                     cursor:"pointer",background:sel?W.visualBg:"transparent",
-                     borderLeft:`3px solid ${sel?W.yellow:"transparent"}`,
-                     minHeight:"46px"}
-            },
-              React.createElement("div", {
-                style:{fontSize:"14px",color:sel?W.statusFg:W.fg,
-                       lineHeight:"1.35",marginBottom:"3px",fontWeight:sel?"bold":"normal",
-                       overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}
-              }, n.title || "–"),
-              n.tags?.length > 0 && React.createElement("div", {
-                style:{display:"flex",flexWrap:"wrap",gap:"3px",marginTop:"2px"}
-              }, (n.tags||[]).slice(0,3).map(t =>
-                React.createElement(TagPill, {key:t,tag:t,small:true})
-              ))
-            );
-          })
-    )
-  );
+  // ── NotesTab: vervangt sidebar, editor, preview, meta, mermaid-overlay ─────
+  // Alle notitie-logica is gedelegeerd aan NotesTab (SOLID stap 1).
+  const notesTabEl = React.createElement(NotesTab, {
+    notes,
+    allTags,
+    selectedId:     selId,
+    onSelectNote:   id => setSelId(id),
+    onNotesChange:  () => setNotes([...NoteStore.getAll()]),
+    serverPdfs,
+    serverImages,
+    llmModel,
+    isMobile,
+    isDesktop,
+    isTablet,
+    sidebarOpen,
+    onSidebarToggle: open => setSidebarOpen(typeof open === "boolean" ? open : p => !p),
+    goyoMode,
+    onGoyoChange:   setGoyoMode,
+  });
 
-  // ── Tab bar (gedeeld tussen top en bottom nav) ────────────────────────────
-  const tabs = [
-    {id:"notes",   icon:"📝", label:"Notities"},
-    {id:"graph",   icon:"🕸",  label:"Graaf"},
-    {id:"pdf",     icon:"📄", label:"PDF"},
-    {id:"images",  icon:"🖼",  label:"Plaatjes"},
-    {id:"import",  icon:"🌐", label:"Import"},
-    {id:"mindmap", icon:"🗺",  label:"Mindmap"},
-    {id:"llm",     icon:"🧠", label:"Notebook"},
-  ];
-
-  // ── Top bar (desktop/tablet) ──────────────────────────────────────────────
-  const topBar = !isMobile && React.createElement("div", {
-    style:{height:"44px",background:W.bg2,borderBottom:`1px solid ${W.splitBg}`,
-           borderBottom:`1px solid ${W.splitBg}`,
-           display:"flex",alignItems:"center",flexShrink:0,gap:0}
-  },
-    // Logo
-    React.createElement("div", {
-      style:{background:"transparent",color:W.statusFg,padding:"0 20px",
-             height:"100%",display:"flex",alignItems:"center",
-             fontWeight:"700",fontSize:"14px",letterSpacing:"3px",
-             flexShrink:0,borderRight:`1px solid ${W.splitBg}`}
-    }, "ZETTELKASTEN"),
-    // Sidebar toggle op tablet
-    isTablet && React.createElement("button", {
-      onClick: () => setSidebarOpen(p => !p),
-      style:{background:sidebarOpen?"rgba(138,198,242,0.15)":"none",
-             border:"none",borderRight:`1px solid ${W.splitBg}`,
-             color:sidebarOpen?W.blue:W.fgMuted,
-             padding:"0 14px",height:"100%",
-             fontSize:"16px",cursor:"pointer"}
-    }, "☰"),
-    // Tabs met icoon + label
-    tabs.map(({id, icon, label}) => React.createElement("button", {
-      key:id, onClick:()=>setTab(id),
-      className: `topbar-tab${tab===id?" active":""}`,
-      style:{
-        borderRight: `1px solid ${W.splitBg}`,
-      }
-    },
-      React.createElement("span", {style:{fontSize:"14px", lineHeight:1}}, icon),
-      React.createElement("span", null, label)
-    )),
-    React.createElement("div", {style:{flex:1}}),
-    // Stats
-    React.createElement("div", {
-      style:{padding:"0 6px", display:"flex", gap:"4px", alignItems:"center"}
-    },
-      // ── Job queue indicator ─────────────────────────────────────────
-      (jobs.length > 0) && React.createElement("div",{
-        style:{position:"relative", marginRight:"4px"}
-      },
-        // Badge knop
-        React.createElement("button",{
-          onClick: e => { e.stopPropagation(); setJobsPanelOpen(p=>!p); },
-          style:{
-            display:"flex", alignItems:"center", gap:"6px",
-            background: runningJobs.length>0
-              ? "rgba(138,198,242,0.1)" : "rgba(159,202,86,0.1)",
-            border: `1px solid ${runningJobs.length>0
-              ? "rgba(138,198,242,0.35)" : "rgba(159,202,86,0.35)"}`,
-            borderRadius:"20px", padding:"3px 11px", cursor:"pointer",
-            color: runningJobs.length>0 ? "#a8d8f0" : W.comment,
-            fontSize:"14px",
-            animation: runningJobs.length>0 ? "ai-pulse 1.4s ease-in-out infinite" : "none",
-          }
-        },
-          runningJobs.length>0
-            ? React.createElement("span",{style:{
-                display:"inline-block",width:"7px",height:"7px",
-                borderRadius:"50%",background:"#a8d8f0",flexShrink:0,
-                animation:"ai-dot 1.4s ease-in-out infinite"}})
-            : React.createElement("span",null,"✓"),
-          runningJobs.length>0
-            ? (runningJobs.length===1
-                ? runningJobs[0].label
-                : runningJobs.length+" taken actief")
-            : doneJobs.length+" klaar"
-        ),
-
-        // Dropdown paneel
-        jobsPanelOpen && React.createElement("div",{
-          onClick: e=>e.stopPropagation(),
-          style:{
-            position:"absolute", top:"calc(100% + 8px)", right:0,
-            width:"320px", background:W.bg2,
-            border:`1px solid ${W.splitBg}`, borderRadius:"10px",
-            boxShadow:"0 12px 40px rgba(0,0,0,0.7)",
-            zIndex:2000, overflow:"hidden",
-            animation:"fadeIn 0.14s ease-out",
-          }
-        },
-          // Header
-          React.createElement("div",{style:{
-            padding:"10px 14px", borderBottom:`1px solid ${W.splitBg}`,
-            display:"flex", alignItems:"center", justifyContent:"space-between"
-          }},
-            React.createElement("span",{style:{fontSize:"14px",color:W.fgMuted,letterSpacing:"1px"}},
-              "ACHTERGRONDTAKEN"),
-            React.createElement("div",{style:{display:"flex",gap:"6px",alignItems:"center"}},
-              doneJobs.length>0 && React.createElement("button",{
-                onClick: clearDoneJobs,
-                style:{background:"none",border:"none",color:W.fgMuted,
-                       fontSize:"14px",cursor:"pointer",textDecoration:"underline",padding:"0"}
-              },"wis klaar"),
-              React.createElement("button",{
-                onClick:()=>setJobsPanelOpen(false),
-                style:{background:"none",border:"none",color:W.fgMuted,
-                       fontSize:"16px",cursor:"pointer",padding:"0 2px",lineHeight:1}
-              },"×")
-            )
-          ),
-          // Job lijst
-          React.createElement("div",{style:{maxHeight:"340px",overflowY:"auto"}},
-            jobs.length===0
-              ? React.createElement("div",{style:{padding:"20px",color:W.fgMuted,
-                  fontSize:"14px",textAlign:"center"}},"Geen taken")
-              : [...jobs].reverse().map(job =>
-                  React.createElement("div",{
-                    key:job.id,
-                    style:{
-                      padding:"10px 14px",
-                      borderBottom:`1px solid rgba(255,255,255,0.04)`,
-                      display:"flex", alignItems:"flex-start", gap:"10px"
-                    }
-                  },
-                    // Status icon
-                    React.createElement("span",{style:{
-                      fontSize:"14px", marginTop:"1px", flexShrink:0,
-                      animation: job.status==="running"
-                        ? "ai-dot 1.4s ease-in-out infinite" : "none"
-                    }},
-                      job.status==="running" ? "⏳"
-                      : job.status==="done"    ? "✓"
-                      : "✕"
-                    ),
-                    // Label + detail
-                    React.createElement("div",{style:{flex:1,minWidth:0}},
-                      React.createElement("div",{style:{
-                        fontSize:"14px",
-                        color: job.status==="running" ? W.fg
-                             : job.status==="done"    ? W.comment
-                             : W.orange,
-                        overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"
-                      }}, job.label),
-                      job.status==="running" && React.createElement("div",{style:{
-                        marginTop:"5px", height:"2px", borderRadius:"1px",
-                        background:`rgba(255,255,255,0.08)`, overflow:"hidden"
-                      }},
-                        React.createElement("div",{style:{
-                          height:"100%", width:"40%", borderRadius:"1px",
-                          background:W.blue,
-                          animation:"progress-slide 1.4s ease-in-out infinite"
-                        }})
-                      ),
-                      job.error && React.createElement("div",{style:{
-                        fontSize:"13px",color:W.orange,marginTop:"3px",
-                        overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"
-                      }}, job.error),
-                      job.result && React.createElement("div",{style:{
-                        fontSize:"13px",color:W.fgMuted,marginTop:"3px",
-                        overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"
-                      }}, job.result),
-                      // Import-resultaat: klikbare "bekijk & bewerk" knop
-                      job.type==="import" && job.status==="done" && job.importResult &&
-                        React.createElement("button",{
-                          onClick:()=>{
-                            setImportPreview(job.importResult);
-                            setTab("import");
-                            setJobsPanelOpen(false);
-                          },
-                          style:{
-                            marginTop:"5px",
-                            background:"rgba(138,198,242,0.1)",
-                            border:"1px solid rgba(138,198,242,0.35)",
-                            borderRadius:"5px", padding:"3px 10px",
-                            color:"#a8d8f0", fontSize:"13px",
-                            cursor:"pointer", display:"inline-flex",
-                            alignItems:"center", gap:"4px",
-                          }
-                        }, "→ bekijk & bewerk"),
-                    ),
-                    // Verwijder-knop (alleen voor klare taken)
-                    job.status!=="running" && React.createElement("button",{
-                      onClick:()=>removeJob(job.id),
-                      style:{background:"none",border:"none",color:W.fgMuted,
-                             fontSize:"14px",cursor:"pointer",padding:"0",flexShrink:0}
-                    },"×")
-                  )
-                )
-          )
-        )
-      ),
-      // Zettels badge
-      React.createElement("div",{style:{
-        display:"flex", alignItems:"baseline", gap:"3px",
-        background:"rgba(229,192,123,0.13)",
-        border:"1px solid rgba(229,192,123,0.32)",
-        borderRadius:"6px", padding:"4px 10px",
-      }},
-        React.createElement("span",{style:{
-          fontSize:"14px", fontWeight:"700",
-          color:W.yellow, letterSpacing:"-0.5px", lineHeight:1
-        }}, notes.length),
-        React.createElement("span",{style:{
-          fontSize:"9px", color:"rgba(229,192,123,0.7)",
-          letterSpacing:"0.8px", textTransform:"uppercase"
-        }}, "zettels")
-      ),
-      // Tags badge
-      React.createElement("div",{style:{
-        display:"flex", alignItems:"baseline", gap:"3px",
-        background:"rgba(159,202,86,0.13)",
-        border:"1px solid rgba(159,202,86,0.32)",
-        borderRadius:"6px", padding:"4px 10px",
-      }},
-        React.createElement("span",{style:{
-          fontSize:"14px", fontWeight:"700",
-          color:W.comment, letterSpacing:"-0.5px", lineHeight:1
-        }}, allTags.length),
-        React.createElement("span",{style:{
-          fontSize:"9px", color:"rgba(159,202,86,0.7)",
-          letterSpacing:"0.8px", textTransform:"uppercase"
-        }}, "tags")
-      ),
-      // Scheidingslijn
-      React.createElement("div",{style:{
-        width:"1px", height:"20px",
-        background:W.splitBg, margin:"0 4px"
-      }}),
-      // Vault pad
-      React.createElement("div",{
-        onClick:()=>setShowSettings(true),
-        title:vaultPath,
-        style:{
-          display:"flex", alignItems:"center", gap:"5px",
-          background:"rgba(138,198,242,0.07)",
-          border:"1px solid rgba(138,198,242,0.18)",
-          borderRadius:"6px", padding:"4px 10px",
-          cursor:"pointer", maxWidth:"170px",
-          transition:"background 0.12s, border 0.12s",
-        }
-      },
-        React.createElement("span",{style:{fontSize:"14px",lineHeight:1,flexShrink:0}},"📁"),
-        React.createElement("span",{style:{
-          fontSize:"14px", color:"rgba(138,198,242,0.75)",
-          overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap",
-          letterSpacing:"0.2px", fontWeight:"500"
-        }}, vaultPath.split("/").slice(-2).join("/"))
-      )
-    ),
-    // Split-scherm knop
-    React.createElement("button", {
-      onClick:()=>setSplitMode(p=>!p),
-      title: splitMode ? "Split-scherm sluiten" : "Split-scherm openen",
-      style:{
-        background: splitMode
-          ? "linear-gradient(135deg,rgba(138,198,242,0.25),rgba(138,198,242,0.12))"
-          : "rgba(255,255,255,0.04)",
-        border: `1px solid ${splitMode ? "rgba(138,198,242,0.55)" : W.splitBg}`,
-        borderRadius: "6px",
-        padding: "5px 13px",
-        color: splitMode ? W.blue : W.fgMuted,
-        fontSize: "11px", cursor: "pointer",
-        margin: "0 4px 0 8px",
-        display: "flex", alignItems: "center", gap: "5px",
-        letterSpacing: "0.4px",
-        boxShadow: splitMode ? "0 0 8px rgba(138,198,242,0.2)" : "none",
-        transition: "all 0.15s",
-      }
-    },
-      React.createElement("span",{style:{fontSize:"14px"}}, splitMode ? "⊟" : "⊞"),
-      "split"
-    ),
-    // Instellingen knop
-    React.createElement("button", {
-      onClick:()=>setShowSettings(true),
-      style:{
-        background: "rgba(255,255,255,0.04)",
-        border: `1px solid ${W.splitBg}`,
-        borderRadius: "6px",
-        padding: "5px 13px",
-        color: W.fgMuted,
-        fontSize: "11px", cursor: "pointer",
-        margin: "0 10px 0 0",
-        display: "flex", alignItems: "center", gap: "5px",
-        letterSpacing: "0.4px",
-        transition: "all 0.15s",
-      }
-    },
-      React.createElement("span",{style:{fontSize:"14px"}},"⚙"),
-      "instellingen"
-    )
-  );
-
-  // ── Mobile top bar ────────────────────────────────────────────────────────
-  const mobileTopBar = isMobile && React.createElement("div", {
-    style:{height:"48px",background:W.statusBg,
-           borderBottom:`1px solid ${W.splitBg}`,
-           display:"flex",alignItems:"center",
-           padding:"0 12px",flexShrink:0,gap:"8px"}
-  },
-    React.createElement("button", {
-      onClick:()=>setSidebarOpen(p=>!p),
-      style:{background:"none",border:`1px solid ${W.splitBg}`,
-             borderRadius:"6px",color:W.fgMuted,
-             fontSize:"18px",padding:"4px 10px",cursor:"pointer"}
-    }, "☰"),
-    React.createElement("div", {
-      style:{flex:1,fontWeight:"bold",fontSize:"14px",
-             letterSpacing:"1.5px",color:W.statusFg}
-    }, "ZETTELKASTEN"),
-    aiStatus && React.createElement("div",{
-      style:{fontSize:"14px",color:"#a8d8f0",
-             background:"rgba(138,198,242,0.1)",
-             border:"1px solid rgba(138,198,242,0.2)",
-             borderRadius:"10px",padding:"2px 8px",
-             animation:"ai-pulse 1.4s ease-in-out infinite"}
-    },"⏳ ",aiStatus),
-    React.createElement("button", {
-      onClick:()=>setShowSettings(true),
-      style:{background:"none",border:"none",color:W.fgMuted,
-             fontSize:"18px",cursor:"pointer",padding:"4px"}
-    }, "⚙")
-  );
-
-  // ── Bottom nav (mobile) ───────────────────────────────────────────────────
-  const bottomNav = isMobile && React.createElement("div", {
-    style:{height:"56px",background:W.statusBg,
-           borderTop:`1px solid ${W.splitBg}`,
-           display:"flex",flexShrink:0,
-           // Safe area voor iPhone home indicator
-           paddingBottom:"env(safe-area-inset-bottom,0px)"}
-  },
-    tabs.map(({id,icon,label}) => React.createElement("button", {
-      key:id, onClick:()=>setTab(id),
-      style:{flex:1,background:"none",border:"none",
-             borderTop:tab===id?`2px solid ${W.yellow}`:"2px solid transparent",
-             color:tab===id?W.yellow:W.fgMuted,
-             display:"flex",flexDirection:"column",
-             alignItems:"center",justifyContent:"center",
-             gap:"2px",cursor:"pointer",fontSize:"18px",
-             paddingTop:"6px"}
-    },
-      React.createElement("span", null, icon),
-      React.createElement("span", {style:{fontSize:"14px",letterSpacing:"0.5px"}}, label)
-    ))
-  );
-
-  // ── Sidebar overlay (mobile/tablet drawer) ────────────────────────────────
+  // Houd sidebarOverlay hier — het is App-layout, niet notitie-logica
   const sidebarOverlay = !isDesktop && sidebarOpen && React.createElement(React.Fragment, null,
-    // Backdrop
     React.createElement("div", {
-      onClick:()=>setSidebarOpen(false),
-      style:{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",
-             zIndex:100,backdropFilter:"blur(2px)"}
+      onClick: () => setSidebarOpen(false),
+      style: { position:"fixed", inset:0, background:"rgba(0,0,0,0.5)",
+               zIndex:100, backdropFilter:"blur(2px)" }
     }),
-    // Drawer
     React.createElement("div", {
-      style:{position:"fixed",top:0,left:0,bottom:0,
-             width:`${sidebarW}px`,zIndex:101,
-             boxShadow:"4px 0 20px rgba(0,0,0,0.5)",
-             display:"flex",flexDirection:"column"}
-    }, sidebarContent)
-  );
-
-  // ── Editor toolbar ────────────────────────────────────────────────────────
-  const editorToolbar = React.createElement("div", {
-    style:{background:W.bg2,borderBottom:`1px solid ${W.splitBg}`,
-           padding:"6px 10px",display:"flex",
-           alignItems:"center",gap:"6px",flexShrink:0,
-           flexWrap: isMobile ? "wrap" : "nowrap"}
-  },
-    React.createElement("input", {
-      ref:titleRef, value:editTitle,
-      onChange:e=>setEditTitle(e.target.value),
-      placeholder:"Titel… (Enter = naar tekstveld)",
-      onKeyDown:e=>{
-        if(e.key==="Enter"){
-          e.preventDefault();
-          // Zet cursor direct op regel 3 (index 2), kolom 0 — na datum + lege regel
-          setTimeout(()=>{ contentRef.current?.setCursor(2, 0); }, 40);
-        }
-        if(e.key==="Escape"){ closeEdit(); }
-      },
-      style:{flex:1,minWidth:"120px",background:"transparent",
-             border:"none",color:W.statusFg,
-             fontSize: isMobile ? "15px" : "16px",
-             fontWeight:"bold",outline:"none",
-             WebkitAppearance:"none"}
-    }),
-    // Knoppen — groter op touch
-    ...[
-      {label:"◎ focus", show:true, onClick:()=>setGoyoMode(!goyoMode),
-       active:goyoMode, color:goyoMode?W.comment:W.fgMuted},
-      {label:"✓ opslaan", show:true, onClick:()=>{save();closeEdit();},
-       color:W.comment, bg:W.comment, fgColor:W.bg, bold:true},
-      {label:"✕ sluiten", show:true, onClick:closeEdit, color:W.fgMuted},
-      {label:"🗑 del", show:!isMobile, onClick:del, color:W.orange},
-    ].filter(b=>b.show).map((b,i) => React.createElement("button", {
-      key:i, onClick:b.onClick,
-      style:{background:b.bg?"none":"none",
-             border:`1px solid ${b.bg||W.splitBg}`,
-             borderRadius:"6px",
-             padding: isMobile ? "7px 12px" : "4px 10px",
-             color: b.fgColor || b.color,
-             fontSize: isMobile ? "13px" : "11px",
-             cursor:"pointer",
-             fontWeight:b.bold?"bold":"normal",
-             background: b.bg || (b.active?"rgba(159,202,86,0.15)":"none"),
-             flexShrink:0,
-             WebkitTapHighlightColor:"transparent"}
-    }, b.label)),
-    // ── 🔗 Gecombineerde link/koppelen dropdown ───────────────────────────────
-    React.createElement("div",{style:{position:"relative",flexShrink:0},
-      onClick:e=>e.stopPropagation()},
-      React.createElement("button",{
-        onClick:()=>{ setShowLinkMenu(v=>!v); setLinkSearch(""); setLinkTypeFilter("all"); },
-        title:"Link invoegen: notitie, PDF of afbeelding",
-        style:{background:showLinkMenu?"rgba(138,198,242,0.15)":"none",
-               border:`1px solid ${showLinkMenu?"rgba(138,198,242,0.4)":W.splitBg}`,
-               borderRadius:"6px",padding:isMobile?"7px 12px":"4px 10px",
-               color:showLinkMenu?W.blue:W.fgMuted,
-               fontSize:isMobile?"13px":"11px",cursor:"pointer",flexShrink:0}
-      },"🔗 koppelen"),
-      showLinkMenu && React.createElement("div",{
-        style:{position:"absolute",top:"calc(100% + 4px)",right:0,zIndex:210,
-               background:W.bg2,border:`1px solid ${W.splitBg}`,borderRadius:"8px",
-               width:"300px",maxHeight:"420px",display:"flex",flexDirection:"column",
-               boxShadow:"0 8px 32px rgba(0,0,0,0.75)"}
-      },
-        // Type-filter tabs
-        React.createElement("div",{style:{display:"flex",borderBottom:`1px solid ${W.splitBg}`,flexShrink:0}},
-          [["all","Alles"],["notes","📝 Notities"],["pdf","📄 PDF"],["images","🖼 Plaatjes"]].map(([id,lbl])=>
-            React.createElement("button",{key:id,
-              onClick:()=>setLinkTypeFilter(id),
-              style:{flex:1,background:linkTypeFilter===id?"rgba(138,198,242,0.12)":"none",
-                     border:"none",borderBottom:linkTypeFilter===id?`2px solid ${W.blue}`:"2px solid transparent",
-                     color:linkTypeFilter===id?W.blue:W.fgMuted,
-                     fontSize:"9px",padding:"7px 2px",cursor:"pointer",letterSpacing:"0.3px"}
-            },lbl)
-          )
-        ),
-        // Zoekbalk
-        React.createElement("div",{style:{padding:"7px 10px",borderBottom:`1px solid ${W.splitBg}`,flexShrink:0}},
-          React.createElement("input",{
-            autoFocus:true,
-            value:linkSearch,
-            onChange:e=>setLinkSearch(e.target.value),
-            placeholder:"Zoeken…",
-            style:{width:"100%",background:"rgba(255,255,255,0.06)",
-                   border:`1px solid ${W.splitBg}`,borderRadius:"5px",
-                   padding:"5px 9px",color:W.fg,fontSize:"14px",outline:"none",fontFamily:"inherit"}
-          })
-        ),
-        // Resultatenlijst
-        React.createElement("div",{style:{overflowY:"auto",flex:1}},
-          // Notities
-          (linkTypeFilter==="all"||linkTypeFilter==="notes") && (() => {
-            const ns = notes.filter(n=>n.id!==selId&&(
-              !linkSearch||n.title?.toLowerCase().includes(linkSearch.toLowerCase())||
-              (n.tags||[]).some(t=>t.includes(linkSearch.toLowerCase()))
-            )).slice(0,20);
-            if(!ns.length) return null;
-            return React.createElement(React.Fragment,null,
-              linkTypeFilter==="all"&&React.createElement("div",{style:{
-                padding:"5px 12px 3px",fontSize:"9px",color:W.fgMuted,
-                letterSpacing:"1.5px",background:"rgba(0,0,0,0.2)",flexShrink:0
-              }},"NOTITIES"),
-              ns.map(n=>React.createElement("div",{key:n.id,
-                onMouseDown:(e)=>{
-                  e.preventDefault(); // voorkom blur van editor → cursor blijft behouden
-                  const link="[["+n.title+"]]";
-                  contentRef.current?.insertAtCursor?contentRef.current.insertAtCursor(link):setEditContent(c=>c+link);
-                  setShowLinkMenu(false);
-                },
-                style:{padding:"7px 12px",cursor:"pointer",
-                       borderBottom:`1px solid rgba(255,255,255,0.03)`,
-                       display:"flex",flexDirection:"column",gap:"1px"}
-              },
-                React.createElement("span",{style:{fontSize:"14px",color:W.fg,
-                  overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},n.title),
-                (n.tags||[]).length>0&&React.createElement("span",{
-                  style:{fontSize:"9px",color:W.comment}},(n.tags||[]).map(t=>"#"+t).join("  "))
-              ))
-            );
-          })(),
-          // PDFs
-          (linkTypeFilter==="all"||linkTypeFilter==="pdf") && (() => {
-            const ps = (serverPdfs||[]).filter(p=>
-              !linkSearch||p.name.toLowerCase().includes(linkSearch.toLowerCase())
-            ).slice(0,15);
-            if(!ps.length) return null;
-            return React.createElement(React.Fragment,null,
-              linkTypeFilter==="all"&&React.createElement("div",{style:{
-                padding:"5px 12px 3px",fontSize:"9px",color:W.orange,
-                letterSpacing:"1.5px",background:"rgba(0,0,0,0.2)"
-              }},"PDF"),
-              ps.map(p=>React.createElement("div",{key:p.name,
-                onMouseDown:(e)=>{
-                  e.preventDefault();
-                  const link="\n\n> 📄 **PDF:** [[pdf:"+p.name+"]]\n";
-                  contentRef.current?.insertAtCursor?contentRef.current.insertAtCursor(link):setEditContent(c=>c+link);
-                  setShowLinkMenu(false);
-                },
-                style:{padding:"7px 12px",cursor:"pointer",
-                       borderBottom:`1px solid rgba(255,255,255,0.03)`,
-                       display:"flex",alignItems:"center",gap:"8px"}
-              },
-                React.createElement("span",{style:{fontSize:"14px"}},"📄"),
-                React.createElement("span",{style:{fontSize:"14px",color:W.fgDim,
-                  overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1}},p.name)
-              ))
-            );
-          })(),
-          // Afbeeldingen
-          (linkTypeFilter==="all"||linkTypeFilter==="images") && (() => {
-            const imgs = (serverImages||[]).filter(i=>
-              !linkSearch||i.name.toLowerCase().includes(linkSearch.toLowerCase())
-            ).slice(0,15);
-            if(!imgs.length) return null;
-            return React.createElement(React.Fragment,null,
-              linkTypeFilter==="all"&&React.createElement("div",{style:{
-                padding:"5px 12px 3px",fontSize:"9px",color:W.blue,
-                letterSpacing:"1.5px",background:"rgba(0,0,0,0.2)"
-              }},"AFBEELDINGEN"),
-              imgs.map(img=>React.createElement("div",{key:img.name,
-                onMouseDown:(e)=>{
-                  e.preventDefault();
-                  const link="\n\n![[img:"+img.name+"]]\n";
-                  contentRef.current?.insertAtCursor?contentRef.current.insertAtCursor(link):setEditContent(c=>c+link);
-                  setShowLinkMenu(false);
-                },
-                style:{padding:"7px 12px",cursor:"pointer",
-                       borderBottom:`1px solid rgba(255,255,255,0.03)`,
-                       display:"flex",alignItems:"center",gap:"8px"}
-              },
-                React.createElement("span",{style:{fontSize:"14px"}},"🖼"),
-                React.createElement("span",{style:{fontSize:"14px",color:W.fgDim,
-                  overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1}},img.name)
-              ))
-            );
-          })(),
-          // Lege staat
-          [notes.filter(n=>n.id!==selId&&(!linkSearch||n.title?.toLowerCase().includes(linkSearch.toLowerCase()))).length,
-           (serverPdfs||[]).filter(p=>!linkSearch||p.name.toLowerCase().includes(linkSearch.toLowerCase())).length,
-           (serverImages||[]).filter(i=>!linkSearch||i.name.toLowerCase().includes(linkSearch.toLowerCase())).length
-          ].every(c=>c===0) && React.createElement("div",{style:{padding:"20px",color:W.fgMuted,
-            fontSize:"14px",textAlign:"center"}},"Geen resultaten")
-        )
-      )
-    )
-  );
-  const previewToolbar = React.createElement("div", {
-    style:{display:"flex",gap:"6px",marginBottom:"16px",
-           paddingBottom:"10px",borderBottom:`1px solid ${W.splitBg}`,
-           alignItems:"center",flexWrap:"wrap"}
-  },
-    React.createElement("span", {
-      style:{fontSize:"14px",color:W.fgMuted}
-    }, selNote.id),
-    ...(selNote.tags||[]).map(t => React.createElement(TagPill, {
-      key:t, tag:t,
-      onRemove: async t => {
-        const updated = {...selNote, tags:(selNote.tags||[]).filter(x=>x!==t)};
-        const saved   = await api.put("/notes/"+selId, updated);
-        setNotes(prev => prev.map(n => n.id===selId ? saved : n));
-      }
-    })),
-    React.createElement("div", {style:{flex:1}}),
-    React.createElement("button", {
-      onClick:()=>setRenderMode(v=>v==="rich"?"plain":"rich"),
-      title:"Wisselen tussen plain en rijke markdown weergave",
-      style:{background:renderMode==="rich"?"rgba(138,198,242,0.12)":"none",
-             color:renderMode==="rich"?W.blue:W.fgMuted,
-             border:`1px solid ${renderMode==="rich"?"rgba(138,198,242,0.35)":W.splitBg}`,
-             borderRadius:"6px",
-             padding: isMobile ? "8px 14px" : "5px 10px",
-             fontSize: isMobile ? "13px" : "11px",
-             cursor:"pointer", WebkitTapHighlightColor:"transparent"}
-    }, renderMode==="rich" ? "📄 plain" : "🎨 render"),
-    React.createElement("button", {
-      onClick:openEdit,
-      style:{background:"none",color:W.blue,
-             border:`1px solid rgba(138,198,242,0.3)`,
-             borderRadius:"6px",
-             padding: isMobile ? "8px 16px" : "5px 12px",
-             fontSize: isMobile ? "14px" : "11px",
-             cursor:"pointer",
-             WebkitTapHighlightColor:"transparent"}
-    }, "✏ bewerken"),
-    !isMobile && React.createElement("button", {
-      onClick:del,
-      style:{background:"none",color:W.orange,
-             border:`1px solid rgba(229,120,109,0.2)`,
-             borderRadius:"6px",padding:"5px 10px",
-             fontSize:"14px",cursor:"pointer"}
-    }, "🗑 del")
-  );
-
-  // ── Meta panel ────────────────────────────────────────────────────────────
-  const metaPanel = isDesktop && !goyoMode && React.createElement(React.Fragment, null,
-    // Smalle toggle-strip aan de rechterkant — altijd zichtbaar
-    React.createElement("button", {
-      onClick:()=>setShowMetaPanel(p=>!p),
-      title: showMetaPanel ? "Info verbergen" : "Info tonen",
-      style:{
-        width:"18px", flexShrink:0, background:W.bg2,
-        borderLeft:`1px solid ${W.splitBg}`,
-        border:"none", cursor:"pointer", color:W.fgMuted,
-        fontSize:"14px", padding:0, display:"flex",
-        alignItems:"center", justifyContent:"center",
-        writingMode:"vertical-rl",
-        letterSpacing:"1px",
-      }
-    }, showMetaPanel ? "▶" : "◀"),
-
-    // Paneel inhoud — alleen als open
-    showMetaPanel && React.createElement("div", {
-      className:"meta-panel",
-      style:{width:"178px",flexShrink:0,background:W.bg2,
-             borderLeft:`1px solid ${W.splitBg}`,
-             padding:"14px 12px",fontSize:"14px",overflowY:"auto"}
+      style: { position:"fixed", top:0, left:0, bottom:0,
+               width:`${sidebarW}px`, zIndex:101,
+               boxShadow:"4px 0 20px rgba(0,0,0,0.5)",
+               display:"flex", flexDirection:"column" }
     },
-      React.createElement("div",{style:{color:W.fgMuted,fontSize:"9px",marginBottom:"4px",letterSpacing:"1px"}},"ID"),
-      React.createElement("div",{style:{color:W.comment,wordBreak:"break-all",marginBottom:"14px",fontSize:"14px"}},selNote.id),
-      React.createElement("div",{style:{color:W.fgMuted,fontSize:"9px",marginBottom:"6px",letterSpacing:"1px"}},"TAGS"),
-      React.createElement("div",{style:{display:"flex",flexWrap:"wrap",gap:"4px",marginBottom:"10px"}},
-        ...(selNote.tags||[]).map(t => React.createElement(TagPill,{key:t,tag:t,
-          onRemove:async t=>{
-            const updated={...selNote,tags:(selNote.tags||[]).filter(x=>x!==t)};
-            const saved=await api.put("/notes/"+selId,updated);
-            setNotes(prev=>prev.map(n=>n.id===selId?saved:n));
-          }})),
-        !(selNote.tags||[]).length && React.createElement("span",{style:{fontSize:"14px",color:W.splitBg}},"geen")
-      ),
-      React.createElement("div",{style:{fontSize:"9px",color:W.splitBg,lineHeight:"2",marginBottom:"14px",padding:"6px 8px",background:"rgba(0,0,0,0.2)",borderRadius:"3px"}},
-        [":tag naam1 naam2",":tag+ naam",":tag- naam",":goyo focus",":spell en/nl","Ctrl+J snippet"].map((t,i)=>
-          React.createElement("div",{key:i,style:{color:W.fgMuted}},t))
-      ),
-      extractLinks(selNote.content).length>0 && React.createElement(React.Fragment,null,
-        React.createElement("div",{style:{color:W.fgMuted,fontSize:"9px",marginBottom:"6px",letterSpacing:"1px"}},"LINKS →"),
-        extractLinks(selNote.content).map(id=>{
-          const n=notes.find(x=>x.id===id);
-          return React.createElement("div",{key:id,onClick:()=>n&&setSelId(n.id),
-            style:{fontSize:"14px",color:n?W.keyword:W.fgMuted,cursor:n?"pointer":"default",
-                   padding:"3px 0",borderBottom:`1px solid ${W.splitBg}`,marginBottom:"2px"}
-          },"→ ",n?n.title:id);
-        })
-      ),
-      React.createElement("div",{style:{marginTop:"14px",color:W.fgMuted,fontSize:"9px",letterSpacing:"1px",marginBottom:"4px"}},"GEWIJZIGD"),
-      React.createElement("div",{style:{fontSize:"14px",color:W.fgDim}},
-        selNote.modified?new Date(selNote.modified).toLocaleString("nl-NL"):"—")
+      // NoteList sidebar-inhoud via NotesTab (doorgeven als ref is niet nodig — NotesTab
+      // beheert de lijst zelf intern; de overlay toont gewoon de nesting)
+      React.createElement(NotesTab, {
+        notes, allTags, selectedId: selId,
+        onSelectNote:   id => setSelId(id),
+        onNotesChange:  () => setNotes([...NoteStore.getAll()]),
+        serverPdfs, serverImages, llmModel,
+        isMobile: true, isDesktop: false, isTablet: false,
+        sidebarOpen: true,
+        onSidebarToggle: () => setSidebarOpen(false),
+        goyoMode, onGoyoChange: setGoyoMode,
+      })
     )
   );
 
-  // ── Notes tab content ─────────────────────────────────────────────────────
-  const notesContent = React.createElement("div", {
-    style:{flex:1,display:"flex",overflow:"hidden"}
-  },
-    // Desktop sidebar (inline, niet als overlay)
-    isDesktop && React.createElement("div", {
-      className:"sidebar",
-      style:{width:`${sidebarW}px`,flexShrink:0,
-             borderRight:`1px solid ${W.splitBg}`,
-             display:"flex",flexDirection:"column"}
-    }, sidebarContent),
-
-    // Hoofd area
-    React.createElement("div", {
-      style:{flex:1,display:"flex",flexDirection:"column",
-             overflow:"hidden",minWidth:0}
-    },
-      selNote ? (
-        vimMode
-          // ── EDITOR modus ──────────────────────────────────────────────
-          ? React.createElement("div", {
-              className: goyoMode ? "goyo-mode" : "",
-              style:{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}
-            },
-              !goyoMode && editorToolbar,
-              React.createElement(VimEditor, {
-                value:editContent, onChange:setEditContent,
-                onSave:save, onEscape:closeEdit,
-                noteTags:editTags, onTagsChange:setEditTags,
-                allTags, goyoMode,
-                onToggleGoyo:()=>setGoyoMode(!goyoMode),
-                onEditorRef:ref=>{ contentRef.current=ref; },
-              })
-            )
-          // ── PREVIEW modus ─────────────────────────────────────────────
-          : React.createElement("div", {
-              style:{flex:1,display:"flex",overflow:"hidden"}
-            },
-              React.createElement("div", {
-                style:{flex:1,overflowY:"auto",
-                       padding: isMobile ? "16px" : "24px 32px",
-                       WebkitOverflowScrolling:"touch"}
-              },
-                previewToolbar,
-                React.createElement(MarkdownWithMermaid, {
-                  content: selNote.content,
-                  notes,
-                  renderMode,
-                  isMobile,
-                  onClick: handleLink,
-                  onEditMermaid: (code) => setMermaidEditNote({noteId:selId, code}),
-                }),
-                backlinks.length>0 && React.createElement("div",{
-                  style:{marginTop:"40px",paddingTop:"14px",
-                         borderTop:`1px solid ${W.splitBg}`}
-                },
-                  React.createElement("div",{style:{fontSize:"14px",color:W.fgMuted,letterSpacing:"1.5px",marginBottom:"8px"}},"BACKLINKS"),
-                  backlinks.map(n=>React.createElement("div",{key:n.id,
-                    onClick:()=>setSelId(n.id),
-                    style:{padding:"8px 10px",cursor:"pointer",
-                           background:"rgba(138,198,242,0.06)",
-                           border:`1px solid rgba(138,198,242,0.12)`,
-                           borderRadius:"6px",marginBottom:"6px",
-                           fontSize:"14px",color:W.keyword,
-                           WebkitTapHighlightColor:"transparent"}},"← ",n.title))
-                )
-              ),
-              metaPanel
-            )
-      ) : React.createElement("div", {
-        style:{flex:1,display:"flex",alignItems:"center",
-               justifyContent:"center",color:W.fgMuted,fontSize:"14px",
-               flexDirection:"column",gap:"12px"}
-      },
-        React.createElement("div",{style:{fontSize:"32px"}},"📝"),
-        React.createElement("div",null,"Selecteer een zettel"),
-        React.createElement("button",{
-          onClick:newNote,
-          style:{marginTop:"8px",background:W.blue,color:W.bg,
-                 border:"none",borderRadius:"8px",padding:"10px 24px",
-                 fontSize:"14px",cursor:"pointer",fontWeight:"bold"}
-        },"+ nieuw zettel")
-      )
-    )
-  );
-
-  // ── Hoofd render ──────────────────────────────────────────────────────────
+    // ── Hoofd render ──────────────────────────────────────────────────────────
   return React.createElement("div", {
     style:{display:"flex",flexDirection:"column",height:"100vh",
            paddingTop:"env(safe-area-inset-top,0px)",
@@ -7738,43 +8346,23 @@ const App = () => {
     }),
     sidebarOverlay,
 
-    // Mermaid editor overlay (vanuit note preview klik)
-    mermaidEditNote && React.createElement("div",{style:{
-      position:"fixed",inset:0,zIndex:500,
-      background:"rgba(0,0,0,0.7)",display:"flex",alignItems:"stretch",
-    }},
-      React.createElement("div",{style:{
-        flex:1,margin:"24px",borderRadius:"10px",overflow:"hidden",
-        border:`1px solid ${W.splitBg}`,boxShadow:"0 20px 60px rgba(0,0,0,0.7)",
-        display:"flex",flexDirection:"column"
-      }},
-        React.createElement(MermaidEditor,{
-          initialText: mermaidEditNote.code,
-          notes,
-          serverPdfs,
-          serverImages,
-          onSave: async ({title, content, tags}) => {
-            // Update de bestaande notitie
-            const noteId = mermaidEditNote.noteId;
-            const note = notes.find(n => n.id === noteId);
-            if (note) {
-              const updated = {...note, content, title: title||note.title,
-                               modified: new Date().toISOString()};
-              const saved = await api.put("/notes/"+noteId, updated);
-              setNotes(p => p.map(n => n.id===noteId ? saved : n));
-            }
-            setMermaidEditNote(null);
-          },
-          onCancel: () => setMermaidEditNote(null)
-        })
-      )
-    ),
-
-    // Content
+    // Content — renderTab delegeert notities naar NotesTab
     React.createElement("div", {style:{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}},
       (() => {
-        // Render een tab naar een React element
         const renderTab = (t) => {
+          if(t==="search") return React.createElement("div",{style:{flex:1,overflow:"hidden"}},
+            React.createElement(FuzzySearch,{
+              notes, allTags,
+              onOpenNote: (id) => { setSelId(id); setTab("notes"); },
+              onAddNote:  async(note) => {
+                const saved = await NoteStore.save(note);
+                setNotes([...NoteStore.getAll()]); setSelId(saved.id); setTab("notes");
+              },
+              onUpdateNote: async(note) => {
+                await NoteStore.save(note);
+                setNotes([...NoteStore.getAll()]);
+              },
+            }));
           if(t==="graph") return React.createElement("div",{style:{flex:1,overflow:"hidden"}},
             React.createElement(Graph,{notes,pdfNotes,
               onSelect:id=>{setSelId(id);setTab("notes");},selectedId:selId}));
@@ -7784,67 +8372,68 @@ const App = () => {
               onDeletePdf:async(fname)=>{
                 const stem=fname.replace(/\.pdf$/i,"");
                 const linked=notes.filter(n=>n.tags?.includes("samenvatting")&&(n.title?.includes(stem)||n.content?.includes(fname)));
-                for(const n of linked){ await api.del("/notes/"+n.id); }
-                if(linked.length) setNotes(p=>p.filter(n=>!linked.find(l=>l.id===n.id)));
-                setPdfNotes(p=>p.filter(a=>a.file!==fname));
+                for(const n of linked){ await NoteStore.remove(n.id); }
+                if(linked.length) setNotes([...NoteStore.getAll()]);
+                // Verwijder annotaties voor dit bestand via AnnotationStore
+                const remaining = AnnotationStore.getAll().filter(a => a.file !== fname);
+                await AnnotationStore.setAll(remaining);
               },
               onAutoSummarize:(fname)=>{
                 const stem=fname.replace(/\.pdf$/i,"");
                 const jid=genId();
                 addJob({id:jid, type:"summarize", label:"🧠 Samenvatten: "+stem.slice(0,26)+"…"});
-                // Draait in achtergrond — geen await, UI blijft responsief
                 (async()=>{
                   try{
-                    const res=await api.llmSummarizePdf(fname,llmModel);
+                    const res=await PDFService.summarizePdf(fname,llmModel);
                     if(res?.ok && res.summary){
                       const note={id:genId(),title:"Samenvatting — "+stem,
                         content:"*Automatisch gegenereerd door Notebook LLM*\n\n"+res.summary+"\n\n---\n📄 **Bron:** [[pdf:"+fname+"]]",
                         tags:["samenvatting","pdf"],created:new Date().toISOString(),modified:new Date().toISOString()};
-                      const saved=await api.post("/notes",note);
-                      setNotes(p=>[saved,...p]);
+                      const saved=await NoteStore.save(note);
+                      setNotes([...NoteStore.getAll()]);
                       updateJob(jid,{status:"done",result:"Opgeslagen als: Samenvatting — "+stem.slice(0,28)});
-                    } else {
-                      throw new Error(res?.error||"Samenvatten mislukt");
-                    }
-                  } catch(e){
-                    updateJob(jid,{status:"error",error:e.message});
-                  }
+                    } else { throw new Error(res?.error||"Samenvatten mislukt"); }
+                  } catch(e){ updateJob(jid,{status:"error",error:e.message}); }
                 })();
               }}));
           if(t==="images") return React.createElement("div",{style:{flex:1,overflow:"hidden"}},
             React.createElement(ImagesGallery,{serverImages,onRefresh:refreshImages,llmModel,setAiStatus,notes,imgNotes,setImgNotes,allTags,
               addJob, updateJob,
-              onDeleteNote:id=>setNotes(p=>p.filter(n=>n.id!==id)),
-              onAddNote:async(note)=>{ const saved=await api.post("/notes",note); setNotes(p=>[saved,...p]); }}));
+              onDeleteNote: id => { NoteStore.remove(id).then(() => setNotes([...NoteStore.getAll()])); },
+              onAddNote:async(note)=>{ await NoteStore.save(note); setNotes([...NoteStore.getAll()]); }}));
           if(t==="import") return React.createElement("div",{style:{flex:1,overflow:"hidden"}},
             React.createElement(WebImporter,{llmModel,allTags,
               onRefreshImages: refreshImages,
               addJob, updateJob,
               importPreview, setImportPreview,
-              onAddNote:async(note)=>{ const saved=await api.post("/notes",note); setNotes(p=>[saved,...p]); setSelId(saved.id); setTab("notes"); }}));
+              onAddNote:async(note)=>{
+                const saved=await NoteStore.save(note);
+                setNotes([...NoteStore.getAll()]); setSelId(saved.id); setTab("notes");
+              }}));
           if(t==="mindmap") return React.createElement("div",{style:{flex:1,overflow:"hidden"}},
             React.createElement(MindMap,{notes,allTags,aiMindmap,serverPdfs,serverImages,
               onSelectNote:id=>{ setSelId(id); setTab("notes"); },
-              onAddNote:async(note)=>{ const saved=await api.post("/notes",note); setNotes(p=>[saved,...p]); setSelId(saved.id); setTab("notes"); }}));
+              onAddNote:async(note)=>{
+                const saved=await NoteStore.save(note);
+                setNotes([...NoteStore.getAll()]); setSelId(saved.id); setTab("notes");
+              }}));
           if(t==="llm") return React.createElement("div",{style:{flex:1,overflow:"hidden"}},
             React.createElement(LLMNotebook,{notes,pdfNotes,serverPdfs,serverImages,allTags,llmModel,setLlmModel,
               onMindmapReady:(mm)=>{ setAiMindmap(mm); setTab("mindmap"); },
-              onAddNote:async(note)=>{ const saved=await api.post("/notes",note); setNotes(p=>[saved,...p]); setSelId(saved.id); setTab("notes"); }}));
-          return notesContent; // default = notes
+              onAddNote:async(note)=>{
+                const saved=await NoteStore.save(note);
+                setNotes([...NoteStore.getAll()]); setSelId(saved.id); setTab("notes");
+              }}));
+          return notesTabEl; // default = notes
         };
 
-        // Split-screen modus: links notities, rechts andere tab
+        // Split-screen modus
         if(splitMode && isDesktop) {
           const splitTabs = tabs.filter(t=>t.id!=="notes");
           return React.createElement("div",{style:{flex:1,display:"flex",overflow:"hidden"}},
-            // Linker helft: altijd notities
             React.createElement("div",{style:{flex:1,display:"flex",overflow:"hidden",
-              borderRight:`2px solid ${W.splitBg}`,minWidth:0}},
-              notesContent
-            ),
-            // Rechter helft: selecteerbare tab
+              borderRight:`2px solid ${W.splitBg}`,minWidth:0}}, notesTabEl),
             React.createElement("div",{style:{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",minWidth:0}},
-              // Tab-kiezer voor rechter paneel
               React.createElement("div",{style:{
                 background:W.bg2,borderBottom:`1px solid ${W.splitBg}`,
                 padding:"0",display:"flex",alignItems:"center",flexShrink:0,height:"36px"
@@ -7863,8 +8452,7 @@ const App = () => {
           );
         }
 
-        // Normale modus
-        if(tab==="notes") return notesContent;
+        if(tab==="notes") return notesTabEl;
         return renderTab(tab);
       })()
     ),
@@ -7872,13 +8460,3 @@ const App = () => {
     bottomNav
   );
 };
-
-
-
-
-
-
-// ── Mount ──────────────────────────────────────────────────────────────────────
-const root = ReactDOM.createRoot(document.getElementById("root"));
-root.render(React.createElement(App));
-
