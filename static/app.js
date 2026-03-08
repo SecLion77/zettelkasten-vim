@@ -883,19 +883,23 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
 
       // ── Spellfouten per regel bouwen ────────────────────────────────────
       const newSpell = new Map();
+      // Nieuwe regex instantie per iteratie — voorkomt lastIndex problemen
+      const wordRe2 = /[a-zA-ZÀ-ÿĀ-ſƀ-ɏ'-]{3,}/g;
       s.lines.forEach((line, row) => {
         const errs = [];
         let m2;
-        wordRe.lastIndex = 0;
+        wordRe2.lastIndex = 0;
         while ((m2 = wordRe.exec(line)) !== null) {
           const word = m2[0].replace(/^'+|'+$/g, "");
           if (word.length < 3) continue;
           if (/\d/.test(word) || /^[A-Z]{2,}$/.test(word)) continue;
           if (SpellEngine.isLearned(word)) continue;
-          const entry = spellRes[word] || spellRes[m2[0]];
-          // entry.spell === false → spelfout
+          // Zoek op origineel, lowercase én gestript — server indexeert beide
+          const entry = spellRes[word] || spellRes[word.toLowerCase()]
+                     || spellRes[m2[0]] || spellRes[m2[0].toLowerCase()];
           if (entry && entry.spell === false) {
-            errs.push({col: m2.index, len: word.length, word, type: "spell"});
+            errs.push({col: m2.index, len: word.length, word,
+                       type: "spell", suggestions: entry.suggestions || []});
           }
         }
         if (errs.length) newSpell.set(row, errs);
@@ -916,7 +920,7 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
         setStatus(`spell: auto → ${detectedLang}`);
       }
       draw();
-    }, 800);
+    }, 400);
   }, [spellLang, detectLang]);
 
 

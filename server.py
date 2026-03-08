@@ -983,42 +983,96 @@ class VaultManager:
 
     def spellcheck_words(self, words: list, lang: str = "en") -> dict:
         """Spellcheck via geladen Hunspell-woordenboek.
-        Geeft {word: {"spell": bool, "grammar": None}}."""
+        Resultaat: {word: {"spell": bool, "suggestions": [str]}}
+        
+        Slimmer dan voorheen:
+        - Hoofdletterwoorden worden ook gecheckt (lowercase variant)
+        - Samengestelde woorden (NL: "woordenboek") splitst op deelwoorden
+        - Fonetisch vergelijkbare suggesties bovenaan
+        - Resultaat geïndexeerd op ZOWEL originele als lowercase vorm
+        """
         import re as _re
         VaultManager._ensure_spell(lang, vault_dir=str(self.vault))
         known = VaultManager._spell_cache.get(lang, set())
-        # Vault-woorden zijn altijd correct (eigen termen, afkortingen)
+
+        # Vault-woorden zijn altijd correct (eigen termen, namen, afkortingen)
         vault_ok: set = set()
         for note in self.load_notes():
             text = (note.get("title","") + " " + note.get("content","")).lower()
             for w in _re.findall(r"[a-zA-ZÀ-ɏ'\-]{2,}", text):
                 vault_ok.add(w.strip("'-"))
+
         always_ok = _re.compile(
             r"^\d"
-            r"|^[A-Z]{2,}$"
-            r"|^[a-z]{1,2}$"
+            r"|^[A-Z]{2,}$"          # afkortingen (NATO, PDF)
+            r"|^[a-z]{1,2}$"         # de, en, in, op
             r"|https?://"
             r"|\[\["
             r"|^@\w"
+            r"|^\d+[a-z]+$"         # 3d, 2e, 10px
         )
+
+        def is_compound_ok(w, known_set):
+            """NL samengestelde woorden: 'woordenboek' → 'woorden'+'boek'."""
+            if len(w) < 8: return False
+            for i in range(3, len(w)-3):
+                if w[:i] in known_set and w[i:] in known_set:
+                    return True
+                # met tussenvoegsel -s- (arbeidSmarkt)
+                if w[:i] in known_set and w[i:i+1] == "s" and w[i+1:] in known_set:
+                    return True
+            return False
+
+        def smart_suggest(w, known_set, max_n=8):
+            """Suggesties: edit-distance + fonetische score bovenaan."""
+            base_sug = VaultManager._suggest(w, known_set, max_n=max_n*2)
+            # Fonetische overeenkomst: begin + eind bewaren scoort hoger
+            def phonetic_score(c):
+                prefix = sum(1 for a,b in zip(w, c) if a==b)
+                suffix = sum(1 for a,b in zip(reversed(w), reversed(c)) if a==b)
+                lendiff = abs(len(c) - len(w))
+                return (-prefix - suffix//2 + lendiff)
+            return sorted(base_sug, key=phonetic_score)[:max_n]
+
         results = {}
         for raw in words:
             w = raw.strip("'-.,:!?;\"()[]{}").lower()
             if not w or len(w) < 2:
-                results[raw] = {"spell": True, "grammar": None}; continue
+                results[raw] = {"spell": True}; continue
             if always_ok.search(raw):
-                results[raw] = {"spell": True, "grammar": None}; continue
+                results[raw] = {"spell": True}; continue
             if any(c.isdigit() for c in w):
-                results[raw] = {"spell": True, "grammar": None}; continue
-            if raw[0].isupper():
-                results[raw] = {"spell": True, "grammar": None}; continue
-            if w in vault_ok or w in known:
-                results[raw] = {"spell": True, "grammar": None}; continue
-            # Fout: genereer suggesties via edit-distance
-            sug = VaultManager._suggest(w, known | vault_ok, max_n=8)
-            results[raw] = {"spell": False, "grammar": None, "suggestions": sug}
-        return results
+                results[raw] = {"spell": True}; continue
 
+            # Hoofdletterwoorden: controleer de lowercase variant
+            # (niet meer blind True — een typfout met hoofdletter is nog steeds fout)
+            w_check = w  # altijd lowercase vergelijken
+
+            if w_check in vault_ok or w_check in known:
+                results[raw] = {"spell": True}
+                # Indexeer ook op lowercase zodat frontend altijd kan vinden
+                if raw != w_check:
+                    results[w_check] = {"spell": True}
+                continue
+
+            # NL samengestelde woorden
+            if lang == "nl" and is_compound_ok(w_check, known | vault_ok):
+                results[raw] = {"spell": True}
+                if raw != w_check: results[w_check] = {"spell": True}
+                continue
+
+            # Alleen-hoofdletter eerste letter EN >4 tekens → waarschijnlijk eigennaam
+            if raw[0].isupper() and raw[1:].islower() and len(raw) > 4:
+                results[raw] = {"spell": True}
+                continue
+
+            # Fout — genereer slimme suggesties
+            sug = smart_suggest(w_check, known | vault_ok, max_n=8)
+            results[raw] = {"spell": False, "suggestions": sug}
+            # Dubbel indexeren: ook op lowercase zodat frontend altijd vindt
+            if raw != w_check:
+                results[w_check] = {"spell": False, "suggestions": sug}
+        return results
 
     def grammar_check_lines(self, lines: list, lang: str = "en") -> list:
         """Grammaticacontrole per regel via patroonherkenning.
