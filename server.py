@@ -1945,8 +1945,10 @@ class ZKHandler(BaseHTTPRequestHandler):
 
         qs          = parse_qs(_up(self.path).query)
         custom_path = qs.get("path",[""])[0].strip()
-        filter_to   = ""  # geen filter — alle mails tonen
+        filter_to   = ""  # geen filter
         max_msgs    = int(qs.get("max",["300"])[0])
+        url_only    = qs.get("url_only",["0"])[0] == "1"
+        gmail_only  = qs.get("gmail_only",["0"])[0] == "1" 
 
         # ── SSE helpers ──────────────────────────────────────────────────────
         self.send_response(200)
@@ -2008,9 +2010,13 @@ class ZKHandler(BaseHTTPRequestHandler):
                 if not mail_root.exists(): continue
                 for mf in mail_root.rglob("*"):
                     if not mf.is_file() or mf in seen: continue
-                    if mf.name.lower() not in ("inbox","in","inkomend"): continue  # alleen INBOX
                     if mf.suffix.lower() in SKIP_EXTS: continue
                     if mf.name.endswith('.msf'): continue
+                    if mf.stat().st_size < 10: continue
+                    if gmail_only:
+                        fp = str(mf).lower()
+                        if not any(x in fp for x in ("gmail","googlemail")):
+                            continue
                     if not is_mbox(mf): continue
                     seen.add(mf)
                     acct, lbl = label_for(mf, mail_root)
@@ -2086,8 +2092,35 @@ class ZKHandler(BaseHTTPRequestHandler):
                 emit("status", msg=f"📂 {len(profiles)} profiel(en) gevonden")
                 for prof in profiles:
                     emit("profile", path=str(prof), name=prof.name)
+                    # Scan ALLE mbox-bestanden voor diagnose (geen naamfilter)
+                    all_hits_raw = []
+                    SKIP_EXTS2 = {'.msf','.dat','.html','.js','.css','.json','.sqlite',
+                                  '.log','.db','.xpi','.jar','.zip','.png','.jpg','.gif'}
+                    for sub in ("Mail","ImapMail"):
+                        mr = prof/sub
+                        if not mr.exists(): continue
+                        for mf2 in mr.rglob("*"):
+                            if not mf2.is_file(): continue
+                            if mf2.suffix.lower() in SKIP_EXTS2: continue
+                            if mf2.name.endswith('.msf'): continue
+                            if mf2.stat().st_size < 10: continue
+                            if gmail_only:
+                                fp2 = str(mf2).lower()
+                                if not any(x in fp2 for x in ("gmail","googlemail")):
+                                    continue
+                            try:
+                                with open(mf2,'rb') as fh:
+                                    header = fh.read(8)
+                                if not header.startswith(b'From '): continue
+                            except: continue
+                            all_hits_raw.append(mf2)
+                    # Log ALLE gevonden mbox-bestanden met pad
+                    emit("status", msg=f"  🔍 {len(all_hits_raw)} mbox-bestanden gevonden (totaal):")
+                    for mf2 in sorted(all_hits_raw, key=lambda x: str(x)):
+                        rel = str(mf2.relative_to(prof)) if prof in mf2.parents else mf2.name
+                        emit("status", msg=f"    📄 {rel}")
                     hits = find_mbox_files(prof)
-                    emit("status", msg=f"  └ {len(hits)} mbox-bestanden in {prof.name}")
+                    emit("status", msg=f"  └ {len(hits)} inbox(en) geselecteerd (naam=INBOX)")
                     files_to_scan += hits
 
             if not files_to_scan:
@@ -2129,9 +2162,11 @@ class ZKHandler(BaseHTTPRequestHandler):
                         except:
                             ts = date; ts_display = date[:16] if date else ""
                         plain, urls = extract_urls(msg)
-                        if not urls: continue
+                        if url_only and not urls: continue
+                        to_v = decode_hdr(msg.get("to",""))
                         mails_in_box.append({
                             "id": mid.strip("<>"), "subject": subj, "from": frm,
+                            "to": to_v,
                             "date": ts, "date_display": ts_display,
                             "urls": urls[:15], "snippet": plain[:400], "inbox": label,
                         })
@@ -2148,9 +2183,11 @@ class ZKHandler(BaseHTTPRequestHandler):
                     emit("inbox", name=label, count=len(mails_in_box),
                          msg=f"  ✓ {len(mails_in_box)} mails gevonden")
                 else:
-                    emit("status", msg="  — geen mails met URLs gevonden")
+                    emit("status", msg="  — geen mails gevonden" + (" (met URL-filter)" if url_only else ""))
 
             total = sum(b["count"] for b in all_inboxes)
+            # Sorteer inboxen ook op datum nieuwste mail bovenaan
+            all_inboxes.sort(key=lambda b: b["mails"][0]["date"] if b["mails"] else "", reverse=True)
             emit("done", inboxes=all_inboxes, total=total,
                  msg=f"✅ Klaar — {total} mails in {len(all_inboxes)} inbox(en)")
 
@@ -2419,6 +2456,7 @@ class ZKHandler(BaseHTTPRequestHandler):
                 continue
 
         total = sum(b["count"] for b in inboxes)
+        inboxes.sort(key=lambda b: b["mails"][0]["date"] if b["mails"] else "", reverse=True)
         return self._send(200, {
             "ok":      True,
             "inboxes": inboxes,
