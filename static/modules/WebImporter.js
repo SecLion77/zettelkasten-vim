@@ -46,6 +46,12 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, addJob, upd
   const [collapsedBoxes, setCollapsedBoxes] = useState(new Set());
   const [mailLog,        setMailLog]        = useState([]);
   const [mailDebug,      setMailDebug]      = useState(null);
+  const [mailDays,       setMailDays]       = useState(7);    // dagfilter
+  const [expandedMail,   setExpandedMail]   = useState(null); // uitgeklapte mail-id
+  const [urlOnly,        setUrlOnly]        = useState(false); // filter: alleen mails met URL
+  const [gmailOnly,      setGmailOnly]      = useState(true);  // filter: alleen gmail/googlemail
+  const [activeRecip,    setActiveRecip]    = useState(null);  // filter: ontvanger
+  const [activeInbox,    setActiveInbox]    = useState(null);  // null = alle inboxen
 
   // ── initFromPreview helper ─────────────────────────────────────────────────
   const initFromPreview = (p) => {
@@ -76,6 +82,8 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, addJob, upd
     try {
       const params = new URLSearchParams({ max: "300" });
       if (mailPath.trim()) params.set("path", mailPath.trim());
+      params.set("url_only", urlOnly ? "1" : "0");
+      params.set("gmail_only", gmailOnly ? "1" : "0");
 
       const res = await fetch(`/api/mail/inbox-stream?${params}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -117,10 +125,44 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, addJob, upd
       setMailError(e.message);
       setMailLoading(false);
     }
-  }, [mailPath]);
+  }, [mailPath, urlOnly, gmailOnly]);
 
   // ── Mail-selectie helpers ──────────────────────────────────────────────────
-  const allMails = React.useMemo(() => inboxes.flatMap(b => b.mails), [inboxes]);
+  const allMails = React.useMemo(() => {
+    const cutoff = mailDays > 0
+      ? new Date(Date.now() - mailDays * 86400000).toISOString()
+      : null;
+    return inboxes
+      .filter(b => !activeInbox || b.name === activeInbox)
+      .flatMap(b => b.mails)
+      .filter(m => !cutoff || (m.date && m.date >= cutoff))
+      .filter(m => !urlOnly || (m.urls && m.urls.length > 0))
+      .filter(m => !activeRecip || (m.to||"").toLowerCase().includes(activeRecip.toLowerCase()))
+      .sort((a, b) => (b.date||"").localeCompare(a.date||""));
+  }, [inboxes, mailDays, urlOnly, activeInbox, activeRecip]);
+
+  // Unieke ontvangers uit alle inboxen (ongefilterd op recip)
+  const allRecipients = React.useMemo(() => {
+    const counts = {};
+    inboxes.flatMap(b => b.mails).forEach(m => {
+      if (!m.to) return;
+      // Split "Naam <email>, Naam2 <email2>" op komma
+      m.to.split(/,|;/).forEach(part => {
+        part = part.trim();
+        if (!part) return;
+        // Haal naam op: "Naam <email>" → "Naam", anders email voor @
+        const nm = part.match(/^"?([^"<]+)"?\s*</);
+        const key = nm ? nm[1].trim() : part.split("@")[0].trim();
+        if (key.length < 2) return;
+        counts[key] = (counts[key] || 0) + 1;
+      });
+    });
+    // Sorteer op frequentie, toon top 8
+    return Object.entries(counts)
+      .sort((a,b) => b[1]-a[1])
+      .slice(0,8)
+      .map(([name, count]) => ({name, count}));
+  }, [inboxes]);
 
   const toggleMailSelect = (id) =>
     setMailSelected(prev => { const n=new Set(prev); n.has(id)?n.delete(id):n.add(id); return n; });
@@ -165,8 +207,8 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, addJob, upd
           let domain=""; try{domain=new URL(u).hostname.replace("www.","").split(".")[0];}catch{}
           await onAddNote({
             id: genId(), title: data.title||domain||u.slice(0,50),
-            content: (data.markdown||"") + "\n\n---\n🌐 **Bron:** ["+u+"]("+u+")\n📬 *Geïmporteerd uit Gmail*",
-            tags: ["import","gmail",domain].filter(Boolean),
+            content: (data.markdown||"") + "\n\n---\n🌐 **Bron:** ["+u+"]("+u+")\n📬 *Geïmporteerd uit Thunderbird*",
+            tags: ["import","thunderbird",domain].filter(Boolean),
             created: new Date().toISOString(), modified: new Date().toISOString(),
           });
           if (data.images?.length && onRefreshImages) onRefreshImages();
@@ -326,49 +368,168 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, addJob, upd
       style:{flex:1, display:"flex", flexDirection:"column", overflow:"hidden"}
     },
 
-      // Sub-toolbar
+      // ── Toolbar rij 1: laden + pad ────────────────────────────────────────
       React.createElement("div", {style:{
         background:W.bg2, borderBottom:`1px solid ${W.splitBg}`,
-        padding:"8px 14px", display:"flex", alignItems:"center",
+        padding:"7px 14px", display:"flex", alignItems:"center",
         gap:"8px", flexShrink:0, flexWrap:"wrap"
       }},
-        React.createElement("span", {style:{fontSize:"13px",color:W.fgMuted,flexShrink:0}},
-          "📬 Thunderbird inbox"),
         React.createElement("input", {
           value:mailPath,
           onChange:e=>setMailPath(e.target.value),
-          placeholder:"Pad optioneel — leeg = automatisch zoeken",
-          style:{flex:1,minWidth:"200px",background:W.bg3,border:`1px solid ${W.splitBg}`,
+          placeholder:"Thunderbird-pad (leeg = automatisch)",
+          style:{flex:1,minWidth:"180px",background:W.bg3,border:`1px solid ${W.splitBg}`,
                  borderRadius:"4px",color:W.fg,padding:"5px 10px",fontSize:"13px",outline:"none"}
         }),
+        // Dagfilter
+        React.createElement("select", {
+          value: mailDays,
+          onChange: e => setMailDays(Number(e.target.value)),
+          style:{background:W.bg3,border:`1px solid ${W.splitBg}`,color:W.fg,
+                 borderRadius:"4px",padding:"5px 8px",fontSize:"13px",outline:"none",cursor:"pointer"}
+        },
+          React.createElement("option",{value:1},  "Vandaag"),
+          React.createElement("option",{value:3},  "3 dagen"),
+          React.createElement("option",{value:7},  "7 dagen"),
+          React.createElement("option",{value:14}, "14 dagen"),
+          React.createElement("option",{value:30}, "30 dagen"),
+          React.createElement("option",{value:0},  "Alles")
+        ),
+        // Gmail-filter toggle
+        React.createElement("button", {
+          onClick: () => setGmailOnly(v => !v),
+          title: gmailOnly ? "Alle accounts laden" : "Alleen Gmail laden (sneller)",
+          style:{
+            background: gmailOnly ? "rgba(234,231,136,0.15)" : "none",
+            border: `1px solid ${gmailOnly ? W.yellow : W.splitBg}`,
+            color: gmailOnly ? W.yellow : W.fgMuted,
+            borderRadius:"4px", padding:"5px 10px", fontSize:"13px",
+            cursor:"pointer", whiteSpace:"nowrap", transition:"all 0.15s"
+          }
+        }, gmailOnly ? "Gmail ✓" : "Gmail ○"),
+
+        // URL-filter toggle
+        React.createElement("button", {
+          onClick: () => setUrlOnly(v => !v),
+          title: urlOnly ? "Toon alle mails" : "Toon alleen mails met URL",
+          style:{
+            background: urlOnly ? "rgba(138,198,242,0.2)" : "none",
+            border: `1px solid ${urlOnly ? W.blue : W.splitBg}`,
+            color: urlOnly ? W.blue : W.fgMuted,
+            borderRadius:"4px", padding:"5px 10px", fontSize:"13px",
+            cursor:"pointer", whiteSpace:"nowrap", transition:"all 0.15s"
+          }
+        }, urlOnly ? "🔗 URL aan" : "🔗 URL uit"),
+
         React.createElement("button", {
           onClick:loadMailbox, disabled:mailLoading,
           style:{background:W.blue,color:W.bg,border:"none",borderRadius:"5px",
                  padding:"6px 16px",fontSize:"14px",fontWeight:"bold",cursor:"pointer",
                  opacity:mailLoading?0.5:1,whiteSpace:"nowrap"}
-        }, mailLoading ? "⏳ Laden…" : "📂 Laden"),
-        inboxes.length > 0 && React.createElement(React.Fragment, null,
-          React.createElement("span", {style:{fontSize:"13px",color:W.fgMuted,flexShrink:0}},
-            `${allMails.length} mails ·`),
-          React.createElement("button", {onClick:selectAll,
-            style:{background:"none",border:`1px solid ${W.splitBg}`,color:W.fgDim,
-                   borderRadius:"4px",padding:"3px 8px",fontSize:"13px",cursor:"pointer"}
-          }, "✓ alles"),
-          React.createElement("button", {onClick:deselectAll,
-            style:{background:"none",border:`1px solid ${W.splitBg}`,color:W.fgDim,
-                   borderRadius:"4px",padding:"3px 8px",fontSize:"13px",cursor:"pointer"}
-          }, "× geen"),
-          React.createElement("button", {
-            onClick:doMailImport, disabled:mailImporting||mailSelected.size===0,
-            style:{background:mailSelected.size>0?"rgba(159,202,86,0.85)":"rgba(159,202,86,0.2)",
-                   color:W.bg,border:"none",borderRadius:"5px",padding:"6px 18px",
-                   fontSize:"14px",fontWeight:"bold",cursor:"pointer",
-                   opacity:mailSelected.size===0||mailImporting?0.5:1,
-                   whiteSpace:"nowrap",transition:"all 0.15s"}
-          }, mailImporting
-              ? `⏳ ${mailImportProg||"…"}`
-              : `📥 Importeer ${mailSelected.size||""}${mailSelected.size===1?" mail":" mails"}`)
-        )
+        }, mailLoading ? "⏳ Laden…" : "📂 Thunderbird laden")
+      ),
+
+      // ── Toolbar rij 2: inbox-knoppen (alleen als geladen) ─────────────────
+      inboxes.length > 0 && React.createElement("div", {style:{
+        background:W.bg2, borderBottom:`1px solid ${W.splitBg}`,
+        padding:"5px 14px", display:"flex", alignItems:"center",
+        gap:"6px", flexShrink:0, flexWrap:"wrap"
+      }},
+        // "Alle" knop
+        React.createElement("button", {
+          onClick: () => setActiveInbox(null),
+          style:{
+            background: activeInbox===null ? W.bg3 : "none",
+            border: `1px solid ${activeInbox===null ? W.blue : W.splitBg}`,
+            color: activeInbox===null ? W.blue : W.fgMuted,
+            borderRadius:"4px", padding:"3px 10px", fontSize:"12px", cursor:"pointer",
+            fontWeight: activeInbox===null ? "bold" : "normal",
+          }
+        }, `Alle (${inboxes.reduce((s,b)=>s+b.mails.length,0)})`),
+
+        // Knop per inbox
+        ...inboxes.map(b => {
+          const isActive = activeInbox === b.name;
+          // Accountnaam: deel VOOR › (bijv. "imap.googlemail.com" → "googlemail.com")
+          const rawAcct = b.name.includes("›")
+            ? b.name.split("›")[0].trim()
+            : b.name.split("/")[0].trim();
+          const shortName = rawAcct
+            .replace(/^imap\./i,"")
+            .replace(/^imap-mail\./i,"")
+            .replace(/^mail\./i,"");
+          return React.createElement("button", {
+            key: b.name,
+            onClick: () => setActiveInbox(isActive ? null : b.name),
+            style:{
+              background: isActive ? W.bg3 : "none",
+              border: `1px solid ${isActive ? W.yellow : W.splitBg}`,
+              color: isActive ? W.yellow : W.fgMuted,
+              borderRadius:"4px", padding:"3px 10px", fontSize:"12px",
+              cursor:"pointer", whiteSpace:"nowrap",
+              fontWeight: isActive ? "bold" : "normal",
+            }
+          }, `${shortName} (${b.mails.length})`);
+        }),
+
+        React.createElement("div",{style:{flex:1}}),
+        React.createElement("span", {style:{fontSize:"12px",color:W.fgMuted,flexShrink:0}},
+          `${allMails.length} zichtbaar`),
+        React.createElement("button", {onClick:selectAll,
+          style:{background:"none",border:`1px solid ${W.splitBg}`,color:W.fgDim,
+                 borderRadius:"4px",padding:"3px 8px",fontSize:"12px",cursor:"pointer"}
+        }, "✓ alles"),
+        React.createElement("button", {onClick:deselectAll,
+          style:{background:"none",border:`1px solid ${W.splitBg}`,color:W.fgDim,
+                 borderRadius:"4px",padding:"3px 8px",fontSize:"12px",cursor:"pointer"}
+        }, "× geen"),
+        React.createElement("button", {
+          onClick:doMailImport, disabled:mailImporting||mailSelected.size===0,
+          style:{background:mailSelected.size>0?"rgba(159,202,86,0.85)":"rgba(159,202,86,0.2)",
+                 color:W.bg,border:"none",borderRadius:"5px",padding:"5px 16px",
+                 fontSize:"13px",fontWeight:"bold",cursor:"pointer",
+                 opacity:mailSelected.size===0||mailImporting?0.5:1,
+                 whiteSpace:"nowrap",transition:"all 0.15s"}
+        }, mailImporting
+            ? `⏳ ${mailImportProg||"…"}`
+            : `📥 Importeer ${mailSelected.size||""}${mailSelected.size===1?" mail":" mails"}`)
+      ),
+
+      // ── Toolbar rij 3: ontvanger-filter (alleen als er ontvangers zijn) ──
+      allRecipients.length > 0 && React.createElement("div", {style:{
+        background:W.bg2, borderBottom:`1px solid ${W.splitBg}`,
+        padding:"4px 14px", display:"flex", alignItems:"center",
+        gap:"6px", flexShrink:0, flexWrap:"wrap"
+      }},
+        React.createElement("span", {style:{fontSize:"11px", color:W.fgMuted, flexShrink:0}},
+          "Aan:"),
+        // "Alle" ontvanger
+        React.createElement("button", {
+          onClick: () => setActiveRecip(null),
+          style:{
+            background: activeRecip===null ? W.bg3 : "none",
+            border: `1px solid ${activeRecip===null ? W.blue : W.splitBg}`,
+            color: activeRecip===null ? W.blue : W.fgMuted,
+            borderRadius:"4px", padding:"2px 8px", fontSize:"12px", cursor:"pointer",
+            fontWeight: activeRecip===null ? "bold" : "normal",
+          }
+        }, "iedereen"),
+        // Knop per ontvanger
+        ...allRecipients.map(({name, count}) => {
+          const isActive = activeRecip === name;
+          return React.createElement("button", {
+            key: name,
+            onClick: () => setActiveRecip(isActive ? null : name),
+            style:{
+              background: isActive ? W.bg3 : "none",
+              border: `1px solid ${isActive ? W.orange : W.splitBg}`,
+              color: isActive ? W.orange : W.fgMuted,
+              borderRadius:"4px", padding:"2px 8px", fontSize:"12px",
+              cursor:"pointer", whiteSpace:"nowrap",
+              fontWeight: isActive ? "bold" : "normal",
+            }
+          }, `${name} (${count})`);
+        })
       ),
 
       // Foutmelding
@@ -449,116 +610,189 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, addJob, upd
           )
         ),
 
-      // Inbox-lijsten
-      React.createElement("div", {style:{flex:1,overflowY:"auto"}},
-        inboxes.map(inbox => {
-          const isCollapsed = collapsedBoxes.has(inbox.name);
-          const allSel  = inbox.mails.every(m => mailSelected.has(m.id));
-          const someSel = inbox.mails.some(m => mailSelected.has(m.id));
+      // ── Thunderbird-stijl tabelweergave ───────────────────────────────────
+      inboxes.length > 0 && React.createElement("div", {style:{flex:1, display:"flex", flexDirection:"column", overflow:"hidden"}},
 
-          return React.createElement("div", {key:inbox.name,
-            style:{borderBottom:`2px solid ${W.bg3}`}
+        // Kolomheaders (sticky)
+        React.createElement("div", {style:{
+          display:"grid",
+          gridTemplateColumns:"28px 28px 1fr 2fr 80px 110px",
+          gap:0,
+          background:W.bg3,
+          borderBottom:`2px solid ${W.splitBg}`,
+          flexShrink:0,
+          position:"sticky", top:0, zIndex:3,
+        }},
+          // Checkbox-kolom header: selecteer alles
+          React.createElement("div", {
+            onClick: () => mailSelected.size === allMails.length ? deselectAll() : selectAll(),
+            style:{
+              padding:"5px 0 5px 8px", display:"flex", alignItems:"center",
+              cursor:"pointer",
+            }
           },
-            // Inbox-header
             React.createElement("div", {style:{
-              display:"flex",alignItems:"center",gap:"8px",
-              padding:"7px 14px",background:W.bg3,
-              borderBottom:`1px solid ${W.splitBg}`,
-              position:"sticky",top:0,zIndex:2,cursor:"pointer"
-            }, onClick:()=>toggleBox(inbox.name)},
-              React.createElement("span", {style:{fontSize:"13px",color:W.fgMuted}},
-                isCollapsed?"▶":"▼"),
-              React.createElement("span", {style:{
-                fontSize:"13px",fontWeight:"bold",color:W.statusFg,flex:1,
-                overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"
-              }}, inbox.name),
-              React.createElement("span", {style:{
-                fontSize:"12px",color:W.fgMuted,background:W.bg2,
-                borderRadius:"10px",padding:"1px 8px",flexShrink:0
-              }}, inbox.count),
-              React.createElement("button", {
-                onClick:e=>{e.stopPropagation();allSel?deselectInbox(inbox):selectInbox(inbox);},
-                style:{
-                  border:`1px solid ${W.splitBg}`,
-                  color:allSel?W.comment:W.fgDim,borderRadius:"4px",
-                  padding:"2px 8px",fontSize:"12px",cursor:"pointer",flexShrink:0,
-                  background:allSel?"rgba(159,202,86,0.15)":"none",
-                }
-              }, allSel?"✓ alles geselecteerd":"+ selecteer inbox")
-            ),
+              width:"13px", height:"13px", borderRadius:"2px",
+              border:`2px solid ${mailSelected.size===allMails.length&&allMails.length>0 ? W.comment : W.fgMuted}`,
+              background: mailSelected.size===allMails.length&&allMails.length>0 ? "rgba(159,202,86,0.85)" : "transparent",
+              display:"flex", alignItems:"center", justifyContent:"center",
+              color:W.bg, fontSize:"9px",
+            }}, mailSelected.size===allMails.length&&allMails.length>0 ? "✓" : "")
+          ),
+          React.createElement("div", {style:{padding:"5px 8px", fontSize:"12px", color:W.fgMuted, fontWeight:"bold", letterSpacing:"0.5px", userSelect:"none"}}), // expand
+          React.createElement("div", {style:{padding:"5px 8px", fontSize:"12px", color:W.fgMuted, fontWeight:"bold", letterSpacing:"0.5px", userSelect:"none"}}, "Afzender"),
+          React.createElement("div", {style:{padding:"5px 8px", fontSize:"12px", color:W.fgMuted, fontWeight:"bold", letterSpacing:"0.5px", userSelect:"none"}}, "Onderwerp"),
+          React.createElement("div", {style:{padding:"5px 8px", fontSize:"12px", color:W.fgMuted, fontWeight:"bold", letterSpacing:"0.5px", userSelect:"none", textAlign:"center"}}, "URL"),
+          React.createElement("div", {style:{padding:"5px 8px", fontSize:"12px", color:W.fgMuted, fontWeight:"bold", letterSpacing:"0.5px", userSelect:"none", textAlign:"right", paddingRight:"14px"}}, "Datum"),
+        ),
 
-            // Mail-rijen
-            !isCollapsed && inbox.mails.map(mail => {
-              const isSel = mailSelected.has(mail.id);
-              return React.createElement("div", {
-                key:mail.id,
-                onClick:()=>toggleMailSelect(mail.id),
+        // Mail-rijen
+        React.createElement("div", {style:{flex:1, overflowY:"auto"}},
+          allMails.map((mail, idx) => {
+            const isSel      = mailSelected.has(mail.id);
+            const isExpanded = expandedMail === mail.id;
+            const isEven     = idx % 2 === 0;
+            const urlCount   = (mail.urls||[]).length;
+
+            // Afzender: haal naam uit "Naam <email>"
+            let sender = mail.from || "";
+            const nameMatch = sender.match(/^"?([^"<]+)"?\s*</);
+            if (nameMatch) sender = nameMatch[1].trim();
+            else { try { sender = sender.split("@")[0]; } catch {} }
+            sender = sender.slice(0, 28);
+
+            // Snippetregels (max 4)
+            const snippetLines = (mail.snippet||"")
+              .replace(/\s+/g, " ").trim()
+              .match(/.{1,90}/g) || [];
+            const preview = snippetLines.slice(0, 4);
+
+            const rowBg = isSel
+              ? "rgba(159,202,86,0.10)"
+              : isExpanded ? W.bg3
+              : isEven ? W.bg : W.bg2;
+
+            return React.createElement("div", {
+              key: mail.id,
+              style:{ borderBottom:`1px solid ${W.splitBg}` }
+            },
+
+              // ── Hoofd-rij ────────────────────────────────────────────────
+              React.createElement("div", {
                 style:{
                   display:"grid",
-                  gridTemplateColumns:"22px 1fr",
-                  gridTemplateRows:"auto auto auto",
-                  gap:"0 10px",
-                  padding:"9px 14px 9px 12px",
-                  borderBottom:`1px solid ${W.splitBg}`,
-                  background:isSel?"rgba(159,202,86,0.07)":"transparent",
+                  gridTemplateColumns:"28px 28px 1fr 2fr 80px 110px",
+                  gap:0,
+                  background: rowBg,
                   cursor:"pointer",
-                  transition:"background 0.1s",
+                  transition:"background 0.08s",
                 }
               },
-                // Checkbox
-                React.createElement("div", {style:{
-                  gridRow:"1/4",gridColumn:"1",
-                  width:"16px",height:"16px",borderRadius:"3px",marginTop:"3px",
-                  border:`2px solid ${isSel?W.comment:W.splitBg}`,
-                  background:isSel?"rgba(159,202,86,0.85)":"transparent",
-                  display:"flex",alignItems:"center",justifyContent:"center",
-                  color:W.bg,fontSize:"11px",flexShrink:0,transition:"all 0.1s"
-                }}, isSel&&"✓"),
 
-                // Onderwerp
-                React.createElement("div", {style:{
-                  gridRow:"1",gridColumn:"2",
-                  fontSize:"14px",fontWeight:"600",
-                  color:isSel?W.statusFg:W.fg,
-                  overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",
-                  lineHeight:"1.4"
-                }}, mail.subject||"(geen onderwerp)"),
+                // Checkbox — klik selecteert
+                React.createElement("div", {
+                  onClick: e => { e.stopPropagation(); toggleMailSelect(mail.id); },
+                  style:{ padding:"0 0 0 8px", display:"flex", alignItems:"center" }
+                },
+                  React.createElement("div", {style:{
+                    width:"13px", height:"13px", borderRadius:"2px", flexShrink:0,
+                    border:`2px solid ${isSel ? W.comment : W.splitBg}`,
+                    background: isSel ? "rgba(159,202,86,0.85)" : "transparent",
+                    display:"flex", alignItems:"center", justifyContent:"center",
+                    color:W.bg, fontSize:"9px", transition:"all 0.1s",
+                  }}, isSel ? "✓" : "")
+                ),
 
-                // Snippet + URL-chips
-                React.createElement("div", {style:{
-                  gridRow:"2",gridColumn:"2",
-                  fontSize:"13px",color:W.fgDim,lineHeight:"1.5",marginTop:"3px"
-                }},
-                  mail.snippet && React.createElement("span", {style:{color:W.fgMuted,marginRight:"6px"}},
-                    mail.snippet.slice(0,120).replace(/\s+/g," ")+"…"),
-                  (mail.urls||[]).map((u,i)=>{
-                    let domain=""; try{domain=new URL(u).hostname.replace("www.","");}catch{}
-                    return React.createElement("a", {
-                      key:i, href:u, target:"_blank", rel:"noopener",
-                      onClick:e=>e.stopPropagation(),
-                      style:{
-                        display:"inline-block",fontSize:"12px",
-                        background:"rgba(138,198,242,0.1)",
-                        border:"1px solid rgba(138,198,242,0.25)",
-                        borderRadius:"3px",padding:"1px 7px",
-                        color:"#8ac6f2",marginRight:"4px",marginTop:"3px",
-                        maxWidth:"220px",overflow:"hidden",
-                        textOverflow:"ellipsis",whiteSpace:"nowrap",
-                        verticalAlign:"middle",textDecoration:"none",
-                      }
-                    }, domain||u.slice(0,40));
-                  })
+                // Expand-pijl
+                React.createElement("div", {
+                  onClick: e => { e.stopPropagation(); setExpandedMail(isExpanded ? null : mail.id); },
+                  style:{
+                    display:"flex", alignItems:"center", justifyContent:"center",
+                    fontSize:"10px", color:W.fgMuted, cursor:"pointer",
+                    userSelect:"none",
+                  }
+                }, isExpanded ? "▼" : "▶"),
+
+                // Afzender — klik klapt uit
+                React.createElement("div", {
+                  onClick: () => setExpandedMail(isExpanded ? null : mail.id),
+                  style:{
+                    padding:"7px 8px", fontSize:"13px",
+                    color: isSel ? W.comment : W.fg,
+                    fontWeight: isSel ? "600" : "400",
+                    overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap",
+                    lineHeight:"1.4",
+                  }
+                }, sender || "—"),
+
+                // Onderwerp — klik klapt uit
+                React.createElement("div", {
+                  onClick: () => setExpandedMail(isExpanded ? null : mail.id),
+                  style:{
+                    padding:"7px 8px", fontSize:"13px",
+                    color: isSel ? W.statusFg : W.fgDim,
+                    overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap",
+                    lineHeight:"1.4",
+                  }
+                }, mail.subject || "(geen onderwerp)"),
+
+                // URL-indicator
+                React.createElement("div", {
+                  title: (mail.urls||[]).join("\n"),
+                  onClick: () => setExpandedMail(isExpanded ? null : mail.id),
+                  style:{ padding:"7px 8px", display:"flex", alignItems:"center", justifyContent:"center" }
+                },
+                  React.createElement("span", {style:{
+                    fontSize:"11px", padding:"1px 6px", borderRadius:"8px",
+                    background: isSel ? "rgba(138,198,242,0.25)" : "rgba(138,198,242,0.12)",
+                    color: W.blue, fontWeight:"600", whiteSpace:"nowrap",
+                  }}, `🔗 ${urlCount}`)
                 ),
 
                 // Datum
-                React.createElement("div", {style:{
-                  gridRow:"3",gridColumn:"2",
-                  fontSize:"12px",color:W.fgMuted,marginTop:"4px",lineHeight:"1.2"
-                }}, mail.date_display||"")
-              );
-            })
-          );
-        })
+                React.createElement("div", {
+                  onClick: () => setExpandedMail(isExpanded ? null : mail.id),
+                  style:{
+                    padding:"7px 14px 7px 4px", fontSize:"12px",
+                    color: W.fgMuted, textAlign:"right", whiteSpace:"nowrap", lineHeight:"1.4",
+                  }
+                }, mail.date_display || "")
+              ),
+
+              // ── Uitgeklapte preview ──────────────────────────────────────
+              isExpanded && React.createElement("div", {style:{
+                background: W.bg3,
+                borderTop:`1px solid ${W.splitBg}`,
+                padding:"10px 14px 10px 56px",
+              }},
+                // Snippet: eerste 4 regels
+                preview.length > 0 && React.createElement("div", {style:{
+                  fontSize:"13px", color:W.fgDim, lineHeight:"1.7",
+                  marginBottom:"10px", fontStyle:"italic",
+                }}, preview.join(" ")),
+
+                // Klikbare URL-chips
+                React.createElement("div", {style:{display:"flex", flexWrap:"wrap", gap:"6px"}},
+                  (mail.urls||[]).map((u, i) => {
+                    let domain = ""; try { domain = new URL(u).hostname.replace("www.",""); } catch {}
+                    return React.createElement("a", {
+                      key:i, href:u, target:"_blank", rel:"noopener",
+                      onClick: e => e.stopPropagation(),
+                      style:{
+                        fontSize:"12px", padding:"3px 10px", borderRadius:"4px",
+                        background:"rgba(138,198,242,0.12)",
+                        border:"1px solid rgba(138,198,242,0.3)",
+                        color:W.blue, textDecoration:"none",
+                        maxWidth:"300px", overflow:"hidden",
+                        textOverflow:"ellipsis", whiteSpace:"nowrap",
+                      }
+                    }, "🔗 " + (domain || u.slice(0,40)));
+                  })
+                )
+              )
+            );
+          })
+        )
       )
     )
   );
