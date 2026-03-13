@@ -118,6 +118,14 @@ const NotesTab = ({
     setVimMode(false);
   }, [handleSave]);
 
+  // ── Link toevoegen vanuit SimilarPanel ────────────────────────────────────
+  const handleAddLink = useCallback(async (targetId, targetTitle) => {
+    if (!selNote) return;
+    const linkText = `\n\n[[${targetId}]]`;
+    const updated = { ...selNote, content: (selNote.content || "") + linkText };
+    await handleSave(updated);
+  }, [selNote, handleSave]);
+
   const handleDelete = useCallback(async () => {
     if (!selNote || !window.confirm("Verwijder dit zettel?")) return;
     await NoteStore.remove(selNote.id);
@@ -197,8 +205,9 @@ const NotesTab = ({
                      background: linkTypeFilter === id ? "rgba(138,198,242,0.12)" : "none",
                      border: "none",
                      borderBottom: linkTypeFilter === id ? `2px solid ${W.blue}` : "2px solid transparent",
-                     color: linkTypeFilter === id ? W.blue : W.fgMuted,
-                     fontSize: "9px", padding: "7px 2px", cursor: "pointer", letterSpacing: "0.3px" }
+                     color: linkTypeFilter === id ? W.blue : "#c8c0b4",
+                     fontSize: "12px", padding: "8px 2px", cursor: "pointer", letterSpacing: "0.2px",
+                     fontWeight: linkTypeFilter === id ? "600" : "400" }
           }, lbl)
         )
       ),
@@ -220,8 +229,8 @@ const NotesTab = ({
         (linkTypeFilter === "all" || linkTypeFilter === "notes") && matchNotes.length > 0 &&
           React.createElement(React.Fragment, null,
             linkTypeFilter === "all" && React.createElement("div", {
-              style: { padding: "5px 12px 3px", fontSize: "9px", color: W.fgMuted,
-                       letterSpacing: "1.5px", background: "rgba(0,0,0,0.2)", flexShrink: 0 }
+              style: { padding: "5px 12px 4px", fontSize: "11px", color: "#c8c0b4",
+                       letterSpacing: "1.2px", fontWeight: "600", background: "rgba(0,0,0,0.2)", flexShrink: 0 }
             }, "NOTITIES"),
             matchNotes.map(n => React.createElement("div", {
               key: n.id,
@@ -234,17 +243,23 @@ const NotesTab = ({
                 style: { fontSize: "14px", color: W.fg,
                          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }
               }, n.title),
-              (n.tags || []).length > 0 && React.createElement("span", {
-                style: { fontSize: "9px", color: W.comment }
-              }, (n.tags || []).map(t => "#" + t).join("  "))
+              (n.tags || []).length > 0 && React.createElement("div", {
+                style: { display:"flex", gap:"3px", flexWrap:"wrap", marginTop:"2px" }
+              }, (n.tags || []).slice(0,4).map(t => React.createElement("span", {
+                key:t, style:{
+                  fontSize:"11px", color:"#b8e06a", fontWeight:"500",
+                  background:"rgba(159,202,86,0.12)", border:"1px solid rgba(159,202,86,0.35)",
+                  borderRadius:"4px", padding:"1px 6px", lineHeight:"1.3",
+                }
+              }, "#" + t)))
             ))
           ),
         // PDFs
         (linkTypeFilter === "all" || linkTypeFilter === "pdf") && matchPdfs.length > 0 &&
           React.createElement(React.Fragment, null,
             linkTypeFilter === "all" && React.createElement("div", {
-              style: { padding: "5px 12px 3px", fontSize: "9px", color: W.orange,
-                       letterSpacing: "1.5px", background: "rgba(0,0,0,0.2)" }
+              style: { padding: "5px 12px 4px", fontSize: "11px", color: W.orange,
+                       letterSpacing: "1.2px", fontWeight: "600", background: "rgba(0,0,0,0.2)" }
             }, "PDF"),
             matchPdfs.map(p => React.createElement("div", {
               key: p.name,
@@ -264,8 +279,8 @@ const NotesTab = ({
         (linkTypeFilter === "all" || linkTypeFilter === "images") && matchImgs.length > 0 &&
           React.createElement(React.Fragment, null,
             linkTypeFilter === "all" && React.createElement("div", {
-              style: { padding: "5px 12px 3px", fontSize: "9px", color: W.blue,
-                       letterSpacing: "1.5px", background: "rgba(0,0,0,0.2)" }
+              style: { padding: "5px 12px 4px", fontSize: "11px", color: W.blue,
+                       letterSpacing: "1.2px", fontWeight: "600", background: "rgba(0,0,0,0.2)" }
             }, "AFBEELDINGEN"),
             matchImgs.map(img => React.createElement("div", {
               key: img.name,
@@ -340,6 +355,7 @@ const NotesTab = ({
           onEditMermaid:      code => setMermaidEdit({ noteId: selectedId, code }),
           backlinks,
           onBacklinkSelect:   id => { onSelectNote(id); setVimMode(false); },
+          onAddLink:          handleAddLink,
         }),
         isDesktop && !goyoMode && React.createElement(NotesMeta, {
           note:          selNote,

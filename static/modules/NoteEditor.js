@@ -1,5 +1,5 @@
 // ── NoteEditor ────────────────────────────────────────────────────────────────
-// Variable module. Wraps VimEditor met titel-input en toolbar.
+// Variable module. Wraps VimEditor met titel-input, SmartTagEditor en toolbar.
 // Open/Closed: uitbreidbaar via props (spellcheck, completion) zonder interface te breken.
 // Props: note, allTags, allNotesText, llmModel, isMobile, goyoMode,
 //        onSave(updatedNote), onClose(), onDelete(), onToggleGoyo(),
@@ -129,12 +129,31 @@ const NoteEditor = ({
     )
   );
 
+  // ── Tag strip ──────────────────────────────────────────────────────────────
+  const tagStrip = !goyoMode && React.createElement("div", {
+    style: {
+      background: W.bg,
+      borderBottom: `1px solid ${W.splitBg}`,
+      padding: "5px 10px",
+      flexShrink: 0,
+    }
+  },
+    React.createElement(SmartTagEditor, {
+      tags:     editTags,
+      onChange: setEditTags,
+      allTags,
+      content:  editContent,
+      llmModel,
+    })
+  );
+
   // ── Render ─────────────────────────────────────────────────────────────────
   return React.createElement("div", {
     className: goyoMode ? "goyo-mode" : "",
     style: { flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }
   },
     !goyoMode && toolbar,
+    tagStrip,
     React.createElement(VimEditor, {
       key:          note?.id,
       value:        editContent,
@@ -153,6 +172,7 @@ const NoteEditor = ({
       llmModel,
       allNotesText,
       onSplitCmd,
+      hideTagStrip: true,  // SmartTagEditor boven de editor toont al de tags
     })
   );
 };

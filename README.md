@@ -1,6 +1,6 @@
 # 🗃️ Zettelkasten VIM
 
-> Zelfstandige Python desktop-app voor kennisbeheer. Notities als Markdown op schijf, PDF-bibliotheek met annotaties, afbeeldingenbeheer, Obsidian-stijl kennisgraaf, canvas VIM-editor, split-screen modus, interactieve mindmap (visueel én Mermaid-syntax), web-importer, Gmail-import vanuit Thunderbird, spellcheck (NL + EN), en een lokale AI notebook via Ollama — volledig offline, geen cloud.
+> Zelfstandige Python desktop-app voor kennisbeheer. Notities als Markdown op schijf, PDF-bibliotheek met annotaties, afbeeldingenbeheer, Obsidian-stijl kennisgraaf, canvas VIM-editor, split-screen modus, interactieve mindmap (visueel én Mermaid-syntax), web-importer, Gmail-import vanuit Thunderbird, spellcheck (NL + EN), **semantische kennisverrijking (TF-IDF + GraphRAG)**, **SmartTagEditor met AI-suggesties** en een lokale AI notebook via Ollama — volledig offline, geen cloud.
 
 ---
 
@@ -31,6 +31,7 @@
     ├── modules/
     │   ├── NoteEditor.js
     │   ├── NotesTab.js
+    │   ├── TagManager.js
     │   └── ...
     └── vendor/              ← alleen nodig voor offline modus
         └── download-vendors.sh
@@ -50,14 +51,14 @@ python3 server.py --host 0.0.0.0                        # bereikbaar op iPad / n
 python3 server.py --vault ~/Notes --port 8080 --verbose  # combineren
 ```
 
-De browser opent automatisch op **http://localhost:7842**  
+De browser opent automatisch op **http://localhost:7842**
 Bij `--host 0.0.0.0` toont het opstartbericht ook het netwerk-IP, bijv. `http://192.168.1.42:7842`
 
 ---
 
 ### Stap 3 — AI instellen (optioneel)
 
-Voor samenvattingen, beschrijvingen, chat en mindmap-generatie is **Ollama** nodig:
+Voor samenvattingen, chat, AI-tag-suggesties en GraphRAG is **Ollama** nodig:
 
 ```bash
 # macOS / Linux
@@ -81,7 +82,7 @@ ollama pull llama3.2-vision
 
 ## 📡 Offline modus
 
-Standaard laadt de app React, PDF.js en de fonts van CDN (internet vereist bij eerste open).  
+Standaard laadt de app React, PDF.js en de fonts van CDN (internet vereist bij eerste open).
 Met `--offline` worden alle bestanden lokaal geserveerd — **geen internet nodig**.
 
 ```bash
@@ -111,7 +112,7 @@ python3 server.py --offline
 └── config.json
 ```
 
-Vault wisselen via CLI: `python3 server.py --vault /pad/naar/vault`  
+Vault wisselen via CLI: `python3 server.py --vault /pad/naar/vault`
 Of in de app: ⚙ Instellingen → voer nieuw pad in.
 
 ---
@@ -131,9 +132,72 @@ Of in de app: ⚙ Instellingen → voer nieuw pad in.
 
 ---
 
+## 🏷️ Tag-systeem
+
+### SmartTagEditor in de notitie-editor
+
+De **SmartTagEditor** is een vaste balk direct onder de toolbar — zichtbaar bij zowel nieuwe als bestaande notities. Hij combineert handmatige invoer, autocomplete en AI-suggesties in één interface.
+
+```
+┌─────────────────────────────────────────────┐  ┌─────────────┐
+│  #python  #ai  #notities  [tag toevoegen…]  │  │  ✦ AI-tags  │
+└─────────────────────────────────────────────┘  └─────────────┘
+```
+
+**Handmatig tags toevoegen:**
+- Begin met typen → autocomplete-dropdown met bestaande tags, gesorteerd op gebruiksfrequentie
+- `Enter` / `Tab` / `,` bevestigt de invoer · `Backspace` verwijdert de laatste tag
+- Typo-detectie: lijkt de nieuwe tag op een bestaande? → waarschuwing met vervang-optie
+
+**AI-tag-suggesties:**
+- Klik **✦ AI-tags** → het actieve model analyseert de volledige notitie-inhoud
+- Suggesties verschijnen als klikbare pills direct onder het invoerveld:
+  - Klik een pill om de tag toe te voegen (pill toont ＋ of ✓ als al toegevoegd)
+  - Klik **＋ voeg alle nieuwe toe** om in één keer alles toe te voegen
+- De knop is gedimmed als er geen model geselecteerd is of de notitie nog te kort is; de tooltip legt uit wat er ontbreekt
+- Model instellen via de **modelnaam in de statusbalk** onderin de app
+
+**Tag-filter per tab:**
+Elke tab (Notities, Graaf, PDF, Zoeken) heeft een **TagFilterBar** met:
+- Klikbare tag-chips (groene pills met duidelijk contrast)
+- Ingebouwde zoekbalk voor grote tag-collecties
+- Actief-filter badge + snelle **× wis** knop
+
+**Tags via VIM-commando's:**
+
+| Commando | Actie |
+|----------|-------|
+| `:tag rust async` | Tags vervangen |
+| `:tag+ nieuw` | Tag toevoegen |
+| `:tag- oud` | Tag verwijderen |
+| `:tags` | Toon huidige tags in statusbalk |
+| `:retag` | Sync tags met #hashtags in de tekst |
+
+---
+
+## 🧠 Laag 3 — Semantische kennisverrijking
+
+### Verwante notities
+
+In het notitie-voorbeeldpaneel toont het **Verwante notities** vak automatisch tot 6 semantisch gerelateerde notities — berekend met TF-IDF, zonder internet of AI-model.
+
+- Paarse sterkte-balk toont de mate van overeenkomst
+- **✓ gelinkt** badge als er al een `[[link]]` bestaat · **+ link** voegt de koppeling direct toe
+
+### Semantische graaf
+
+Kennisgraaf → **≈ semantisch**: gestippelde paarse lijnen tonen semantische verwantschap, ook zonder expliciete `[[link]]`. Legenda toont het aantal gevonden relaties en de sterkste paren.
+
+### GraphRAG Notebook
+
+- **🕸 GraphRAG** — activeert context-verrijkte vraagstelling: semantisch relevante notities + directe buren + community-samenvatting worden als rijke systeem-prompt meegestuurd
+- **🔍 hiaten** — analyseert kennishiaten, zwakke bruggen, eiland-clusters en ontbrekende verbindingen in je vault
+
+---
+
 ## ↔️ Split-screen modus
 
-Notities naast een tweede tabblad (PDF, afbeeldingen, zoeken) open houden.
+Notities naast een tweede tabblad (PDF, afbeeldingen, zoeken, AI Notebook) open houden.
 
 **Activeren:** klik de split-knop in de toolbar, of typ `:vs` in COMMAND mode.
 
@@ -144,8 +208,19 @@ Notities naast een tweede tabblad (PDF, afbeeldingen, zoeken) open houden.
 | `Ctrl+H` of `Ctrl+K` | Focus → linker paneel (editor) |
 | `Ctrl+L` of `Ctrl+J` | Focus → rechter paneel |
 
-Bij focus op het rechter paneel springt de cursor automatisch in de zoekbalk.  
-Bij focus terug naar links staat de cursor direct in de editor, op de plek waar hij stond.
+### AI-antwoorden plakken in notitie
+
+In split-modus kun je AI-antwoorden uit het Notebook direct in je actieve notitie plakken:
+
+- **Heel bericht:** zweef over een AI-antwoord → klik **↙ plak in notitie**
+- **Selectie:** selecteer tekst in het chatvenster → popup met **↙ plak selectie in notitie**
+
+Geplakte inhoud wordt opgemaakt als callout:
+```markdown
+> [!ai]
+> 🧠 **AI** · llama3.2-vision
+> [antwoordtekst]
+```
 
 ---
 
@@ -154,6 +229,7 @@ Bij focus terug naar links staat de cursor direct in de editor, op de plek waar 
 Canvas-gebaseerde editor — Escape werkt altijd, geen browser-interferentie.
 
 ### Modes
+
 | Mode | Activeer | Beschrijving |
 |------|----------|--------------|
 | INSERT | `i` / `a` | Tekst schrijven |
@@ -162,6 +238,7 @@ Canvas-gebaseerde editor — Escape werkt altijd, geen browser-interferentie.
 | SEARCH | `/` | Zoeken in document |
 
 ### Navigatie (NORMAL)
+
 | Toets | Actie |
 |-------|-------|
 | `h j k l` | Karakter / regel |
@@ -170,6 +247,7 @@ Canvas-gebaseerde editor — Escape werkt altijd, geen browser-interferentie.
 | `gg` / `G` | Begin / einde document |
 
 ### Bewerken (NORMAL)
+
 | Toets | Actie |
 |-------|-------|
 | `i` / `a` | INSERT voor / na cursor |
@@ -180,6 +258,7 @@ Canvas-gebaseerde editor — Escape werkt altijd, geen browser-interferentie.
 | `u` / `Ctrl+r` | Undo / Redo |
 
 ### Ex-commando's (`:`)
+
 | Commando | Actie |
 |----------|-------|
 | `:w` / `:wq` | Opslaan / opslaan+sluiten |
@@ -189,10 +268,13 @@ Canvas-gebaseerde editor — Escape werkt altijd, geen browser-interferentie.
 | `:tag rust async` | Tags vervangen |
 | `:tag+ nieuw` | Tag toevoegen |
 | `:tag- oud` | Tag verwijderen |
+| `:tags` | Toon huidige tags in statusbalk |
+| `:retag` | Sync tags met #hashtags in tekst |
 | `:goyo` | Toggle focusmodus |
 | `:spell` | Spellcheck: nl → en → uit |
 
 ### Snippets (`Ctrl+J` of `Tab` in INSERT)
+
 | Trigger | Expandeert naar |
 |---------|-----------------|
 | `h1` | `# Titel` |
@@ -228,14 +310,12 @@ bash download-dictionaries.sh
 ![[img:foto.png]]        ← ingesloten afbeelding
 ```
 
-Backlinks worden automatisch onderaan elke notitie getoond.  
-Links invoegen via **🔗 koppelen** in de toolbar: zoek op titel of tag → klik → ingevoegd op cursorpositie.
+Backlinks worden automatisch onderaan elke notitie getoond.
+Links invoegen via **🔗 koppelen** in de toolbar.
 
 ---
 
 ## 🌐 Web-import
-
-Importeer webpagina's als Zettelkasten-notitie.
 
 1. Ga naar **Import** → tab **🌐 URL import**
 2. Plak een URL → klik **→ Importeren**
@@ -245,52 +325,19 @@ Importeer webpagina's als Zettelkasten-notitie.
 
 ## 📬 Gmail-import vanuit Thunderbird
 
-Importeer mails rechtstreeks vanuit je lokale Thunderbird Gmail-inbox — geen inloggen vereist, alles lokaal.
-
-### Hoe het werkt
-
 1. Ga naar **Import** → tab **📬 Thunderbird / Gmail**
-2. Klik **📂 Laden**
-3. De server zoekt automatisch je Thunderbird-profiel en toont live voortgang:
-   - welke profielen gevonden worden
-   - welke Gmail INBOX-bestanden gelezen worden
-   - hoeveel mails per inbox gevonden zijn
-4. Alleen de **Gmail INBOX** wordt getoond, **gesorteerd op datum nieuwste bovenaan**
-5. Alleen mails **met een URL in de berichttekst** worden weergegeven — tracking-links worden automatisch gefilterd
-6. Vink interessante mails aan → klik **📥 Importeren**  
-   Elke URL wordt via de web-import flow direct opgeslagen als notitie met tags `import`, `gmail` en de domeinnaam
+2. Klik **📂 Laden** — de server zoekt automatisch je profiel
+3. Vink interessante mails aan → klik **📥 Importeren**
 
-### Thunderbird niet gevonden?
-
-Voer het pad handmatig in, bijv.:
-```
-~/.thunderbird/xxxxxxxx.default-release
-```
-
-Het scanlogboek toont precies welke paden geprobeerd zijn.
+Thunderbird niet gevonden? Voer het pad handmatig in, bijv. `~/.thunderbird/xxxxxxxx.default-release`
 
 ---
 
 ## 🗺️ Mindmap
 
-### Visuele mindmap
-- Radiale boom: root in midden, takken per tag, notities als bladeren
-- Klik node om te hernoemen of verwijderen
-- Sleep om te herpositioneren
-
-### Mermaid-editor
-
-```
-mindmap
-  root((Hoofdonderwerp))
-    Tak A
-      Sub A1
-    Tak B
-```
-
-- VIM-editor met live preview
-- **Tab** = inspringing, **Enter** behoudt indentniveau
-- **⊟ preview** klapt de preview in voor meer editorruimte
+- **Visuele mindmap:** radiale boom, sleep nodes, klik om te hernoemen
+- **Mermaid-editor:** VIM-editor met live preview, Tab voor inspringing
+- **AI-mindmap:** laat het model een mindmap genereren op basis van een notitie
 
 ---
 
@@ -304,6 +351,10 @@ mindmap
 | Phi-3 Medium 14B | `ollama pull phi3:medium` | ~9 GB | Analyse & redeneren |
 | Gemma 2 9B | `ollama pull gemma2` | ~6 GB | Lange context |
 
+Online modellen (API-sleutel vereist): Claude (Anthropic), GPT-4o (OpenAI), Gemini (Google), OpenRouter.
+
+Model kiezen: klik de **modelnaam in de statusbalk** onderin de app.
+
 ---
 
 ## 📦 Projectstructuur
@@ -316,14 +367,16 @@ zettelkasten-python-app/
     ├── index.html
     ├── app.js                 ← React frontend
     ├── modules/               ← SOLID-modules
-    │   ├── NoteEditor.js
+    │   ├── NoteEditor.js      ← editor + SmartTagEditor integratie
     │   ├── NotesTab.js
     │   ├── NoteList.js
-    │   ├── NotePreview.js
+    │   ├── NotePreview.js     ← preview + backlinks + semantisch panel
     │   ├── NotesMeta.js
+    │   ├── TagManager.js      ← SmartTagEditor + TagManagerPanel
+    │   ├── WebImporter.js
+    │   ├── pdfService.js
     │   ├── noteApi.js
     │   ├── noteStore.js
-    │   ├── pdfService.js
     │   └── annotationStore.js
     └── vendor/
         ├── download-vendors.sh
@@ -345,4 +398,10 @@ zettelkasten-python-app/
 - **Privacy:** alle AI draait lokaal via Ollama, geen data naar buiten
 - **iPad:** start met `--host 0.0.0.0`, open het getoonde IP in Safari
 - **Volledig offline:** eenmalig `bash static/vendor/download-vendors.sh`, daarna `python3 server.py --offline`
-- **Gmail snel importeren:** stuur jezelf interessante URLs → Thunderbird → Import-tab → Laden → aanvinken → Importeren
+- **AI-tags bij nieuw:** schrijf de inhoud, klik dan **✦ AI-tags** — direct relevante tags voorgesteld
+- **Alle tags in één klik:** na AI-suggesties → **＋ voeg alle nieuwe toe**
+- **Kennishiaten vinden:** Notebook → 🔍 hiaten → analyseert je volledige kennisbasis
+- **Semantische graaf:** Graaf-tab → ≈ semantisch → ontdek verborgen verbanden
+- **GraphRAG:** Notebook → 🕸 GraphRAG → stel vragen met graafcontext
+- **Split + plakken:** in split-modus zweef over AI-antwoord → ↙ plak in notitie
+- **Tags filteren:** klik een tag-chip in de TagFilterBar → actief filter + × wis knop

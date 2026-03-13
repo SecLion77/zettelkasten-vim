@@ -353,6 +353,25 @@ class VaultManager:
         cfg = self.get_config(); cfg.update(data)
         self._write_json(self.config_file, cfg)
 
+    # API-sleutels — opgeslagen in config.json (hebben voorrang boven env-variabelen)
+    def get_api_key(self, provider: str) -> str:
+        """Geeft API-sleutel voor provider (anthropic/openai/google/openrouter).
+        Volgorde: config.json → omgevingsvariabele."""
+        env_map = {
+            "anthropic":   "ANTHROPIC_API_KEY",
+            "openai":      "OPENAI_API_KEY",
+            "google":      "GOOGLE_API_KEY",
+            "openrouter":  "OPENROUTER_API_KEY",
+        }
+        cfg_key = f"api_key_{provider}"
+        val = self.get_config().get(cfg_key, "").strip()
+        if val:
+            return val
+        return os.environ.get(env_map.get(provider, ""), "")
+
+    def set_api_key(self, provider: str, key: str):
+        self.save_config({f"api_key_{provider}": key.strip()})
+
     # Externe PDF-mappen (opgeslagen in config)
     def get_ext_pdf_dirs(self):
         return self.get_config().get("ext_pdf_dirs", [])
@@ -1200,8 +1219,14 @@ class ZKHandler(BaseHTTPRequestHandler):
         if p=="/api/images":           return self._send(200,self.vault.list_images())
         if p=="/api/llm/models":  return self._llm_models()
         if p=="/api/config":      return self._send(200,{"vault_path":self.vault.path_str,"config":self.vault.get_config()})
+        if p=="/api/api-keys":
+            # Geeft terug welke providers geconfigureerd zijn + gemaskeerde waarde voor weergave
+            result = {}
+            for pr in ("anthropic","openai","google","openrouter"):
+                key = self.vault.get_api_key(pr)
+                result[pr] = {"set": bool(key), "preview": (key[:8]+"…"+key[-4:]) if len(key)>12 else ("●●●●" if key else "")}
+            return self._send(200, result)
         if p=="/api/ext-pdfs":     return self._send(200,{"dirs":self.vault.get_ext_pdf_dirs(),"files":self.vault.scan_ext_pdfs()})
-        if p.startswith("/api/mail/inbox-stream"): return self._mail_inbox_stream()
         if p.startswith("/api/browse"):
             from urllib.parse import parse_qs, urlparse as _up
             qs = parse_qs(_up(self.path).query)
@@ -1306,17 +1331,26 @@ class ZKHandler(BaseHTTPRequestHandler):
                         return self._send(200,self.vault.save_image(fname,body.rstrip(b"\r\n--")))
             return self._send(400,{"error":"Multipart vereist"})
         if p=="/api/llm/improve-text":   return self._llm_improve_text()
+        if p=="/api/llm/suggest-tags":   return self._llm_suggest_tags()
         if p=="/api/llm/chat":           return self._llm_chat()
+        if p=="/api/llm/similar":        return self._llm_similar()
+        if p=="/api/llm/graphrag":       return self._llm_graphrag()
         if p=="/api/llm/summarize-pdf":  return self._llm_summarize_pdf()
         if p=="/api/llm/describe-image": return self._llm_describe_image()
         if p=="/api/llm/mindmap":        return self._llm_mindmap()
         if p=="/api/import-url":         return self._import_url()
-        if p=="/api/mail/inbox":         return self._mail_inbox()
-        if p=="/api/mail/import-batch":  return self._mail_import_batch()
         if p=="/api/ext-pdfs":
             dirs = self._body().get("dirs", [])
             self.vault.set_ext_pdf_dirs(dirs)
             return self._send(200, {"ok": True, "dirs": dirs})
+        if p=="/api/api-keys":
+            body = self._body()
+            for provider in ("anthropic","openai","google","openrouter"):
+                if provider in body:
+                    self.vault.set_api_key(provider, body[provider])
+            # Geef terug welke providers een sleutel hebben (zonder de waarde zelf)
+            status = {pr: bool(self.vault.get_api_key(pr)) for pr in ("anthropic","openai","google","openrouter")}
+            return self._send(200, {"ok": True, "configured": status})
         if p=="/api/vault":
             body=self._body()
             np=body.get("path","").strip()
@@ -1463,52 +1497,622 @@ class ZKHandler(BaseHTTPRequestHandler):
         except Exception as e:
             return self._send(500, {"error": str(e)})
 
+    def _llm_suggest_tags(self):
+        """Stel tags voor bij een notitie. Geeft gewone JSON terug (geen SSE).
+        Ondersteunt Ollama, Anthropic, OpenAI, Google en OpenRouter."""
+        body        = self._body()
+        content     = body.get("content", "").strip()
+        model       = body.get("model", "")
+        current     = body.get("current_tags", [])
+        all_tags    = body.get("all_tags", [])
+
+        if not content or not model:
+            return self._send(400, {"error": "content en model zijn vereist"})
+
+        existing = (", ".join(all_tags[:60])) if all_tags else ""
+        prompt = (
+            "Stel maximaal 6 tags voor bij deze Zettelkasten-notitie.\n"
+            "Regels: lowercase, enkelvoud, geen spaties (gebruik underscore), geen #-teken.\n"
+            + (f"Hergebruik bij voorkeur bestaande tags: {existing}\n" if existing else "")
+            + "Antwoord ALLEEN met een JSON-array, bijv: [\"concept\",\"ai\",\"methode\"]\n\n"
+            f"Tekst:\n{content[:1500]}"
+        )
+
+        try:
+            text = ""
+
+            if model.startswith("claude"):
+                # Anthropic — niet-streaming
+                api_key = self.vault.get_api_key("anthropic")
+                if not api_key:
+                    return self._send(401, {"error": "Anthropic API-sleutel niet ingesteld"})
+                payload = json.dumps({
+                    "model": model, "max_tokens": 200,
+                    "messages": [{"role": "user", "content": prompt}]
+                }).encode()
+                req = urllib.request.Request(
+                    "https://api.anthropic.com/v1/messages",
+                    data=payload,
+                    headers={"Content-Type": "application/json",
+                             "x-api-key": api_key,
+                             "anthropic-version": "2023-06-01"},
+                    method="POST"
+                )
+                with urllib.request.urlopen(req, timeout=30) as r:
+                    d = json.loads(r.read())
+                text = d.get("content", [{}])[0].get("text", "")
+
+            elif model.startswith("gemini"):
+                api_key = self.vault.get_api_key("google")
+                if not api_key:
+                    return self._send(401, {"error": "Google API-sleutel niet ingesteld"})
+                gem_msgs = [
+                    {"role": "user",  "parts": [{"text": prompt}]},
+                ]
+                payload = json.dumps({
+                    "contents": gem_msgs,
+                    "generationConfig": {"maxOutputTokens": 200, "temperature": 0.2}
+                }).encode()
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+                req = urllib.request.Request(url, data=payload,
+                    headers={"Content-Type": "application/json"}, method="POST")
+                with urllib.request.urlopen(req, timeout=30) as r:
+                    d = json.loads(r.read())
+                text = d.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+
+            elif model.startswith("gpt") or model.startswith("o1") or model.startswith("o3") or model.startswith("o4"):
+                api_key = self.vault.get_api_key("openai")
+                if not api_key:
+                    return self._send(401, {"error": "OpenAI API-sleutel niet ingesteld"})
+                payload = json.dumps({
+                    "model": model, "max_tokens": 200,
+                    "messages": [{"role": "user", "content": prompt}]
+                }).encode()
+                req = urllib.request.Request(
+                    "https://api.openai.com/v1/chat/completions",
+                    data=payload,
+                    headers={"Content-Type": "application/json",
+                             "Authorization": "Bearer " + api_key},
+                    method="POST"
+                )
+                with urllib.request.urlopen(req, timeout=30) as r:
+                    d = json.loads(r.read())
+                text = d.get("choices", [{}])[0].get("message", {}).get("content", "")
+
+            elif "/" in model:
+                api_key = self.vault.get_api_key("openrouter")
+                if not api_key:
+                    return self._send(401, {"error": "OpenRouter API-sleutel niet ingesteld"})
+                payload = json.dumps({
+                    "model": model, "max_tokens": 200,
+                    "messages": [{"role": "user", "content": prompt}]
+                }).encode()
+                req = urllib.request.Request(
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    data=payload,
+                    headers={"Content-Type": "application/json",
+                             "Authorization": "Bearer " + api_key,
+                             "HTTP-Referer": "http://localhost:8899",
+                             "X-Title": "Zettelkasten"},
+                    method="POST"
+                )
+                with urllib.request.urlopen(req, timeout=30) as r:
+                    d = json.loads(r.read())
+                text = d.get("choices", [{}])[0].get("message", {}).get("content", "")
+
+            else:
+                # Ollama — niet-streaming
+                payload = json.dumps({
+                    "model": self._best_local_model(model),
+                    "messages": [{"role": "user", "content": prompt}],
+                    "stream": False,
+                    "options": {"temperature": 0.2, "num_predict": 200}
+                }).encode()
+                req = urllib.request.Request(
+                    self._ollama() + "/api/chat",
+                    data=payload,
+                    headers={"Content-Type": "application/json"},
+                    method="POST"
+                )
+                with urllib.request.urlopen(req, timeout=45) as r:
+                    d = json.loads(r.read())
+                text = (d.get("message", {}).get("content", "") or "").strip()
+
+            # Parseer JSON-array uit de response
+            text = text.replace("```json", "").replace("```", "").strip()
+            match = __import__("re").search(r"\[[\s\S]*?\]", text)
+            if not match:
+                return self._send(200, {"tags": [], "raw": text})
+            tags = json.loads(match.group())
+            tags = [
+                str(t).strip().lower().replace(" ", "_").lstrip("#")
+                for t in tags if str(t).strip()
+            ]
+            tags = [t for t in tags if t and t not in current][:8]
+            return self._send(200, {"tags": tags})
+
+        except urllib.error.HTTPError as e:
+            try:
+                detail = json.loads(e.read().decode()).get("error", {})
+                msg = detail.get("message", str(e)) if isinstance(detail, dict) else str(detail)
+            except: msg = str(e)
+            return self._send(e.code, {"error": msg})
+        except Exception as e:
+            return self._send(500, {"error": str(e)})
+
+    def _build_context(self, body):
+        """Bouw kenniscontext op vanuit notities, PDFs en afbeeldingen.
+        Bewaakt een totaal-budget van ~60.000 tekens om 400-fouten te voorkomen."""
+        ctx_notes  = body.get("context_notes", [])
+        ctx_pdfs   = body.get("context_pdfs", [])
+        ctx_imgs   = body.get("context_images", [])
+        ctx_ext    = body.get("context_ext_pdfs", [])
+
+        BUDGET = 60_000   # max tekens over alle context-blokken
+        used   = 0
+        parts  = []
+
+        def add(text):
+            nonlocal used
+            remaining = BUDGET - used
+            if remaining <= 0:
+                return False
+            chunk = text[:remaining]
+            parts.append(chunk)
+            used += len(chunk)
+            return used < BUDGET
+
+        if ctx_notes:
+            notes = [x for x in self.vault.load_notes() if x["id"] in ctx_notes]
+            # Sorteer op relevantie: notities met meer content eerst
+            notes.sort(key=lambda n: len(n.get("content","") or ""), reverse=True)
+            for n in notes[:20]:   # max 20 notities, budget bepaalt hoeveel er echt in passen
+                snippet = (n.get("content") or "")[:3000]
+                if not add(f"## Notitie: {n['title']}\n{snippet}"):
+                    break
+
+        if ctx_pdfs and used < BUDGET:
+            annots = self.vault.load_annotations()
+            for pn in ctx_pdfs[:4]:
+                pa = [a for a in annots if a.get("file") == pn]
+                if pa:
+                    lines = ['- "'+a["text"]+'"'+(("\n  Noot: "+a["note"]) if a.get("note") else "") for a in pa[:20]]
+                    if not add(f"## PDF annotaties: {pn}\n"+"\n".join(lines)):
+                        break
+                txt = self.vault.extract_pdf_text(pn, 4000)
+                if txt.strip():
+                    if not add(f"## PDF tekst: {pn}\n{txt}"):
+                        break
+
+        if ctx_ext and used < BUDGET:
+            for ep in ctx_ext[:4]:
+                txt  = self.vault.extract_pdf_text_from_path(ep, 4000)
+                name = Path(ep).name
+                if not add(f"## Extern PDF: {name}\n"+(txt.strip() or "(geen tekst)")):
+                    break
+
+        if ctx_imgs:
+            img_lines = [f"- {n}" for n in ctx_imgs[:6]]
+            if img_lines:
+                add("## Afbeeldingen:\n"+"\n".join(img_lines))
+
+        return parts
+
     def _llm_chat(self):
         body=self._body()
-        model=body.get("model","llama3.2-vision")
+        raw_model=body.get("model","")
         messages=body.get("messages",[])
-        ctx_notes=body.get("context_notes",[])
-        ctx_pdfs=body.get("context_pdfs",[])
-        ctx_imgs=body.get("context_images",[])
 
-        parts=[]
-        if ctx_notes:
-            for n in [x for x in self.vault.load_notes() if x["id"] in ctx_notes][:8]:
-                parts.append("## Notitie: "+n["title"]+"\n"+n["content"][:3000])
-        if ctx_pdfs:
-            annots=self.vault.load_annotations()
-            for pn in ctx_pdfs[:4]:
-                pa=[a for a in annots if a.get("file")==pn]
-                if pa:
-                    lines=['- "'+a["text"]+'"'+("\n  Noot: "+a["note"] if a.get("note") else "") for a in pa[:30]]
-                    parts.append("## PDF annotaties: "+pn+"\n"+"\n".join(lines))
-                txt=self.vault.extract_pdf_text(pn,6000)
-                if txt.strip(): parts.append("## PDF tekst: "+pn+"\n"+txt)
-        ctx_ext=body.get("context_ext_pdfs",[])
-        if ctx_ext:
-            for ep in ctx_ext[:6]:
-                txt=self.vault.extract_pdf_text_from_path(ep,6000)
-                name=Path(ep).name
-                if txt.strip(): parts.append("## Extern PDF: "+name+"\n"+txt)
-                else: parts.append("## Extern PDF: "+name+"\n(geen tekst extraheerbaar)")
-        if ctx_imgs:
-            img_lines=[f"- {n}" for n in ctx_imgs[:6]]
-            if img_lines: parts.append("## Afbeeldingen:\n"+"\n".join(img_lines))
-
+        parts=self._build_context(body)
         system=("Je bent een behulpzame kennisassistent voor een Zettelkasten. "
                 "Antwoord in de taal van de gebruiker. Wees analytisch en precies.")
         if parts: system+="\n\n# Kenniscontext:\n\n"+"\n\n---\n\n".join(parts)
 
+        self.send_response(200)
+        self.send_header("Content-Type","text/event-stream")
+        self.send_header("Cache-Control","no-cache")
+        self.send_header("Access-Control-Allow-Origin","*")
+        self.end_headers()
+
+        if raw_model.startswith("claude"):
+            self._stream_anthropic(raw_model, system, messages)
+        elif raw_model.startswith("gemini"):
+            self._stream_google(raw_model, system, messages)
+        elif raw_model.startswith("gpt") or raw_model.startswith("o1") or raw_model.startswith("o3") or raw_model.startswith("o4"):
+            self._stream_openai(raw_model, system, messages)
+        elif "/" in raw_model:  # OpenRouter formaat: "org/model"
+            self._stream_openrouter(raw_model, system, messages)
+        else:
+            self._stream_ollama(self._best_local_model(raw_model), system, messages)
+
+    # ── Semantische similariteit (TF-IDF cosine, geen externe deps) ─────────────
+    def _tfidf_vectors(self, docs):
+        """Berekent TF-IDF vectoren voor een lijst teksten. Geeft (vocab, matrix) terug."""
+        import math, re
+        stopwords = {"de","het","een","van","in","is","op","en","te","dat","die","zijn","met",
+                     "voor","aan","er","maar","om","dan","als","ook","dit","nog","wel","ze",
+                     "the","a","an","of","to","in","is","it","and","for","on","with","that"}
+        def tokenize(t):
+            return [w for w in re.findall(r"[a-z\u00c0-\u024f]{3,}", t.lower()) if w not in stopwords]
+        tokenized = [tokenize(d) for d in docs]
+        vocab = {w for toks in tokenized for w in toks}
+        vocab = sorted(vocab)
+        vidx  = {w:i for i,w in enumerate(vocab)}
+        N     = len(docs)
+        # IDF
+        df = {}
+        for toks in tokenized:
+            for w in set(toks):
+                df[w] = df.get(w,0)+1
+        idf = {w: math.log((N+1)/(df.get(w,0)+1))+1 for w in vocab}
+        # TF-IDF matrix (sparse as list of dicts)
+        vecs = []
+        for toks in tokenized:
+            tf = {}
+            for w in toks: tf[w] = tf.get(w,0)+1
+            n = len(toks) or 1
+            vec = {vidx[w]: (tf[w]/n)*idf[w] for w in tf if w in vidx}
+            norm = math.sqrt(sum(v*v for v in vec.values())) or 1
+            vecs.append({k: v/norm for k,v in vec.items()})
+        return vecs
+
+    def _cosine(self, a, b):
+        return sum(a.get(k,0)*v for k,v in b.items())
+
+    def _llm_similar(self):
+        """Geeft top-N semantisch vergelijkbare notities terug via TF-IDF cosine."""
+        body   = self._body()
+        note_id= body.get("note_id","")
+        top_n  = int(body.get("top_n", 6))
+        notes  = self.vault.load_notes()
+        if len(notes) < 2:
+            return self._send(200, {"similar": []})
+        texts  = [n.get("title","")+" "+n.get("content","") for n in notes]
+        vecs   = self._tfidf_vectors(texts)
+        idx    = next((i for i,n in enumerate(notes) if n["id"]==note_id), None)
+        if idx is None:
+            return self._send(200, {"similar": []})
+        qvec   = vecs[idx]
+        scores = [(self._cosine(qvec, vecs[i]), notes[i]) for i in range(len(notes)) if i!=idx]
+        scores.sort(key=lambda x: -x[0])
+        # Filter op minimale score (> 0.05) en geef titels + scores terug
+        result = [{"id":n["id"],"title":n["title"],"score":round(s,3)}
+                  for s,n in scores[:top_n] if s > 0.05]
+        return self._send(200, {"similar": result})
+
+    # ── GraphRAG: graaf-bewuste vragen over de kennisbasis ───────────────────────
+    def _llm_graphrag(self):
+        """GraphRAG: beantwoordt een vraag met graaf-context (notitie + buren + communities).
+        Gebruikt het geselecteerde model (Anthropic/Google/OpenAI/OpenRouter/Ollama)."""
+        import re as _re, math
+        body     = self._body()
+        question = body.get("question","")
+        model    = body.get("model","")
+        top_n    = int(body.get("top_n", 5))
+        notes    = self.vault.load_notes()
+        if not notes or not question:
+            return self._send(400, {"error":"Geen vraag of notities"})
+
+        # 1. Vind top-N relevante notities via TF-IDF
+        texts  = [n.get("title","")+" "+n.get("content","") for n in notes]
+        vecs   = self._tfidf_vectors([question] + texts)
+        qvec   = vecs[0]
+        scores = [(self._cosine(qvec, vecs[i+1]), notes[i]) for i in range(len(notes))]
+        scores.sort(key=lambda x: -x[0])
+        top_notes = [n for _,n in scores[:top_n] if _ > 0.02]
+        if not top_notes:
+            top_notes = [n for _,n in scores[:3]]  # altijd minimaal 3
+
+        # 2. Bouw graaf-context: voor elke top-notitie, voeg ook directe buren toe
+        import re as re2
+        def extract_links(content):
+            return [m.group(1) for m in re2.finditer(r'\[\[([^\]]+)\]\]', content or "")]
+
+        note_map = {n["id"]: n for n in notes}
+        context_ids = set(n["id"] for n in top_notes)
+        for n in top_notes:
+            for lid in extract_links(n.get("content","")):
+                if lid in note_map: context_ids.add(lid)
+            # ook backlinks
+            for other in notes:
+                if n["id"] in extract_links(other.get("content","")):
+                    context_ids.add(other["id"])
+
+        context_notes = [note_map[nid] for nid in context_ids if nid in note_map]
+
+        # 3. Bouw community-samenvatting via label propagation (lightweight)
+        def community_label(note_ids, note_map):
+            labels = {nid: nid for nid in note_ids}
+            for _ in range(4):
+                for nid in note_ids:
+                    n = note_map.get(nid)
+                    if not n: continue
+                    neighbors = [l for l in extract_links(n.get("content","")) if l in note_ids]
+                    backs = [other for other in note_ids
+                             if nid in extract_links((note_map.get(other) or {}).get("content",""))]
+                    all_nb = neighbors + backs
+                    if not all_nb: continue
+                    votes = {}
+                    for nb in all_nb:
+                        lbl = labels[nb]
+                        votes[lbl] = votes.get(lbl,0)+1
+                    labels[nid] = max(votes, key=votes.get)
+            return labels
+
+        all_ids = [n["id"] for n in notes]
+        labels  = community_label(all_ids, note_map)
+        # Groepeer context_notes per community
+        comm_groups = {}
+        for nid in context_ids:
+            lbl = labels.get(nid, nid)
+            comm_groups.setdefault(lbl, []).append(nid)
+
+        # 4. Stel systeem-prompt samen met graaf-context
+        parts = []
+        parts.append(f"## Vraag van de gebruiker\n{question}")
+        parts.append(f"## Graaf-context ({len(context_notes)} notities, {len(comm_groups)} communities)")
+
+        for lbl, members in sorted(comm_groups.items(), key=lambda x:-len(x[1]))[:6]:
+            hub = sorted(members, key=lambda nid: sum(
+                1 for x in notes if nid in extract_links(x.get("content",""))
+            ), reverse=True)[0]
+            hub_note = note_map.get(hub)
+            member_titles = [note_map[nid]["title"] for nid in members if nid in note_map]
+            parts.append(f"### Community (hub: {hub_note['title'] if hub_note else hub})\n"
+                        f"Leden: {', '.join(member_titles[:8])}")
+
+        parts.append("## Relevante notities (volledig)")
+        for n in context_notes[:8]:
+            links_out = extract_links(n.get("content",""))
+            link_titles = [note_map[l]["title"] for l in links_out if l in note_map]
+            backlinks   = [x["title"] for x in notes if n["id"] in extract_links(x.get("content",""))]
+            parts.append(
+                f"### {n['title']}\n"
+                f"Tags: {', '.join(n.get('tags',[]) or ['–'])}\n"
+                f"Links naar: {', '.join(link_titles) or '–'}\n"
+                f"Backlinks: {', '.join(backlinks[:5]) or '–'}\n\n"
+                f"{(n.get('content') or '')[:2000]}"
+            )
+
+        system_intro = (
+            "Je bent een geavanceerde kennisassistent die werkt met een Zettelkasten knowledge graph. "
+            "Je hebt toegang tot de structuur van het kennisnetwerk: welke notities verwant zijn, "
+            "welke communities er bestaan, en hoe ideeën met elkaar verbonden zijn. "
+            "Gebruik deze graaf-structuur actief in je antwoord: verwijs naar verbindingen, "
+            "wijs op clusters van ideeën, en signaleer eventuele kennishiaten. "
+            "Antwoord in de taal van de gebruiker. Wees analytisch en concreet."
+        )
+        # Budgetbewaking: max 50.000 tekens voor de context-delen
+        BUDGET = 50_000
+        context_text = "\n\n---\n\n".join(parts)
+        if len(context_text) > BUDGET:
+            context_text = context_text[:BUDGET] + "\n\n[...context ingekort om limiet te respecteren]"
+        system = system_intro + "\n\n" + context_text
+        messages = [{"role":"user","content":question}]
+
+        self.send_response(200)
+        self.send_header("Content-Type","text/event-stream")
+        self.send_header("Cache-Control","no-cache")
+        self.send_header("Access-Control-Allow-Origin","*")
+        self.end_headers()
+
+        if model.startswith("claude"):
+            self._stream_anthropic(model, system, messages)
+        elif model.startswith("gemini"):
+            self._stream_google(model, system, messages)
+        elif model.startswith("gpt") or model.startswith("o1") or model.startswith("o3") or model.startswith("o4"):
+            self._stream_openai(model, system, messages)
+        elif "/" in model:
+            self._stream_openrouter(model, system, messages)
+        else:
+            self._stream_ollama(self._best_local_model(model), system, messages)
+
+    def _stream_anthropic(self, model, system, messages):
+        """Streaming via Anthropic API. Sleutel via instellingen of ANTHROPIC_API_KEY env."""
+        api_key = self.vault.get_api_key("anthropic")
+        if not api_key:
+            try: self.wfile.write(("data: "+json.dumps({"error":"Anthropic API-sleutel niet ingesteld — voeg toe via ⚙ Instellingen → API-sleutels, of: export ANTHROPIC_API_KEY=sk-ant-..."})+"\n\n").encode()); self.wfile.flush()
+            except: pass
+            return
+        # Alleen user/assistant roles, geen lege content, alternerende volgorde afdwingen
+        ant_msgs = []
+        for m in messages:
+            role = m.get("role","")
+            content = (m.get("content") or "").strip()
+            if role not in ("user","assistant") or not content:
+                continue
+            # Anthropic vereist alternerende user/assistant; voorkom dubbele rollen
+            if ant_msgs and ant_msgs[-1]["role"] == role:
+                ant_msgs[-1]["content"] += "\n" + content
+            else:
+                ant_msgs.append({"role": role, "content": content})
+        # Moet eindigen op user; voeg placeholder toe als leeg of eindigt op assistant
+        if not ant_msgs or ant_msgs[-1]["role"] != "user":
+            ant_msgs.append({"role": "user", "content": "(Vervolg)"})
+
+        payload={"model":model,"max_tokens":4096,"system":system,"messages":ant_msgs,"stream":True}
+        try:
+            req=urllib.request.Request("https://api.anthropic.com/v1/messages",
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type":"application/json","x-api-key":api_key,"anthropic-version":"2023-06-01"},
+                method="POST")
+            with urllib.request.urlopen(req,timeout=120) as resp:
+                for line in resp:
+                    line=line.strip()
+                    if not line: continue
+                    try:
+                        ls=line.decode("utf-8") if isinstance(line,bytes) else line
+                        if ls.startswith("data: "):
+                            ev=json.loads(ls[6:])
+                            t=ev.get("type","")
+                            if t=="content_block_delta":
+                                delta=ev.get("delta",{}).get("text","")
+                                self.wfile.write(("data: "+json.dumps({"delta":delta,"done":False})+"\n\n").encode("utf-8"))
+                                self.wfile.flush()
+                            elif t=="message_stop":
+                                self.wfile.write(("data: "+json.dumps({"delta":"","done":True})+"\n\n").encode("utf-8"))
+                                self.wfile.flush(); break
+                    except: pass
+        except urllib.error.HTTPError as e:
+            try:
+                body = e.read().decode("utf-8","replace")
+                detail = json.loads(body).get("error",{}).get("message", body[:300])
+            except: detail = str(e)
+            try: self.wfile.write(("data: "+json.dumps({"error":f"Anthropic {e.code}: {detail}"})+"\n\n").encode()); self.wfile.flush()
+            except: pass
+        except Exception as e:
+            try: self.wfile.write(("data: "+json.dumps({"error":"Anthropic API: "+str(e)})+"\n\n").encode()); self.wfile.flush()
+            except: pass
+
+    def _stream_google(self, model, system, messages):
+        """Streaming via Google Gemini API. Sleutel via instellingen of GOOGLE_API_KEY env."""
+        api_key = self.vault.get_api_key("google")
+        if not api_key:
+            try: self.wfile.write(("data: "+json.dumps({"error":"Google API-sleutel niet ingesteld — voeg toe via ⚙ Instellingen → API-sleutels, of: export GOOGLE_API_KEY=..."})+"\n\n").encode()); self.wfile.flush()
+            except: pass
+            return
+        # Bouw Gemini messages op (system als eerste user-turn)
+        gem_msgs = [{"role":"user","parts":[{"text":"Systeeminstructie: "+system}]},
+                    {"role":"model","parts":[{"text":"Begrepen."}]}]
+        for m in messages:
+            role = "user" if m["role"]=="user" else "model"
+            gem_msgs.append({"role":role,"parts":[{"text":m["content"]}]})
+        payload = {"contents": gem_msgs,
+                   "generationConfig":{"maxOutputTokens":4096}}
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:streamGenerateContent?alt=sse&key={api_key}"
+        try:
+            req = urllib.request.Request(url,
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type":"application/json"}, method="POST")
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                for line in resp:
+                    line = line.strip()
+                    if not line: continue
+                    try:
+                        ls = line.decode("utf-8") if isinstance(line,bytes) else line
+                        if ls.startswith("data: "):
+                            ev = json.loads(ls[6:])
+                            delta = ""
+                            for cand in ev.get("candidates",[]):
+                                for part in cand.get("content",{}).get("parts",[]):
+                                    delta += part.get("text","")
+                            done = ev.get("candidates",[{}])[-1].get("finishReason","") != ""
+                            self.wfile.write(("data: "+json.dumps({"delta":delta,"done":done})+"\n\n").encode("utf-8"))
+                            self.wfile.flush()
+                    except: pass
+                self.wfile.write(("data: "+json.dumps({"delta":"","done":True})+"\n\n").encode("utf-8"))
+                self.wfile.flush()
+        except urllib.error.HTTPError as e:
+            try:
+                body = e.read().decode("utf-8","replace")
+                detail = json.loads(body).get("error",{}).get("message", body[:300])
+            except: detail = str(e)
+            try: self.wfile.write(("data: "+json.dumps({"error":f"Google API {e.code}: {detail}"})+"\n\n").encode()); self.wfile.flush()
+            except: pass
+        except Exception as e:
+            try: self.wfile.write(("data: "+json.dumps({"error":"Google API: "+str(e)})+"\n\n").encode()); self.wfile.flush()
+            except: pass
+
+    def _stream_openai(self, model, system, messages):
+        """Streaming via OpenAI API. Sleutel via instellingen of OPENAI_API_KEY env."""
+        api_key = self.vault.get_api_key("openai")
+        if not api_key:
+            try: self.wfile.write(("data: "+json.dumps({"error":"OpenAI API-sleutel niet ingesteld — voeg toe via ⚙ Instellingen → API-sleutels, of: export OPENAI_API_KEY=sk-..."})+"\n\n").encode()); self.wfile.flush()
+            except: pass
+            return
+        oai_msgs = [{"role":"system","content":system}] + \
+                   [{"role":m["role"],"content":(m.get("content") or "").strip()}
+                    for m in messages if m.get("role") in ("user","assistant") and (m.get("content") or "").strip()]
+        if len(oai_msgs) < 2:
+            oai_msgs.append({"role":"user","content":"(Vervolg)"})
+        payload = {"model":model,"messages":oai_msgs,"stream":True,"max_tokens":4096}
+        try:
+            req = urllib.request.Request("https://api.openai.com/v1/chat/completions",
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type":"application/json","Authorization":"Bearer "+api_key},
+                method="POST")
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                for line in resp:
+                    line = line.strip()
+                    if not line: continue
+                    try:
+                        ls = line.decode("utf-8") if isinstance(line,bytes) else line
+                        if ls.startswith("data: "):
+                            data_s = ls[6:]
+                            if data_s == "[DONE]":
+                                self.wfile.write(("data: "+json.dumps({"delta":"","done":True})+"\n\n").encode("utf-8"))
+                                self.wfile.flush(); break
+                            ev = json.loads(data_s)
+                            delta = ev.get("choices",[{}])[0].get("delta",{}).get("content","") or ""
+                            self.wfile.write(("data: "+json.dumps({"delta":delta,"done":False})+"\n\n").encode("utf-8"))
+                            self.wfile.flush()
+                    except: pass
+        except urllib.error.HTTPError as e:
+            try:
+                body = e.read().decode("utf-8","replace")
+                detail = json.loads(body).get("error",{}).get("message", body[:300])
+            except: detail = str(e)
+            try: self.wfile.write(("data: "+json.dumps({"error":f"OpenAI {e.code}: {detail}"})+"\n\n").encode()); self.wfile.flush()
+            except: pass
+        except Exception as e:
+            try: self.wfile.write(("data: "+json.dumps({"error":"OpenAI API: "+str(e)})+"\n\n").encode()); self.wfile.flush()
+            except: pass
+
+    def _stream_openrouter(self, model, system, messages):
+        """Streaming via OpenRouter. Sleutel via instellingen of OPENROUTER_API_KEY env."""
+        api_key = self.vault.get_api_key("openrouter")
+        if not api_key:
+            try: self.wfile.write(("data: "+json.dumps({"error":"OpenRouter API-sleutel niet ingesteld — voeg toe via ⚙ Instellingen → API-sleutels, of: export OPENROUTER_API_KEY=sk-or-..."})+"\n\n").encode()); self.wfile.flush()
+            except: pass
+            return
+        or_msgs = [{"role":"system","content":system}] + \
+                  [{"role":m["role"],"content":(m.get("content") or "").strip()}
+                   for m in messages if m.get("role") in ("user","assistant") and (m.get("content") or "").strip()]
+        if len(or_msgs) < 2:
+            or_msgs.append({"role":"user","content":"(Vervolg)"})
+        payload = {"model":model,"messages":or_msgs,"stream":True,"max_tokens":4096}
+        try:
+            req = urllib.request.Request("https://openrouter.ai/api/v1/chat/completions",
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type":"application/json",
+                         "Authorization":"Bearer "+api_key,
+                         "HTTP-Referer":"http://localhost:8899",
+                         "X-Title":"Zettelkasten"},
+                method="POST")
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                for line in resp:
+                    line = line.strip()
+                    if not line: continue
+                    try:
+                        ls = line.decode("utf-8") if isinstance(line,bytes) else line
+                        if ls.startswith("data: "):
+                            data_s = ls[6:]
+                            if data_s == "[DONE]":
+                                self.wfile.write(("data: "+json.dumps({"delta":"","done":True})+"\n\n").encode("utf-8"))
+                                self.wfile.flush(); break
+                            ev = json.loads(data_s)
+                            delta = ev.get("choices",[{}])[0].get("delta",{}).get("content","") or ""
+                            self.wfile.write(("data: "+json.dumps({"delta":delta,"done":False})+"\n\n").encode("utf-8"))
+                            self.wfile.flush()
+                    except: pass
+        except urllib.error.HTTPError as e:
+            try:
+                body = e.read().decode("utf-8","replace")
+                detail = json.loads(body).get("error",{}).get("message", body[:300])
+            except: detail = str(e)
+            try: self.wfile.write(("data: "+json.dumps({"error":f"OpenRouter {e.code}: {detail}"})+"\n\n").encode()); self.wfile.flush()
+            except: pass
+        except Exception as e:
+            try: self.wfile.write(("data: "+json.dumps({"error":"OpenRouter: "+str(e)})+"\n\n").encode()); self.wfile.flush()
+            except: pass
+
+    def _stream_ollama(self, model, system, messages):
+        """Streaming via lokale Ollama."""
         payload={"model":model,"messages":[{"role":"system","content":system}]+messages,"stream":True}
         try:
             req=urllib.request.Request(self._ollama()+"/api/chat",
                 data=json.dumps(payload).encode("utf-8"),
                 headers={"Content-Type":"application/json"},method="POST")
-            self.send_response(200)
-            self.send_header("Content-Type","text/event-stream")
-            self.send_header("Cache-Control","no-cache")
-            self.send_header("Access-Control-Allow-Origin","*")
-            self.end_headers()
             with urllib.request.urlopen(req,timeout=180) as resp:
                 for line in resp:
                     line=line.strip()
@@ -1528,27 +2132,81 @@ class ZKHandler(BaseHTTPRequestHandler):
             try: self.wfile.write(("data: "+json.dumps({"error":str(e)})+"\n\n").encode()); self.wfile.flush()
             except: pass
 
+    def _best_local_model(self, preferred=None):
+        """Geeft het beste beschikbare Ollama-model terug.
+        Negeert cloud-modellen (claude, gpt, gemini).
+        Probeert preferred eerst, dan bekende goede modellen, dan eerste beschikbare."""
+        CLOUD_PREFIXES = ("claude","gpt","gemini","mistral-api","openai")
+        try:
+            d = self._ollama_post("/api/tags", {}, 10)
+            available = [m["name"].split(":")[0] for m in d.get("models", [])]
+        except Exception:
+            available = []
+
+        # Goede volgorde van voorkeur voor tekst-taken
+        PREFERRED_ORDER = [
+            "llama3.2","llama3","llama3.1","llama2",
+            "mistral","mixtral","phi3","phi","gemma2","gemma",
+            "qwen2","qwen","deepseek","solar","vicuna","orca",
+            "llama3.2-vision","llava",
+        ]
+
+        # Normaliseer preferred
+        if preferred:
+            pnorm = preferred.split(":")[0].lower()
+            if not any(pnorm.startswith(c) for c in CLOUD_PREFIXES):
+                # Preferred is een lokaal model — gebruik het direct
+                return preferred
+
+        # Zoek eerste match in voorkeursvolgorde
+        avail_lower = [a.lower() for a in available]
+        for want in PREFERRED_ORDER:
+            for i, a in enumerate(avail_lower):
+                if a == want or a.startswith(want):
+                    return available[i]
+
+        # Laatste redmiddel: eerste beschikbaar model dat geen cloud is
+        for a in available:
+            if not any(a.lower().startswith(c) for c in CLOUD_PREFIXES):
+                return a
+
+        return "llama3.2"  # ultieme fallback
+
     def _llm_summarize_pdf(self):
         body=self._body()
-        fname=body.get("filename",""); model=body.get("model","llama3.2-vision")
+        fname=body.get("filename",""); model=body.get("model","")
         if not fname: return self._send(400,{"error":"filename vereist"})
+        # Kies automatisch het beste beschikbare lokale model
+        model = self._best_local_model(model)
 
-        # Probeer eerst tekstextractie
-        text=self.vault.extract_pdf_text(fname,10000)
+        # Probeer eerst tekstextractie — ruim genoeg voor grote documenten
+        text=self.vault.extract_pdf_text(fname,40000)
 
         # Als tekst beschikbaar: stuur als tekst-prompt
         if text.strip():
-            prompt=("Maak een uitgebreide Nederlandstalige samenvatting in Markdown. "
-                    "Gebruik headers (##), bullets (-) en bold (**tekst**). "
-                    "Structuur: 1) Kernpunten, 2) Hoofdonderwerpen, 3) Conclusies.\n\n"
-                    "--- PDF ---\n"+text+"\n--- EINDE ---")
+            prompt=(
+                "Schrijf een uitgebreide Nederlandstalige samenvatting van dit document in Markdown.\n"
+                "De samenvatting moet MINIMAAL 600 en MAXIMAAL 900 woorden bevatten (vergelijkbaar met 2 A4).\n"
+                "Wees inhoudelijk en concreet — noem specifieke bevindingen, cijfers, namen en aanbevelingen.\n\n"
+                "Gebruik de volgende structuur:\n"
+                "## Inleiding\n"
+                "Wat is het doel en de context van dit document? (3-5 zinnen)\n\n"
+                "## Kernpunten\n"
+                "De 4-6 belangrijkste punten als bullets, elk 2-3 zinnen uitgewerkt.\n\n"
+                "## Uitwerking per hoofdonderwerp\n"
+                "Per hoofdonderwerp een korte sectie (### subkop) met de inhoud.\n\n"
+                "## Conclusies & Aanbevelingen\n"
+                "Wat zijn de conclusies? Welke acties worden aanbevolen?\n\n"
+                "## Zettelkasten-notities\n"
+                "3-5 concrete vervolgvragen of ideeën voor losse notities op basis van dit document.\n\n"
+                "--- DOCUMENT ---\n"+text+"\n--- EINDE ---"
+            )
             try:
-                r=self._ollama_post("/api/generate",{"model":model,"prompt":prompt,"stream":False},180)
+                r=self._ollama_post("/api/generate",{"model":model,"prompt":prompt,"stream":False},360)
                 return self._send(200,{"ok":True,"summary":r.get("response","").strip(),"filename":fname})
             except Exception as e:
-                # Fallback: probeer zonder vision
                 try:
-                    r=self._ollama_post("/api/generate",{"model":"llama3.2-vision","prompt":prompt,"stream":False},180)
+                    r=self._ollama_post("/api/generate",{"model":"llama3.2-vision","prompt":prompt,"stream":False},360)
                     return self._send(200,{"ok":True,"summary":r.get("response","").strip(),"filename":fname})
                 except Exception as e2:
                     return self._send(200,{"ok":False,"error":str(e2),"summary":""})
@@ -1593,7 +2251,7 @@ class ZKHandler(BaseHTTPRequestHandler):
 
     def _llm_describe_image(self):
         body=self._body()
-        fname=body.get("filename",""); model=body.get("model","llama3.2-vision")
+        fname=body.get("filename",""); model=self._best_local_model(body.get("model",""))
         if not fname: return self._send(400,{"error":"filename vereist"})
         img=self.vault.image_as_base64(fname)
         if not img: return self._send(404,{"error":"Afbeelding niet gevonden"})
@@ -1932,573 +2590,6 @@ class ZKHandler(BaseHTTPRequestHandler):
             "markdown": md,
             "images": saved_images,   # beschikbaar voor selectie in de UI
         }
-
-    # ── Thunderbird inbox lezen ───────────────────────────────────────────────
-    def _mail_inbox_stream(self):
-        """SSE-stream die live rapporteert terwijl Thunderbird-inboxen worden gescand.
-        GET /api/mail/inbox-stream?path=...&filter_to=...
-        Stuurt events: {type: "status"|"profile"|"file"|"inbox"|"done"|"error", ...}
-        """
-        import mailbox, email as _email, email.header as _ehdr, email.utils as _eutils
-        import re as _re
-        from urllib.parse import parse_qs, urlparse as _up
-
-        qs          = parse_qs(_up(self.path).query)
-        custom_path = qs.get("path",[""])[0].strip()
-        filter_to   = ""  # geen filter
-        max_msgs    = int(qs.get("max",["300"])[0])
-        url_only    = qs.get("url_only",["0"])[0] == "1"
-        gmail_only  = qs.get("gmail_only",["0"])[0] == "1" 
-
-        # ── SSE helpers ──────────────────────────────────────────────────────
-        self.send_response(200)
-        self.send_header("Content-Type",  "text/event-stream; charset=utf-8")
-        self.send_header("Cache-Control", "no-cache")
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("X-Accel-Buffering", "no")
-        self.end_headers()
-
-        def emit(evt_type, **kwargs):
-            data = json.dumps({"type": evt_type, **kwargs}, ensure_ascii=False)
-            msg  = f"data: {data}\n\n"
-            try:
-                self.wfile.write(msg.encode("utf-8"))
-                self.wfile.flush()
-            except Exception:
-                pass
-
-        # ── Hulpfuncties (zelfde als _mail_inbox) ───────────────────────────
-        URL_RE = _re.compile(r'https?://[^\s<>"\')\]\\,]+')
-
-        def tb_profiles():
-            from pathlib import Path as _P
-            import os as _os
-            home = _P.home()
-            cands = []
-            cands += list((home/"Library/Thunderbird/Profiles").glob("*"))
-            cands += list((home/".thunderbird").glob("*.default*"))
-            cands += list((home/".thunderbird").glob("*"))
-            appdata = _P(_os.environ.get("APPDATA","C:/x"))
-            cands += list((appdata/"Thunderbird/Profiles").glob("*.default*"))
-            return [c for c in cands if c.is_dir()]
-
-        def find_mbox_files(profile_dir):
-            from pathlib import Path as _P
-            hits = []
-            seen = set()
-            p = _P(profile_dir)
-            SKIP_EXTS  = {'.msf','.dat','.html','.js','.css','.json','.sqlite',
-                          '.log','.db','.xpi','.jar','.zip','.png','.jpg','.gif'}
-            SKIP_NAMES = {'lock','parent.lock','popstate','filterlog','msgfilterrules',
-                          'prefs','logins','key4','cert9','places','favicons','cookies',
-                          'formhistory','permissions','content-prefs','search','extensions'}
-            def is_mbox(path):
-                if path.stat().st_size == 0: return False
-                try:
-                    with open(path,'rb') as fh: return fh.read(6).startswith(b'From ')
-                except: return False
-            def label_for(path, mail_root):
-                try:
-                    rel   = path.relative_to(mail_root)
-                    parts = [x for x in rel.parts if x != '.sbd' and not x.endswith('.sbd')]
-                    acct  = parts[0] if parts else mail_root.name
-                    folder= " / ".join(parts[1:]) if len(parts)>1 else parts[0] if parts else path.name
-                    return acct, f"{acct}  ›  {folder}"
-                except: return path.parent.name, path.name
-            for sub in ("Mail","ImapMail"):
-                mail_root = p/sub
-                if not mail_root.exists(): continue
-                for mf in mail_root.rglob("*"):
-                    if not mf.is_file() or mf in seen: continue
-                    if mf.suffix.lower() in SKIP_EXTS: continue
-                    if mf.name.endswith('.msf'): continue
-                    if mf.stat().st_size < 10: continue
-                    if gmail_only:
-                        fp = str(mf).lower()
-                        if not any(x in fp for x in ("gmail","googlemail")):
-                            continue
-                    if not is_mbox(mf): continue
-                    seen.add(mf)
-                    acct, lbl = label_for(mf, mail_root)
-                    hits.append((mf, lbl, acct))
-            def sort_key(h):
-                n = h[0].name.lower()
-                return (0,h[1]) if n in ("inbox","inkomend") else (2,h[1]) if n in ("sent","gestuurd","verzonden") else (1,h[1])
-            hits.sort(key=sort_key)
-            return hits
-
-        def decode_hdr(h):
-            if not h: return ""
-            parts = _ehdr.decode_header(h)
-            out = []
-            for b,enc in parts:
-                out.append(b.decode(enc or "utf-8", errors="replace") if isinstance(b,bytes) else (b or ""))
-            return " ".join(out).strip()
-
-        def addr_contains(hdr, addr): return addr in hdr.lower()
-
-        def extract_urls(msg):
-            urls=[]; plain=""; html_text=""
-            for part in msg.walk():
-                ct = part.get_content_type()
-                try:
-                    payload = part.get_payload(decode=True)
-                    if payload is None: continue
-                    charset = part.get_content_charset("utf-8") or "utf-8"
-                    text = payload.decode(charset, errors="replace")
-                    if ct=="text/plain" and not plain: plain=text[:3000]
-                    elif ct=="text/html" and not html_text: html_text=text[:3000]
-                    found = [u.rstrip(".,;:!?)>\"'") for u in URL_RE.findall(text)]
-                    urls.extend(found)
-                except: continue
-            if not plain and html_text:
-                plain = _re.sub(r'<[^>]+',' ',html_text); plain=_re.sub(r'\s+',' ',plain).strip()[:3000]
-            SKIP=("unsubscribe","pixel","tracking","open.php","click.php","beacon",
-                  "analytics","mailchimp","sendgrid","list-unsubscribe",".gif?","img.","image.","icon.")
-            seen=set(); deduped=[]
-            for u in urls:
-                if u in seen or len(u)<12: continue
-                if any(s in u.lower() for s in SKIP): continue
-                seen.add(u); deduped.append(u)
-            return plain.strip(), deduped
-
-        # ── Start scannen ────────────────────────────────────────────────────
-        try:
-            emit("status", msg="🔍 Thunderbird-profiel zoeken…")
-
-            # Bepaal te scannen bestanden
-            files_to_scan = []
-            if custom_path:
-                from pathlib import Path as _P
-                p = _P(custom_path).expanduser()
-                emit("status", msg=f"📁 Pad opgegeven: {p}")
-                if p.is_file():
-                    files_to_scan = [(p, p.name, p.parent.name)]
-                elif p.is_dir():
-                    hits = find_mbox_files(p)
-                    if hits:
-                        files_to_scan = hits
-                    else:
-                        SKIP_EXTS={'.msf','.dat','.html','.js','.css','.json','.sqlite','.log','.db'}
-                        for f in sorted(p.rglob("*")):
-                            if not f.is_file() or f.suffix.lower() in SKIP_EXTS: continue
-                            try:
-                                with open(f,'rb') as fh:
-                                    if fh.read(6).startswith(b'From '):
-                                        files_to_scan.append((f, f.name, f.parent.name))
-                            except: continue
-            else:
-                profiles = tb_profiles()
-                emit("status", msg=f"📂 {len(profiles)} profiel(en) gevonden")
-                for prof in profiles:
-                    emit("profile", path=str(prof), name=prof.name)
-                    # Scan ALLE mbox-bestanden voor diagnose (geen naamfilter)
-                    all_hits_raw = []
-                    SKIP_EXTS2 = {'.msf','.dat','.html','.js','.css','.json','.sqlite',
-                                  '.log','.db','.xpi','.jar','.zip','.png','.jpg','.gif'}
-                    for sub in ("Mail","ImapMail"):
-                        mr = prof/sub
-                        if not mr.exists(): continue
-                        for mf2 in mr.rglob("*"):
-                            if not mf2.is_file(): continue
-                            if mf2.suffix.lower() in SKIP_EXTS2: continue
-                            if mf2.name.endswith('.msf'): continue
-                            if mf2.stat().st_size < 10: continue
-                            if gmail_only:
-                                fp2 = str(mf2).lower()
-                                if not any(x in fp2 for x in ("gmail","googlemail")):
-                                    continue
-                            try:
-                                with open(mf2,'rb') as fh:
-                                    header = fh.read(8)
-                                if not header.startswith(b'From '): continue
-                            except: continue
-                            all_hits_raw.append(mf2)
-                    # Log ALLE gevonden mbox-bestanden met pad
-                    emit("status", msg=f"  🔍 {len(all_hits_raw)} mbox-bestanden gevonden (totaal):")
-                    for mf2 in sorted(all_hits_raw, key=lambda x: str(x)):
-                        rel = str(mf2.relative_to(prof)) if prof in mf2.parents else mf2.name
-                        emit("status", msg=f"    📄 {rel}")
-                    hits = find_mbox_files(prof)
-                    emit("status", msg=f"  └ {len(hits)} inbox(en) geselecteerd (naam=INBOX)")
-                    files_to_scan += hits
-
-            if not files_to_scan:
-                emit("error", msg="Geen mbox-bestanden gevonden.",
-                     paths_tried=[str(p) for p in tb_profiles()])
-                return
-
-            emit("status", msg=f"📬 {len(files_to_scan)} mbox-bestanden gevonden — inhoud laden…")
-
-            # Lees elk bestand
-            all_inboxes = []
-            for idx, (fpath, label, account) in enumerate(files_to_scan):
-                size_kb = fpath.stat().st_size // 1024
-                emit("file", path=str(fpath), label=label,
-                     idx=idx+1, total=len(files_to_scan),
-                     size_kb=size_kb,
-                     msg=f"📄 [{idx+1}/{len(files_to_scan)}] {label}  ({size_kb} KB)")
-                mails_in_box = []
-                try:
-                    box = mailbox.mbox(str(fpath))
-                    for i, msg in enumerate(box):
-                        if len(mails_in_box) >= max_msgs: break
-                        if filter_to:
-                            to_v  = decode_hdr(msg.get("to",""))
-                            cc_v  = decode_hdr(msg.get("cc",""))
-                            bcc_v = decode_hdr(msg.get("bcc",""))
-                            if not (addr_contains(to_v,filter_to) or
-                                    addr_contains(cc_v,filter_to) or
-                                    addr_contains(bcc_v,filter_to)):
-                                continue
-                        subj = decode_hdr(msg.get("subject","(geen onderwerp)"))
-                        frm  = decode_hdr(msg.get("from",""))
-                        date = msg.get("date","")
-                        mid  = msg.get("message-id","") or f"{label}_{i}"
-                        try:
-                            dt = _eutils.parsedate_to_datetime(date)
-                            ts = dt.isoformat()
-                            ts_display = dt.strftime("%-d %b %Y")
-                        except:
-                            ts = date; ts_display = date[:16] if date else ""
-                        plain, urls = extract_urls(msg)
-                        if url_only and not urls: continue
-                        to_v = decode_hdr(msg.get("to",""))
-                        mails_in_box.append({
-                            "id": mid.strip("<>"), "subject": subj, "from": frm,
-                            "to": to_v,
-                            "date": ts, "date_display": ts_display,
-                            "urls": urls[:15], "snippet": plain[:400], "inbox": label,
-                        })
-                    box.close()
-                    mails_in_box.sort(key=lambda m: m.get("date",""), reverse=True)
-                except Exception as e:
-                    emit("status", msg=f"  ⚠ {label}: {e}")
-                    continue
-
-                if mails_in_box:
-                    inbox_data = {"name": label, "file": str(fpath),
-                                  "count": len(mails_in_box), "mails": mails_in_box}
-                    all_inboxes.append(inbox_data)
-                    emit("inbox", name=label, count=len(mails_in_box),
-                         msg=f"  ✓ {len(mails_in_box)} mails gevonden")
-                else:
-                    emit("status", msg="  — geen mails gevonden" + (" (met URL-filter)" if url_only else ""))
-
-            total = sum(b["count"] for b in all_inboxes)
-            # Sorteer inboxen ook op datum nieuwste mail bovenaan
-            all_inboxes.sort(key=lambda b: b["mails"][0]["date"] if b["mails"] else "", reverse=True)
-            emit("done", inboxes=all_inboxes, total=total,
-                 msg=f"✅ Klaar — {total} mails in {len(all_inboxes)} inbox(en)")
-
-        except Exception as e:
-            emit("error", msg=f"Fout: {e}")
-
-    def _mail_inbox(self):
-        """Leest Thunderbird lokale inbox (mbox of Maildir).
-        Groepeert resultaten per inbox-bestand.
-        Filtert: alleen mails aan hjhopman@gmail.com.
-        Body: {path?: "...", max?: 200, filter_to?: "hjhopman@gmail.com"}
-        """
-        import mailbox, email as _email, email.header as _ehdr, email.utils as _eutils
-        import re as _re
-
-        body        = self._body()
-        custom_path = body.get("path","").strip()
-        max_msgs    = min(int(body.get("max", 300)), 1000)
-        filter_to   = ""  # geen filter — alle mails tonen
-
-        URL_RE = _re.compile(r'https?://[^\s<>"\')\]\\,]+')
-
-        def tb_profiles():
-            from pathlib import Path as _P
-            import os as _os
-            home = _P.home()
-            candidates = []
-            candidates += list((home/"Library/Thunderbird/Profiles").glob("*"))
-            candidates += list((home/".thunderbird").glob("*.default*"))
-            candidates += list((home/".thunderbird").glob("*"))
-            appdata = _P(_os.environ.get("APPDATA","C:/Users/User/AppData/Roaming"))
-            candidates += list((appdata/"Thunderbird/Profiles").glob("*.default*"))
-            return [c for c in candidates if c.is_dir()]
-
-        def find_inbox_files(profile_dir):
-            """Zoek alle mbox-bestanden recursief in het Thunderbird profiel.
-            Thunderbird IMAP-structuur:
-              Mail/Local Folders/Inbox
-              ImapMail/imap.gmail.com/INBOX
-              ImapMail/imap.gmail.com/[Gmail]/Alle mail   ← submappen via .sbd/
-              ImapMail/imap-mail.outlook.com/Inbox
-            Herkenning: mbox-bestanden beginnen met 'From ' op de eerste regel,
-            of hebben geen extensie + niet-nul grootte.
-            .msf/.dat/.html/.js/.css etc. worden overgeslagen.
-            """
-            from pathlib import Path as _P
-            hits = []
-            seen = set()
-            p = _P(profile_dir)
-
-            SKIP_EXTS = {'.msf','.dat','.html','.js','.css','.json','.sqlite',
-                         '.log','.png','.jpg','.gif','.db','.xpi','.jar','.zip'}
-            SKIP_NAMES = {'lock','parent.lock','popstate','filterlog',
-                          'msgfilterrules','prefs','logins','key4',
-                          'cert9','places','favicons','cookies','formhistory',
-                          'permissions','content-prefs','search','extensions',
-                          'addonstartupcache','xulstore','session.json',
-                          'sessionstore-backups','crashes','minidumps'}
-
-            def is_mbox(path):
-                """Controleer of een bestand een mbox is (begint met 'From ')."""
-                if path.stat().st_size == 0:
-                    return False
-                try:
-                    with open(path, 'rb') as fh:
-                        header = fh.read(6)
-                        return header.startswith(b'From ')
-                except Exception:
-                    return False
-
-            def build_label(path, mail_root):
-                """Maak een leesbaar label: account / mappenpad."""
-                try:
-                    rel = path.relative_to(mail_root)
-                    parts = list(rel.parts)
-                    # .sbd mappen zijn Thunderbird submappen — strip die uit het label
-                    parts = [p for p in parts if p != '.sbd' and not p.endswith('.sbd')]
-                    # account = eerste deel, rest = mappad
-                    account = parts[0] if parts else mail_root.name
-                    folder  = " / ".join(parts[1:]) if len(parts) > 1 else parts[0] if parts else path.name
-                    return account, f"{account}  ›  {folder}"
-                except Exception:
-                    return path.parent.name, path.name
-
-            for sub in ("Mail", "ImapMail"):
-                mail_root = p / sub
-                if not mail_root.exists():
-                    continue
-                # Recursief alle bestanden
-                for mbox_file in mail_root.rglob("*"):
-                    if not mbox_file.is_file():
-                        continue
-                    if mbox_file in seen:
-                        continue
-                    # Alleen INBOX — andere mappen zijn niet relevant
-                    if mbox_file.name.lower() not in ("inbox","in","inkomend"):
-                        continue
-                    # Skip op extensie
-                    if mbox_file.suffix.lower() in SKIP_EXTS:
-                        continue
-                    # Skip .msf bestanden
-                    if mbox_file.name.endswith('.msf'):
-                        continue
-                    # Controleer inhoud
-                    if not is_mbox(mbox_file):
-                        continue
-                    seen.add(mbox_file)
-                    account, label = build_label(mbox_file, mail_root)
-                    hits.append((mbox_file, label, account))
-
-            # Sorteer: inbox bovenaan, dan op label
-            def sort_key(h):
-                name = h[0].name.lower()
-                if name in ("inbox","in","inkomend"): return (0, h[1])
-                if name in ("sent","gestuurd","verzonden"): return (2, h[1])
-                return (1, h[1])
-            hits.sort(key=sort_key)
-            return hits
-
-        def decode_hdr(h):
-            if not h: return ""
-            parts = _ehdr.decode_header(h)
-            out = []
-            for b, enc in parts:
-                if isinstance(b, bytes):
-                    out.append(b.decode(enc or "utf-8", errors="replace"))
-                else:
-                    out.append(b or "")
-            return " ".join(out).strip()
-
-        def addr_contains(header_val, addr):
-            """Controleer of addr voorkomt in een adresveld (To/CC/BCC)."""
-            return addr in header_val.lower()
-
-        def extract_body_and_urls(msg):
-            urls = []
-            plain = ""
-            html_text = ""
-            for part in msg.walk():
-                ct = part.get_content_type()
-                try:
-                    payload = part.get_payload(decode=True)
-                    if payload is None: continue
-                    charset = part.get_content_charset("utf-8") or "utf-8"
-                    text = payload.decode(charset, errors="replace")
-                    if ct == "text/plain" and not plain:
-                        plain = text[:3000]
-                    elif ct == "text/html" and not html_text:
-                        html_text = text[:3000]
-                    found = URL_RE.findall(text)
-                    found = [u.rstrip(".,;:!?)>\"'") for u in found]
-                    urls.extend(found)
-                except Exception:
-                    continue
-            # Gebruik HTML als fallback voor snippet
-            if not plain and html_text:
-                # Strip HTML tags voor snippet
-                plain = _re.sub(r'<[^>]+>', ' ', html_text)
-                plain = _re.sub(r'\s+', ' ', plain).strip()[:3000]
-            # Dedupliceer, filter triviale URLs
-            SKIP = ("unsubscribe","pixel","tracking","open.php","click.php",
-                    "beacon","analytics","mailchimp","sendgrid","list-unsubscribe",
-                    ".gif?","img.","image.","icon.")
-            seen = set(); deduped = []
-            for u in urls:
-                if u in seen or len(u) < 12: continue
-                if any(s in u.lower() for s in SKIP): continue
-                seen.add(u); deduped.append(u)
-            return plain.strip(), deduped
-
-        # ── Bepaal te lezen bestanden ─────────────────────────────────────────
-        files_to_read = []  # [(path, label, account_name)]
-        if custom_path:
-            from pathlib import Path as _P
-            p = _P(custom_path).expanduser()
-            if p.is_file():
-                files_to_read = [(p, p.name, p.parent.name)]
-            elif p.is_dir():
-                # Probeer eerst als Thunderbird-profielmap
-                hits = find_inbox_files(p)
-                if hits:
-                    files_to_read = hits
-                else:
-                    # Val terug: scan map zelf op mbox-bestanden
-                    SKIP_EXTS = {'.msf','.dat','.html','.js','.css','.json',
-                                 '.sqlite','.log','.db','.xpi','.jar','.zip'}
-                    for f in sorted(p.rglob("*")):
-                        if not f.is_file() or f.suffix.lower() in SKIP_EXTS:
-                            continue
-                        try:
-                            with open(f,'rb') as fh:
-                                if fh.read(6).startswith(b'From '):
-                                    files_to_read.append((f, f.name, f.parent.name))
-                        except Exception:
-                            continue
-        else:
-            for profile in tb_profiles():
-                files_to_read += find_inbox_files(profile)
-
-        if not files_to_read:
-            profiles = tb_profiles()
-            return self._send(200, {
-                "ok": False,
-                "error": "Geen Thunderbird mbox-bestanden gevonden. Geef het pad naar je Thunderbird profiel of Inbox-bestand op.",
-                "inboxes": [],
-                "paths_tried": [str(p) for p in profiles],
-                "tip": "Thunderbird profiel staat meestal in ~/.thunderbird/xxxxx.default/",
-            })
-
-        # ── Lees per bestand, groepeer als inbox ──────────────────────────────
-        inboxes = []
-        for fpath, label, account in files_to_read:  # geen limiet
-            mails_in_box = []
-            try:
-                box = mailbox.mbox(str(fpath))
-                for i, msg in enumerate(box):
-                    if len(mails_in_box) >= max_msgs:
-                        break
-
-                    # ── Filter: alleen mails aan filter_to ───────────────────
-                    if filter_to:
-                        to_val  = decode_hdr(msg.get("to",""))
-                        cc_val  = decode_hdr(msg.get("cc",""))
-                        bcc_val = decode_hdr(msg.get("bcc",""))
-                        if not (addr_contains(to_val,  filter_to) or
-                                addr_contains(cc_val,  filter_to) or
-                                addr_contains(bcc_val, filter_to)):
-                            continue
-
-                    subj = decode_hdr(msg.get("subject","(geen onderwerp)"))
-                    frm  = decode_hdr(msg.get("from",""))
-                    date = msg.get("date","")
-                    mid  = msg.get("message-id","") or f"{label}_{i}"
-                    try:
-                        dt = _eutils.parsedate_to_datetime(date)
-                        ts = dt.isoformat()
-                        ts_display = dt.strftime("%-d %b %Y")
-                    except Exception:
-                        ts = date; ts_display = date[:16] if date else ""
-
-                    plain, urls = extract_body_and_urls(msg)
-
-                    if not urls:
-                        continue  # alleen mails mét URLs
-
-                    mails_in_box.append({
-                        "id":       mid.strip("<>"),
-                        "subject":  subj,
-                        "from":     frm,
-                        "date":     ts,
-                        "date_display": ts_display,
-                        "urls":     urls[:15],
-                        "snippet":  plain[:400],
-                        "inbox":    label,
-                    })
-                box.close()
-                mails_in_box.sort(key=lambda m: m.get("date",""), reverse=True)
-                if mails_in_box:
-                    inboxes.append({
-                        "name":  label,
-                        "file":  str(fpath),
-                        "count": len(mails_in_box),
-                        "mails": mails_in_box,
-                    })
-            except Exception:
-                continue
-
-        total = sum(b["count"] for b in inboxes)
-        inboxes.sort(key=lambda b: b["mails"][0]["date"] if b["mails"] else "", reverse=True)
-        return self._send(200, {
-            "ok":      True,
-            "inboxes": inboxes,
-            "total":   total,
-            "filter":  filter_to,
-        })
-
-    def _mail_import_batch(self):
-        """Importeer een lijst van URLs (vanuit geselecteerde mails).
-        Body: {urls: ["...", ...], model?: "..."}
-        Geeft een lijst van import-resultaten terug.
-        Hergebruikt de bestaande _import_url logica per URL.
-        """
-        body  = self._body()
-        urls  = body.get("urls", [])[:20]   # max 20 tegelijk
-        model = body.get("model", "llama3.2-vision")
-        if not urls:
-            return self._send(400, {"error": "urls[] vereist"})
-
-        results = []
-        for url in urls:
-            try:
-                # Hergebruik bestaande import-logica via interne aanroep
-                # Maak tijdelijk een nep-body aan
-                import json as _json
-                old_body = self.rfile  # bewaar
-                self._cached_body = _json.dumps({"url": url, "model": model}).encode()
-                res_data = {}
-
-                # Roep de logica rechtstreeks aan (zonder HTTP-overhead)
-                # We moeten _import_url aanpassen om ook direct te returnen
-                # Eenvoudiger: roep de helper direct aan
-                result = self._do_import_url(url, model)
-                results.append({"url": url, **result})
-            except Exception as e:
-                results.append({"url": url, "ok": False, "error": str(e)})
-            finally:
-                if hasattr(self, '_cached_body'):
-                    del self._cached_body
-
-        return self._send(200, {"ok": True, "results": results})
-
 
 def get_local_ip():
     import socket

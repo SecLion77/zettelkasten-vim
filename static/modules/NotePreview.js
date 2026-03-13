@@ -5,6 +5,124 @@
 //        onEdit(), onDelete(), onRenderModeChange(mode),
 //        onTagRemove(tag), onLinkClick(e), onEditMermaid(code)
 
+// ── SimilarPanel — semantische suggesties via TF-IDF server-side ──────────────
+const SimilarPanel = ({ noteId, note, onSelect, onAddLink }) => {
+  const [similar,  setSimilar]  = React.useState(null);
+  const [expanded, setExpanded] = React.useState(true);
+  const [adding,   setAdding]   = React.useState(null); // id van notitie die we toevoegen
+
+  React.useEffect(() => {
+    if (!noteId) return;
+    setSimilar(null);
+    fetch("/api/llm/similar", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ note_id: noteId, top_n: 6 }),
+    })
+      .then(r => r.json())
+      .then(d => setSimilar(d.similar || []))
+      .catch(() => setSimilar([]));
+  }, [noteId]);
+
+  if (similar !== null && similar.length === 0) return null;
+
+  // Check of een notitie al expliciet gelinkt is vanuit huidige notitie
+  const alreadyLinked = (targetId) => {
+    if (!note?.content) return false;
+    return note.content.includes("[[" + targetId + "]]") ||
+           note.content.includes("[[" + targetId);
+  };
+
+  const strengthBar = (score) => {
+    const pct = Math.round(score * 100);
+    const fill = Math.min(100, pct * 3);
+    return React.createElement("div", {
+      style: { display:"flex", alignItems:"center", gap:"6px", marginTop:"3px" }
+    },
+      React.createElement("div", {
+        style: { flex:1, height:"2px", background:"rgba(255,255,255,0.07)", borderRadius:"1px" }
+      },
+        React.createElement("div", {
+          style: { width:`${fill}%`, height:"100%",
+                   background:`rgba(215,135,255,${0.3+score*0.7})`, borderRadius:"1px" }
+        })
+      ),
+      React.createElement("span", { style:{ fontSize:"10px", color:W.fgDim, flexShrink:0 } }, `${pct}%`)
+    );
+  };
+
+  return React.createElement("div", { style:{ borderBottom:`1px solid ${W.splitBg}` } },
+    React.createElement("div", {
+      onClick: () => setExpanded(p => !p),
+      style:{ display:"flex", alignItems:"center", gap:"8px",
+              padding:"10px 16px", cursor:"pointer",
+              background:"rgba(215,135,255,0.04)", userSelect:"none" }
+    },
+      React.createElement("span", { style:{ color:W.purple, fontSize:"13px" } }, "≈"),
+      React.createElement("span", {
+        style:{ color:W.purple, fontSize:"13px", fontWeight:"bold", letterSpacing:"0.6px" }
+      }, similar === null ? "VERWANT LADEN…" : `${similar.length} SEMANTISCH VERWANT`),
+      React.createElement("span", {
+        style:{ marginLeft:"6px", fontSize:"11px", color:W.fgDim }
+      }, "TF-IDF"),
+      React.createElement("span", { style:{ marginLeft:"auto", color:W.fgDim, fontSize:"11px" } },
+        expanded ? "▲" : "▼")
+    ),
+
+    expanded && similar !== null && React.createElement("div", { style:{ padding:"4px 0 4px" } },
+      similar.map(n => {
+        const linked = alreadyLinked(n.id);
+        return React.createElement("div", {
+          key: n.id,
+          style:{ padding:"7px 16px 9px", borderBottom:`1px solid ${W.splitBg}`,
+                  opacity: linked ? 0.6 : 1 },
+        },
+          React.createElement("div", {
+            style:{ display:"flex", alignItems:"center", gap:"8px" }
+          },
+            React.createElement("div", {
+              onClick: () => onSelect?.(n.id),
+              style:{ fontSize:"14px", color:W.purple, cursor:"pointer", flex:1,
+                      overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" },
+              onMouseEnter: e => e.currentTarget.style.textDecoration="underline",
+              onMouseLeave: e => e.currentTarget.style.textDecoration="none",
+            }, "≈ ", n.title),
+
+            linked
+              ? React.createElement("span", {
+                  style:{ fontSize:"11px", color:W.comment, flexShrink:0,
+                          background:"rgba(159,202,86,0.1)",
+                          border:"1px solid rgba(159,202,86,0.2)",
+                          borderRadius:"4px", padding:"1px 6px" }
+                }, "✓ gelinkt")
+              : onAddLink && React.createElement("button", {
+                  onClick: async () => {
+                    setAdding(n.id);
+                    await onAddLink?.(n.id, n.title);
+                    setAdding(null);
+                  },
+                  disabled: adding === n.id,
+                  title: `Voeg [[${n.title}]] toe aan huidige notitie`,
+                  style:{ fontSize:"11px", color:W.fgMuted, flexShrink:0, cursor:"pointer",
+                          background:"rgba(215,135,255,0.08)",
+                          border:"1px solid rgba(215,135,255,0.2)",
+                          borderRadius:"4px", padding:"1px 6px",
+                          transition:"all 0.1s" },
+                  onMouseEnter: e=>{ e.currentTarget.style.color=W.purple; e.currentTarget.style.borderColor="rgba(215,135,255,0.5)"; },
+                  onMouseLeave: e=>{ e.currentTarget.style.color=W.fgMuted; e.currentTarget.style.borderColor="rgba(215,135,255,0.2)"; },
+                }, adding===n.id ? "…" : "+ link")
+          ),
+          strengthBar(n.score)
+        );
+      })
+    ),
+
+    expanded && similar === null && React.createElement("div", {
+      style:{ padding:"10px 16px", fontSize:"13px", color:W.fgDim }
+    }, "berekenen…")
+  );
+};
+
 const NotePreview = ({
   note,
   notes = [],
@@ -18,6 +136,7 @@ const NotePreview = ({
   onEditMermaid,
   backlinks = [],
   onBacklinkSelect,
+  onAddLink,
 }) => {
   if (!note) return React.createElement("div", {
     style: { flex: 1, display: "flex", alignItems: "center",
@@ -75,25 +194,152 @@ const NotePreview = ({
     }, "🗑 del")
   );
 
-  // ── Backlinks ──────────────────────────────────────────────────────────────
-  const backlinkSection = backlinks.length > 0 && React.createElement("div", {
-    style: { marginTop: "40px", paddingTop: "14px",
-             borderTop: `1px solid ${W.splitBg}` }
+  // ── Backlinks + Outlinks + Graaf-statistieken ─────────────────────────────
+  // Hulp: extraheer de zin(nen) rondom een [[link]] in een notitie als context-snippet
+  const getSnippet = (content, targetId) => {
+    if (!content) return null;
+    const lines = content.split("\n");
+    for (const line of lines) {
+      if (line.includes("[[" + targetId + "]]") || line.includes("[[" + targetId)) {
+        const clean = line
+          .replace(/^\s*[#>\-\*]+\s*/, "")  // strip markdown prefix
+          .replace(/!?\[\[([^\]]+)\]\]/g, (_, t) => t.split("|")[0]); // [[x]] → x
+        return clean.trim().slice(0, 120) || null;
+      }
+    }
+    return null;
+  };
+
+  // Outlinks: notities waarnaar deze notitie verwijst
+  const outlinks = React.useMemo(() => {
+    if (!note) return [];
+    const ids = extractLinks(note.content);
+    return ids
+      .map(id => notes.find(n => n.id === id))
+      .filter(Boolean);
+  }, [note, notes]);
+
+  // Statistieken
+  const wordCount = React.useMemo(() => {
+    if (!note?.content) return 0;
+    return note.content.trim().split(/\s+/).filter(Boolean).length;
+  }, [note]);
+
+  const [blExpanded, setBlExpanded] = React.useState(true);
+  const [olExpanded, setOlExpanded] = React.useState(true);
+
+  const backlinkSection = React.createElement("div", {
+    style: { marginTop: "48px", borderTop: `2px solid ${W.splitBg}`, paddingTop: "0" }
   },
+
+    // ── Statistieken strip ────────────────────────────────────────────────────
     React.createElement("div", {
-      style: { fontSize: "14px", color: W.fgMuted,
-               letterSpacing: "1.5px", marginBottom: "8px" }
-    }, "BACKLINKS"),
-    backlinks.map(n => React.createElement("div", {
-      key: n.id,
-      onClick: () => onBacklinkSelect?.(n.id),
-      style: { padding: "8px 10px", cursor: "pointer",
-               background: "rgba(138,198,242,0.06)",
-               border: "1px solid rgba(138,198,242,0.12)",
-               borderRadius: "6px", marginBottom: "6px",
-               fontSize: "14px", color: W.keyword,
-               WebkitTapHighlightColor: "transparent" }
-    }, "← ", n.title))
+      style: { display: "flex", gap: "0", borderBottom: `1px solid ${W.splitBg}`,
+               marginBottom: "0", fontSize: "12px" }
+    },
+      [
+        { label: "woorden",   val: wordCount,          color: W.fgMuted },
+        { label: "backlinks", val: backlinks.length,   color: backlinks.length  > 0 ? W.blue    : W.fgMuted },
+        { label: "outlinks",  val: outlinks.length,    color: outlinks.length   > 0 ? W.comment : W.fgMuted },
+        { label: "tags",      val: (note?.tags||[]).length, color: (note?.tags||[]).length > 0 ? W.purple : W.fgMuted },
+      ].map(({ label, val, color }) =>
+        React.createElement("div", {
+          key: label,
+          style: { flex: 1, padding: "10px 0", textAlign: "center",
+                   borderRight: `1px solid ${W.splitBg}` }
+        },
+          React.createElement("div", { style: { fontSize: "20px", fontWeight: "bold", color, lineHeight: 1 } }, val),
+          React.createElement("div", { style: { fontSize: "11px", color: "#c8c0b4", marginTop: "4px", letterSpacing: "0.4px" } }, label)
+        )
+      )
+    ),
+
+    // ── Backlinks sectie ──────────────────────────────────────────────────────
+    backlinks.length > 0 && React.createElement("div", {
+      style: { borderBottom: `1px solid ${W.splitBg}` }
+    },
+      React.createElement("div", {
+        onClick: () => setBlExpanded(p => !p),
+        style: { display: "flex", alignItems: "center", gap: "8px",
+                 padding: "10px 16px", cursor: "pointer",
+                 background: "rgba(138,198,242,0.04)",
+                 userSelect: "none" }
+      },
+        React.createElement("span", { style: { color: W.blue, fontSize: "14px" } }, "←"),
+        React.createElement("span", { style: { color: W.blue, fontSize: "13px", fontWeight: "bold",
+                                                letterSpacing: "0.5px" } },
+          `${backlinks.length} BACKLINK${backlinks.length !== 1 ? "S" : ""}`),
+        React.createElement("span", { style: { marginLeft: "auto", color: W.fgDim, fontSize: "11px" } },
+          blExpanded ? "▲" : "▼")
+      ),
+      blExpanded && React.createElement("div", { style: { padding: "6px 0 2px" } },
+        backlinks.map(n => {
+          const snippet = getSnippet(n.content, note.id);
+          return React.createElement("div", {
+            key: n.id,
+            onClick: () => onBacklinkSelect?.(n.id),
+            style: { padding: "8px 16px 10px", cursor: "pointer",
+                     borderBottom: `1px solid ${W.splitBg}`,
+                     transition: "background 0.1s",
+                     WebkitTapHighlightColor: "transparent" },
+            onMouseEnter: e => e.currentTarget.style.background = "rgba(138,198,242,0.07)",
+            onMouseLeave: e => e.currentTarget.style.background = "transparent",
+          },
+            React.createElement("div", {
+              style: { fontSize: "14px", color: W.blue, marginBottom: snippet ? "4px" : "0" }
+            }, "← ", n.title || n.id),
+            snippet && React.createElement("div", {
+              style: { fontSize: "12px", color: W.fgMuted, lineHeight: "1.5",
+                       fontStyle: "italic",
+                       borderLeft: `2px solid rgba(138,198,242,0.25)`,
+                       paddingLeft: "8px" }
+            }, "…", snippet, "…")
+          );
+        })
+      )
+    ),
+
+    // ── Outlinks sectie ───────────────────────────────────────────────────────
+    outlinks.length > 0 && React.createElement("div", null,
+      React.createElement("div", {
+        onClick: () => setOlExpanded(p => !p),
+        style: { display: "flex", alignItems: "center", gap: "8px",
+                 padding: "10px 16px", cursor: "pointer",
+                 background: "rgba(159,202,86,0.04)",
+                 userSelect: "none" }
+      },
+        React.createElement("span", { style: { color: W.comment, fontSize: "14px" } }, "→"),
+        React.createElement("span", { style: { color: W.comment, fontSize: "13px", fontWeight: "bold",
+                                                letterSpacing: "0.5px" } },
+          `${outlinks.length} OUTLINK${outlinks.length !== 1 ? "S" : ""}`),
+        React.createElement("span", { style: { marginLeft: "auto", color: W.fgDim, fontSize: "11px" } },
+          olExpanded ? "▲" : "▼")
+      ),
+      olExpanded && React.createElement("div", { style: { padding: "6px 0 2px" } },
+        outlinks.map(n => {
+          const snippet = getSnippet(note.content, n.id);
+          return React.createElement("div", {
+            key: n.id,
+            onClick: () => onBacklinkSelect?.(n.id),
+            style: { padding: "8px 16px 10px", cursor: "pointer",
+                     borderBottom: `1px solid ${W.splitBg}`,
+                     WebkitTapHighlightColor: "transparent" },
+            onMouseEnter: e => e.currentTarget.style.background = "rgba(159,202,86,0.07)",
+            onMouseLeave: e => e.currentTarget.style.background = "transparent",
+          },
+            React.createElement("div", {
+              style: { fontSize: "14px", color: W.comment, marginBottom: snippet ? "4px" : "0" }
+            }, "→ ", n.title || n.id),
+            snippet && React.createElement("div", {
+              style: { fontSize: "12px", color: W.fgMuted, lineHeight: "1.5",
+                       fontStyle: "italic",
+                       borderLeft: `2px solid rgba(159,202,86,0.25)`,
+                       paddingLeft: "8px" }
+            }, "…", snippet, "…")
+          );
+        })
+      )
+    )
   );
 
   // ── Render ─────────────────────────────────────────────────────────────────
@@ -111,6 +357,12 @@ const NotePreview = ({
       onClick:      onLinkClick,
       onEditMermaid,
     }),
-    backlinkSection
+    backlinkSection,
+    note && React.createElement(SimilarPanel, {
+      noteId: note.id,
+      note: note,
+      onSelect: onBacklinkSelect,
+      onAddLink: onAddLink,
+    })
   );
 };
