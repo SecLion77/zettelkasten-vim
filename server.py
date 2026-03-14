@@ -177,9 +177,13 @@ class VaultManager:
     def get_pdf_path(self, filename):
         p=self.pdf_dir/filename; return p if p.exists() else None
     def extract_pdf_text(self, filename, max_chars=12000):
-        """Extraheer tekst uit PDF — eerst puur stdlib, dan optionele packages."""
+        """Extraheer tekst uit PDF — eerst puur stdlib, dan optionele packages.
+        Als personal_use ingeschakeld is worden extractie-restricties genegeerd."""
         p=self.get_pdf_path(filename)
         if not p: return ""
+
+        cfg = self.get_config()
+        personal_use = cfg.get("pdf_personal_use", False)
 
         # ── Methode 1: pure stdlib (zlib + struct) ────────────────────────────
         try:
@@ -191,16 +195,40 @@ class VaultManager:
         # ── Methode 2: pypdf (optioneel) ──────────────────────────────────────
         try:
             import pypdf
-            reader=pypdf.PdfReader(str(p))
-            text="\n\n".join(page.extract_text() or "" for page in reader.pages[:30])
-            if len(text.strip())>100: return text[:max_chars]
+            reader = pypdf.PdfReader(str(p))
+            # Bij personal use: probeer owner-password leeg te laten (laat pypdf zelf oplossen)
+            if personal_use and reader.is_encrypted:
+                try: reader.decrypt("")
+                except Exception: pass
+            text = "\n\n".join(page.extract_text() or "" for page in reader.pages[:30])
+            if len(text.strip()) > 100: return text[:max_chars]
         except Exception: pass
 
         # ── Methode 3: pdfminer (optioneel) ───────────────────────────────────
         try:
             from pdfminer.high_level import extract_text as pm
-            return (pm(str(p),maxpages=20) or "")[:max_chars]
+            return (pm(str(p), maxpages=20) or "")[:max_chars]
         except Exception: pass
+
+        # ── Methode 4: ruwe bytes tekst (personal use fallback) ───────────────
+        if personal_use:
+            try:
+                raw = p.read_bytes()
+                # Haal leesbare tekst-stukken direct uit de PDF-bytes
+                import re as _re
+                chunks = _re.findall(rb'\(([^\\\(\)]{4,200})\)', raw)
+                parts = []
+                for c in chunks:
+                    try:
+                        t = c.decode('latin-1', errors='ignore').strip()
+                        if len(t) > 3 and any(ch.isalpha() for ch in t):
+                            parts.append(t)
+                    except: pass
+                text = ' '.join(parts)
+                if len(text.strip()) > 100:
+                    return text[:max_chars]
+            except Exception: pass
+
         return ""
 
     def _extract_pdf_stdlib(self, data: bytes, max_chars=12000) -> str:
@@ -393,6 +421,7 @@ class VaultManager:
         """Extraheer tekst uit een PDF op een absoluut pad (buiten de vault)."""
         p = Path(abs_path)
         if not p.exists() or not p.is_file(): return ""
+        personal_use = self.get_config().get("pdf_personal_use", False)
         try:
             text = self._extract_pdf_stdlib(p.read_bytes(), max_chars)
             if len(text.strip()) > 100: return text
@@ -400,6 +429,9 @@ class VaultManager:
         try:
             import pypdf
             reader = pypdf.PdfReader(str(p))
+            if personal_use and reader.is_encrypted:
+                try: reader.decrypt("")
+                except Exception: pass
             text = "\n\n".join(page.extract_text() or "" for page in reader.pages[:30])
             if len(text.strip()) > 100: return text[:max_chars]
         except Exception: pass
@@ -407,6 +439,21 @@ class VaultManager:
             from pdfminer.high_level import extract_text as pm
             return (pm(str(p), maxpages=20) or "")[:max_chars]
         except Exception: pass
+        if personal_use:
+            try:
+                import re as _re
+                raw = p.read_bytes()
+                chunks = _re.findall(rb'\(([^\\\(\)]{4,200})\)', raw)
+                parts = []
+                for c in chunks:
+                    try:
+                        t = c.decode('latin-1', errors='ignore').strip()
+                        if len(t) > 3 and any(ch.isalpha() for ch in t):
+                            parts.append(t)
+                    except: pass
+                text = ' '.join(parts)
+                if len(text.strip()) > 100: return text[:max_chars]
+            except Exception: pass
         return ""
 
     def extract_pdf_pages(self, filename) -> list:
@@ -1188,11 +1235,30 @@ class ZKHandler(BaseHTTPRequestHandler):
     def _send(self, code, body, ct="application/json"):
         if isinstance(body,(dict,list)): body=json.dumps(body,ensure_ascii=False).encode("utf-8")
         elif isinstance(body,str):       body=body.encode("utf-8")
-        self.send_response(code)
-        self.send_header("Content-Type",ct)
-        self.send_header("Content-Length",len(body))
-        self.send_header("Access-Control-Allow-Origin","*")
-        self.end_headers(); self.wfile.write(body)
+        try:
+            self.send_response(code)
+            self.send_header("Content-Type",ct)
+            self.send_header("Content-Length",len(body))
+            self.send_header("Access-Control-Allow-Origin","*")
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # client heeft verbinding verbroken — geen actie nodig
+
+    def _sse_write(self, data: str) -> bool:
+        """Schrijf een SSE-regel. Geeft False terug als de verbinding verbroken is."""
+        try:
+            self.wfile.write(data.encode("utf-8"))
+            self.wfile.flush()
+            return True
+        except (BrokenPipeError, ConnectionResetError):
+            return False
+
+    def log_message(self, fmt, *args):
+        pass  # Schakel standaard request-logging uit
+
+    def handle_error(self, request, client_address):
+        pass  # Onderdruk BrokenPipeError stacktraces in de console
 
     def _body(self):
         l=int(self.headers.get("Content-Length",0))
@@ -1357,6 +1423,12 @@ class ZKHandler(BaseHTTPRequestHandler):
             if not np: return self._send(400,{"error":"Pad vereist"})
             ZKHandler.vault=VaultManager(Path(np))
             return self._send(200,{"vault_path":ZKHandler.vault.path_str})
+        if p=="/api/config":
+            body=self._body()
+            allowed={"pdf_personal_use","pdf_personal_email"}
+            update={k:v for k,v in body.items() if k in allowed}
+            self.vault.save_config(update)
+            return self._send(200,{"ok":True})
         return self._send(404,{"error":"Niet gevonden"})
 
     def do_PUT(self):
@@ -2554,41 +2626,215 @@ class ZKHandler(BaseHTTPRequestHandler):
             except Exception:
                 continue  # sla mislukte downloads stilletjes over
 
-        # ── Laat LLM opschonen en structureren als Markdown ──────────────────
-        # Geen afbeeldingen in de markdown — die kiest de gebruiker zelf via de selectie-UI
-        prompt = (
-            "Converteer de onderstaande webpagina-tekst naar goed gestructureerde Markdown, "
-            "als een leesbaar artikel (Instapaper-stijl). "
-            "Volg deze opmaakregels precies:\n"
-            "- Begin met # Titel (de paginatitel)\n"
-            "- Schrijf direct daarna 2-3 zinnen als inleidende samenvatting\n"
-            "- Gebruik ## voor hoofdsecties, ### voor subsecties\n"
-            "- Gebruik **vetgedrukt** voor kernbegrippen en sleutelcijfers\n"
-            "- Gebruik *cursief* voor definities en technische termen\n"
-            "- Gebruik - voor opsommingen, 1. voor genummerde stappen\n"
-            "- Gebruik > voor citaten en uitspraken\n"
-            "- Gebruik --- als scheiding tussen grote secties\n"
-            "- Sluit af met een ## Conclusie of ## Samenvatting sectie als de tekst dat toelaat\n"
-            "Verwijder navigatie, advertenties, cookieteksten en herhalingen. "
-            "Geef ALLEEN de Markdown terug, geen uitleg, geen ```markdown blokken.\n\n"
-            f"TITEL: {page_title}\nURL: {url}\n\n"
-            "TEKST:\n" + raw_text
+        # ── Stap 0: ruwe tekst opschonen (regex, geen LLM nodig) ──────────────
+        import re as _re
+
+        # LinkedIn en andere login/paywall-fragmenten letterlijk weggooien
+        LITERAL_JUNK = [
+            # Cookie/privacy standaard
+            "Lees meer in ons Cookiebeleid",
+            "Lees meer in ons cookiebeleid",
+            "meer in ons Cookiebeleid",
+            # LinkedIn
+            "LinkedIn respecteert uw",
+            "Selecteer Accepteren of Afwijzen om niet-essentiële",
+            "U kunt uw keuzen op elk gewenst moment bijwerken in uw instellingen",
+            "Meld u aan om meer content weer te geven",
+            "Maak uw gratis account of meld u aan om door te gaan met uw zoekopdracht",
+            "Nog geen lid van LinkedIn? Word nu lid",
+            "Door op Doorgaan te klikken om deel te nemen of u aan te melden",
+            "gaat u akkoord met de gebruikersovereenkomst",
+            "Meer informatie over onze privacybeleid",
+            "Overgeslagen naar hoofdinhoud",
+            # Algemeen
+            "Accept all cookies", "Alle cookies accepteren",
+            "Manage preferences", "Voorkeuren beheren",
+            "Cookie settings", "Cookie-instellingen",
+            "Privacy Policy", "Privacybeleid",
+            "Terms of Service", "Servicevoorwaarden",
+            "Sign in to continue", "Log in to continue",
+            "Subscribe to read", "Abonneer om te lezen",
+            "This content is for subscribers",
+        ]
+
+        REGEX_JUNK = [
+            r'(?i)we (use|gebruiken) cookies?[^.]{0,250}[.\n]',
+            r'(?i)cookie(s| settings| instellingen| beleid)[^.]{0,250}[.\n]',
+            r'(?i)(accept|accepteer|decline|afwijzen|manage|beheer)\s+(all\s+)?(cookies?|preferences?)[^.]{0,200}[.\n]',
+            r'(?i)by (clicking|continuing|using)[^.]{0,200}(terms|privacy|policy)[^.]{0,150}[.\n]',
+            r'(?i)door (verder te gaan|gebruik te maken|te klikken)[^.]{0,200}[.\n]',
+            r'(?i)gdpr[^.]{0,200}[.\n]',
+            r'(?i)this site uses cookies[^.]{0,200}[.\n]',
+            r'(?i)(subscribe|abonneer|sign up|aanmelden)[^.]{0,150}newsletter[^.]{0,100}[.\n]',
+            r'(?i)\bpaywall\b[^.]{0,200}[.\n]',
+            r'(?i)(register|registreer) (to|om) (read|lezen|access|verder)[^.]{0,200}[.\n]',
+        ]
+
+        clean_text = raw_text
+        # Letterlijke fragmenten eerst (snelst)
+        for junk in LITERAL_JUNK:
+            # verwijder de zin inclusief alles tot het volgende punt of einde
+            idx = clean_text.find(junk)
+            while idx != -1:
+                end = clean_text.find('.', idx + len(junk))
+                if end == -1 or end - idx > 400:
+                    end = idx + len(junk)
+                clean_text = clean_text[:idx] + ' ' + clean_text[end+1:]
+                idx = clean_text.find(junk)
+        # Regex patronen
+        for pat in REGEX_JUNK:
+            clean_text = _re.sub(pat, ' ', clean_text)
+        clean_text = _re.sub(r'\s{3,}', ' ', clean_text).strip()
+
+        # ── Stap 1: één LLM-aanroep voor samenvatting + Markdown ─────────────
+        # Werkt met Ollama (lokaal) én met externe modellen (Claude, GPT, Gemini)
+        # ── Stap 1: één LLM-aanroep voor samenvatting + Markdown ─────────────
+        # Eenvoudig format dat lokale modellen (llama, mistral etc.) goed begrijpen
+        combined_prompt = (
+            "Verwerk de onderstaande webpagina-tekst in twee stappen.\n\n"
+            "Stap 1: schrijf een samenvatting van 3-5 zinnen. "
+            "Gebruik de taal van de tekst (NL of EN). Geen koppen, geen bullets.\n\n"
+            "Stap 2: zet de volledige artikeltekst om naar Markdown (Instapaper-stijl).\n"
+            "- Begin met ## voor de eerste sectie (geen herhaling van de titel)\n"
+            "- ## voor hoofdsecties, ### voor subsecties\n"
+            "- **vet** voor kernbegrippen, *cursief* voor termen\n"
+            "- Gebruik - voor lijsten, > voor citaten\n"
+            "- Verwijder ALLES wat geen artikel is: navigatie, cookies, login-verzoeken, "
+            "reclame, social-knoppen, cookieteksten, privacyteksten\n\n"
+            "Geef je antwoord PRECIES in dit format:\n"
+            "===SAMENVATTING===\n"
+            "<samenvatting hier>\n"
+            "===ARTIKEL===\n"
+            "<markdown hier>\n\n"
+            f"Titel: {page_title}\n\n"
+            f"Tekst:\n{clean_text[:7000]}"
         )
+
+        summary = ""
+        md      = ""
+
         try:
-            r = self._ollama_post("/api/generate",
-                {"model":model,"prompt":prompt,"stream":False}, 120)
-            md = r.get("response","").strip()
+            # Probeer eerst via het opgegeven model (kan online zijn)
+            response_text = ""
+
+            if model.startswith("claude"):
+                api_key = self.vault.get_api_key("anthropic")
+                if api_key:
+                    import urllib.request as _req2
+                    payload = json.dumps({
+                        "model": model, "max_tokens": 2000,
+                        "messages": [{"role":"user","content":combined_prompt}]
+                    }).encode()
+                    req2 = _req2.Request("https://api.anthropic.com/v1/messages",
+                        data=payload,
+                        headers={"Content-Type":"application/json",
+                                 "x-api-key":api_key,
+                                 "anthropic-version":"2023-06-01"},
+                        method="POST")
+                    with _req2.urlopen(req2, timeout=60) as r2:
+                        d2 = json.loads(r2.read())
+                    response_text = d2.get("content",[{}])[0].get("text","")
+
+            elif model.startswith("gpt") or model.startswith("o1") or model.startswith("o3") or model.startswith("o4"):
+                api_key = self.vault.get_api_key("openai")
+                if api_key:
+                    import urllib.request as _req2
+                    payload = json.dumps({
+                        "model": model, "max_tokens": 2000,
+                        "messages": [{"role":"user","content":combined_prompt}]
+                    }).encode()
+                    req2 = _req2.Request("https://api.openai.com/v1/chat/completions",
+                        data=payload,
+                        headers={"Content-Type":"application/json",
+                                 "Authorization":"Bearer "+api_key},
+                        method="POST")
+                    with _req2.urlopen(req2, timeout=60) as r2:
+                        d2 = json.loads(r2.read())
+                    response_text = d2.get("choices",[{}])[0].get("message",{}).get("content","")
+
+            elif model.startswith("gemini"):
+                api_key = self.vault.get_api_key("google")
+                if api_key:
+                    import urllib.request as _req2
+                    payload = json.dumps({
+                        "contents":[{"role":"user","parts":[{"text":combined_prompt}]}],
+                        "generationConfig":{"maxOutputTokens":2000}
+                    }).encode()
+                    url2 = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+                    req2 = _req2.Request(url2,data=payload,
+                        headers={"Content-Type":"application/json"},method="POST")
+                    with _req2.urlopen(req2, timeout=60) as r2:
+                        d2 = json.loads(r2.read())
+                    response_text = d2.get("candidates",[{}])[0].get("content",{}).get("parts",[{}])[0].get("text","")
+
+            elif "/" in model:  # OpenRouter
+                api_key = self.vault.get_api_key("openrouter")
+                if api_key:
+                    import urllib.request as _req2
+                    payload = json.dumps({
+                        "model": model, "max_tokens": 2000,
+                        "messages": [{"role":"user","content":combined_prompt}]
+                    }).encode()
+                    req2 = _req2.Request("https://openrouter.ai/api/v1/chat/completions",
+                        data=payload,
+                        headers={"Content-Type":"application/json",
+                                 "Authorization":"Bearer "+api_key,
+                                 "HTTP-Referer":"http://localhost:7842"},
+                        method="POST")
+                    with _req2.urlopen(req2, timeout=60) as r2:
+                        d2 = json.loads(r2.read())
+                    response_text = d2.get("choices",[{}])[0].get("message",{}).get("content","")
+
+            # Fallback: Ollama lokaal
+            if not response_text:
+                r_ol = self._ollama_post("/api/generate",
+                    {"model": self._best_local_model(model),
+                     "prompt": combined_prompt, "stream": False}, 180)
+                response_text = r_ol.get("response","").strip()
+
+            # Parseer de response — zoek naar de markers, meerdere variaties
+            response_text = response_text.strip()
+            # Verwijder evt. markdown-fences
+            response_text = _re.sub(r'^```\w*\n?', '', response_text).rstrip('`').strip()
+
+            # Probeer ===SAMENVATTING=== / ===ARTIKEL=== (nieuw format)
+            m_sam = _re.search(r'===SAMENVATTING===\s*(.*?)(?====ARTIKEL===)', response_text, _re.S)
+            m_art = _re.search(r'===ARTIKEL===\s*(.*?)$', response_text, _re.S)
+            if m_sam and m_art:
+                summary = m_sam.group(1).strip()
+                md      = m_art.group(1).strip()
+            else:
+                # Fallback: SAMENVATTING: / ARTIKEL: (oud format)
+                m_sam2 = _re.search(r'SAMENVATTING:\s*(.*?)(?=ARTIKEL:|$)', response_text, _re.S | _re.I)
+                m_art2 = _re.search(r'ARTIKEL:\s*(.*?)$', response_text, _re.S | _re.I)
+                if m_sam2 and m_art2:
+                    summary = m_sam2.group(1).strip()
+                    md      = m_art2.group(1).strip()
+                elif m_art2:
+                    md = m_art2.group(1).strip()
+                else:
+                    # Geen markers — probeer eerste alinea als samenvatting, rest als artikel
+                    parts = response_text.split('\n\n', 2)
+                    if len(parts) >= 2 and len(parts[0]) < 600 and not parts[0].startswith('#'):
+                        summary = parts[0].strip()
+                        md      = '\n\n'.join(parts[1:]).strip()
+                    else:
+                        md = response_text
+
             if not md:
-                md = f"# {page_title}\n\n{raw_text[:4000]}"
-        except Exception:
-            md = f"# {page_title}\n\n{raw_text[:4000]}"
+                md = clean_text[:6000]
+
+        except Exception as e:
+            md = clean_text[:6000]
+            summary = ""
 
         return {
-            "ok":     True,
-            "title":  page_title,
-            "url":    url,
+            "ok":       True,
+            "title":    page_title,
+            "url":      url,
+            "summary":  summary,
             "markdown": md,
-            "images": saved_images,   # beschikbaar voor selectie in de UI
+            "images":   saved_images,
         }
 
 def get_local_ip():
@@ -2627,6 +2873,12 @@ def main():
     ZKHandler.offline=args.offline
     class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
         daemon_threads = True
+        def handle_error(self, request, client_address):
+            import sys
+            exc = sys.exc_info()[1]
+            if isinstance(exc, (BrokenPipeError, ConnectionResetError)):
+                return  # client verbroken — geen stacktrace nodig
+            super().handle_error(request, client_address)
     server=ThreadingHTTPServer((args.host,args.port),ZKHandler)
     local_ip=get_local_ip()
     offline_label = "JA (vendor/)" if args.offline else "nee (CDN)"

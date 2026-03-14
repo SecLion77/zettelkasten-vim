@@ -60,7 +60,7 @@ const SimilarPanel = ({ noteId, note, onSelect, onAddLink }) => {
     },
       React.createElement("span", { style:{ color:W.purple, fontSize:"13px" } }, "≈"),
       React.createElement("span", {
-        style:{ color:W.purple, fontSize:"13px", fontWeight:"bold", letterSpacing:"0.6px" }
+        style:{ color:W.blue, fontSize:"13px", fontWeight:"bold", letterSpacing:"0.6px" }
       }, similar === null ? "VERWANT LADEN…" : `${similar.length} SEMANTISCH VERWANT`),
       React.createElement("span", {
         style:{ marginLeft:"6px", fontSize:"11px", color:W.fgDim }
@@ -82,7 +82,7 @@ const SimilarPanel = ({ noteId, note, onSelect, onAddLink }) => {
           },
             React.createElement("div", {
               onClick: () => onSelect?.(n.id),
-              style:{ fontSize:"14px", color:W.purple, cursor:"pointer", flex:1,
+              style:{ fontSize:"14px", color:W.blue, cursor:"pointer", flex:1,
                       overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" },
               onMouseEnter: e => e.currentTarget.style.textDecoration="underline",
               onMouseLeave: e => e.currentTarget.style.textDecoration="none",
@@ -104,11 +104,11 @@ const SimilarPanel = ({ noteId, note, onSelect, onAddLink }) => {
                   disabled: adding === n.id,
                   title: `Voeg [[${n.title}]] toe aan huidige notitie`,
                   style:{ fontSize:"11px", color:W.fgMuted, flexShrink:0, cursor:"pointer",
-                          background:"rgba(215,135,255,0.08)",
-                          border:"1px solid rgba(215,135,255,0.2)",
+                          background:"rgba(138,198,242,0.08)",
+                          border:"1px solid rgba(138,198,242,0.2)",
                           borderRadius:"4px", padding:"1px 6px",
                           transition:"all 0.1s" },
-                  onMouseEnter: e=>{ e.currentTarget.style.color=W.purple; e.currentTarget.style.borderColor="rgba(215,135,255,0.5)"; },
+                  onMouseEnter: e=>{ e.currentTarget.style.color=W.blue; e.currentTarget.style.borderColor="rgba(138,198,242,0.5)"; },
                   onMouseLeave: e=>{ e.currentTarget.style.color=W.fgMuted; e.currentTarget.style.borderColor="rgba(215,135,255,0.2)"; },
                 }, adding===n.id ? "…" : "+ link")
           ),
@@ -241,7 +241,7 @@ const NotePreview = ({
         { label: "woorden",   val: wordCount,          color: W.fgMuted },
         { label: "backlinks", val: backlinks.length,   color: backlinks.length  > 0 ? W.blue    : W.fgMuted },
         { label: "outlinks",  val: outlinks.length,    color: outlinks.length   > 0 ? W.comment : W.fgMuted },
-        { label: "tags",      val: (note?.tags||[]).length, color: (note?.tags||[]).length > 0 ? W.purple : W.fgMuted },
+        { label: "tags",      val: (note?.tags||[]).length, color: (note?.tags||[]).length > 0 ? W.comment : W.fgMuted },
       ].map(({ label, val, color }) =>
         React.createElement("div", {
           key: label,

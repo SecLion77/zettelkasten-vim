@@ -132,27 +132,6 @@ const renderMd = (text, notes=[]) => {
       return `%%MEDIA${i}%%`;
     });
 
-  // Markdown links [tekst](url) → placeholder VÓÓR html-escaping
-  // (zodat & in URLs niet als &amp; geescaped wordt)
-  h = h.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (_, label, url) => {
-    const i = mediaBlocks.length;
-    mediaBlocks.push(
-      `<a href="${url}" target="_blank" rel="noopener noreferrer" ` +
-      `style="color:#8ac6f2;text-decoration:underline;text-decoration-color:rgba(138,198,242,0.4)">${label}</a>`
-    );
-    return `%%MEDIA${i}%%`;
-  });
-
-  // Naakte URLs → placeholder VÓÓR html-escaping
-  h = h.replace(/(https?:\/\/[-\w@:%._+~#=/?&]+(?<![.,;:!?"'\s]))/g, url => {
-    const i = mediaBlocks.length;
-    mediaBlocks.push(
-      `<a href="${url}" target="_blank" rel="noopener noreferrer" ` +
-      `style="color:#8ac6f2;text-decoration:underline;text-decoration-color:rgba(138,198,242,0.4);word-break:break-all">${url}</a>`
-    );
-    return `%%MEDIA${i}%%`;
-  });
-
   // Nu HTML-escapen (raakt placeholders niet)
   h = h.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 
@@ -231,6 +210,18 @@ const renderMd = (text, notes=[]) => {
   h = h.replace(/^[-*] (.+)$/gm,"<li>$1</li>");
   h = h.replace(/^\d+\. (.+)$/gm,"<li>$1</li>");
   h = h.replace(/(<li>[\s\S]*?<\/li>\n?)+/g,"<ul>$&</ul>");
+
+  // Externe Markdown links: [tekst](url) → klikbaar
+  h = h.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g,
+    (_,label,url) => `<a href="${url}" target="_blank" rel="noopener noreferrer" `+
+      `style="color:#8ac6f2;text-decoration:underline;text-decoration-color:rgba(138,198,242,0.4)">${label}</a>`
+  );
+
+  // Naakte URLs in tekst: https://... → klikbaar (niet al omsloten door href="")
+  h = h.replace(/(?<!href=["'])(?<!src=["'])(https?:\/\/[^\s<>"'\)]+)/g,
+    url => `<a href="${url}" target="_blank" rel="noopener noreferrer" `+
+      `style="color:#8ac6f2;text-decoration:underline;text-decoration-color:rgba(138,198,242,0.4);word-break:break-all">${url}</a>`
+  );
 
   // Zettelkasten links
   h = h.replace(/\[\[([^\]]+)\]\]/g,(_,id)=>{

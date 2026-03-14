@@ -27,29 +27,35 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, addJob, upd
   const [error,          setError]          = useState(null);
   const [editMd,         setEditMd]         = useState("");
   const [editTitle,      setEditTitle]      = useState("");
+  const [editSummary,    setEditSummary]    = useState("");
   const [tags,           setTags]           = useState([]);
   const [saved,          setSaved]          = useState(false);
-  const [renderMode,     setRenderMode]     = useState(true);
   const [selectedImages, setSelectedImages] = useState(new Set());
+  const [aiTagsLoading,  setAiTagsLoading]  = useState(false);
   const urlRef      = useRef(null);
   const prevPreview = useRef(importPreview);
 
 
   // ── initFromPreview helper ─────────────────────────────────────────────────
   const initFromPreview = (p) => {
-    if (!p) return { md: "", title: "", tags: [] };
+    if (!p) return { md: "", title: "", summary: "", tags: [] };
     let domain = "";
     try { domain = new URL(p.url).hostname.replace("www.","").split(".")[0]; } catch {}
-    return { md: p.markdown||"", title: p.title||"", tags: ["import",domain].filter(Boolean) };
+    return {
+      md:      p.markdown||"",
+      title:   p.title||"",
+      summary: p.summary||"",
+      tags:    ["import", domain].filter(Boolean),
+    };
   };
 
-  // Sync editMd/editTitle/tags wanneer importPreview van buiten wijzigt
+  // Sync wanneer importPreview van buiten wijzigt
   useEffect(() => {
     if (importPreview === prevPreview.current) return;
     prevPreview.current = importPreview;
     if (!importPreview) return;
-    const {md, title, tags: newTags} = initFromPreview(importPreview);
-    setEditMd(md); setEditTitle(title); setTags(newTags);
+    const {md, title, summary, tags: newTags} = initFromPreview(importPreview);
+    setEditMd(md); setEditTitle(title); setEditSummary(summary); setTags(newTags);
     setSaved(false); setImporting(false);
   }, [importPreview]);
 
@@ -87,23 +93,35 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, addJob, upd
 
   const saveNote = useCallback(async () => {
     if (!importPreview) return;
-    let content = editMd;
+    // Bouw content op: samenvatting bovenaan, dan originele tekst
+    let content = "";
+    if (editSummary.trim()) {
+      content += `> **Samenvatting:** ${editSummary.trim()}\n\n---\n\n`;
+    }
+    content += editMd;
     if (selectedImages.size > 0 && importPreview.images?.length) {
       const pickedLinks = importPreview.images
         .filter(img => selectedImages.has(img.name))
         .map(img => `![[img:${img.name}]]`).join("\n\n");
       content += "\n\n" + pickedLinks;
     }
-    content += "\n\n---\n🌐 **Bron:** [" + importPreview.url + "](" + importPreview.url + ")";
+    // Bronlink: korte leesbare label (domein) in plaats van volledige URL
+    let bronLabel = importPreview.url;
+    try {
+      const u = new URL(importPreview.url);
+      bronLabel = u.hostname.replace("www.","") + (u.pathname.length > 1 ? u.pathname.slice(0,40) + (u.pathname.length > 40 ? "…" : "") : "");
+    } catch {}
+    content += `\n\n---\n🌐 **Bron:** [${bronLabel}](${importPreview.url})`;
     await onAddNote({
       id: genId(), title: editTitle, content, tags,
       created: new Date().toISOString(), modified: new Date().toISOString(),
     });
     setSaved(true);
-  }, [importPreview, editTitle, editMd, tags, selectedImages, onAddNote]);
+  }, [importPreview, editTitle, editMd, editSummary, tags, selectedImages, onAddNote]);
 
   const reset = () => {
-    setUrl(""); setImportPreview(null); setEditMd(""); setEditTitle("");
+    setUrl(""); setImportPreview(null);
+    setEditMd(""); setEditTitle(""); setEditSummary("");
     setTags([]); setError(null); setSaved(false); setImporting(false);
     setSelectedImages(new Set());
     setTimeout(()=>urlRef.current?.focus(), 50);
@@ -148,6 +166,7 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, addJob, upd
     // ══════════════════════════════════════════════════════════════════════════
     importMode === "url" && React.createElement(React.Fragment, null,
 
+      // ── Geen preview: invoerscherm ──────────────────────────────────────────
       !importPreview && React.createElement("div", {style:{
         flex:1, display:"flex", flexDirection:"column",
         alignItems:"center", justifyContent:"center",
@@ -193,6 +212,198 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, addJob, upd
                 background:"rgba(229,120,109,0.08)",border:`1px solid rgba(229,120,109,0.25)`,
                 borderRadius:"6px",padding:"10px 16px",maxWidth:"560px",width:"100%"}},
                 "⚠ "+error))
+      ),
+
+      // ── Preview na succesvolle import ───────────────────────────────────────
+      importPreview && React.createElement("div", {style:{
+        flex:1, display:"flex", flexDirection:"column", overflow:"hidden",
+      }},
+
+        // ── Actiebalk ────────────────────────────────────────────────────────
+        React.createElement("div", {style:{
+          padding:"8px 14px", background:W.bg2,
+          borderBottom:`1px solid ${W.splitBg}`,
+          display:"flex", alignItems:"center", gap:"8px",
+          flexShrink:0, flexWrap:"wrap",
+        }},
+          saved
+            ? React.createElement(React.Fragment, null,
+                React.createElement("span", {style:{color:W.comment,fontWeight:"600",fontSize:"14px"}},
+                  "✓ Notitie opgeslagen"),
+                React.createElement("button", {
+                  onClick: reset,
+                  style:{background:"rgba(138,198,242,0.12)",border:`1px solid ${W.blue}`,
+                         color:W.blue,borderRadius:"5px",padding:"5px 14px",
+                         fontSize:"13px",cursor:"pointer",fontWeight:"600"}
+                }, "+ Nieuwe import"))
+            : React.createElement(React.Fragment, null,
+                // Titel
+                React.createElement("input", {
+                  value: editTitle,
+                  onChange: e => setEditTitle(e.target.value),
+                  placeholder: "Titel…",
+                  style:{flex:1,minWidth:"180px",background:W.bg3,
+                         border:`1px solid ${W.splitBg}`,borderRadius:"5px",
+                         color:W.statusFg,padding:"5px 10px",
+                         fontSize:"14px",fontWeight:"600",outline:"none",
+                         boxSizing:"border-box"}
+                }),
+                React.createElement("button", {
+                  onClick: saveNote,
+                  style:{background:W.comment,color:W.bg,border:"none",
+                         borderRadius:"5px",padding:"6px 18px",fontSize:"13px",
+                         cursor:"pointer",fontWeight:"700",whiteSpace:"nowrap",flexShrink:0}
+                }, "✓ Opslaan"),
+                React.createElement("button", {
+                  onClick: reset,
+                  style:{background:"none",border:`1px solid ${W.splitBg}`,color:W.fgMuted,
+                         borderRadius:"5px",padding:"6px 10px",fontSize:"13px",
+                         cursor:"pointer",flexShrink:0}
+                }, "✕")
+              )
+        ),
+
+        // ── Scrollbaar inhoudspaneel ─────────────────────────────────────────
+        React.createElement("div", {style:{
+          flex:1, overflowY:"auto", padding:"16px 20px",
+          display:"flex", flexDirection:"column", gap:"14px",
+        }},
+
+          // ── Tags (SmartTagEditor) ───────────────────────────────────────────
+          !saved && React.createElement("div", {style:{
+            background:W.bg2, border:`1px solid ${W.splitBg}`,
+            borderRadius:"7px", padding:"10px 14px",
+          }},
+            React.createElement("div", {style:{
+              fontSize:"11px",color:"rgba(138,198,242,0.6)",
+              letterSpacing:"1.2px",marginBottom:"6px",fontWeight:"600",
+            }}, "TAGS"),
+            React.createElement(SmartTagEditor, {
+              tags,
+              onChange: setTags,
+              allTags,
+              content: (editSummary + " " + editMd).slice(0, 1500),
+              llmModel,
+            })
+          ),
+
+          // ── Samenvatting ────────────────────────────────────────────────────
+          React.createElement("div", {style:{
+            background:"rgba(138,198,242,0.06)",
+            border:`1px solid rgba(138,198,242,0.2)`,
+            borderLeft:`3px solid ${W.blue}`,
+            borderRadius:"6px", padding:"12px 16px",
+          }},
+            React.createElement("div", {style:{
+              fontSize:"11px",color:W.blue,letterSpacing:"1.2px",
+              fontWeight:"600",marginBottom:"8px",
+              display:"flex",alignItems:"center",gap:"6px",
+            }},
+              "✦ SAMENVATTING"
+            ),
+            React.createElement("textarea", {
+              value: editSummary,
+              onChange: e => setEditSummary(e.target.value),
+              placeholder: editSummary ? "" : "Geen samenvatting gegenereerd — voeg zelf toe…",
+              rows: 3,
+              style:{
+                width:"100%", background:"transparent",
+                border:"none", outline:"none",
+                color:W.fg, fontSize:"14px", lineHeight:"1.7",
+                resize:"vertical", fontFamily:"inherit",
+                boxSizing:"border-box",
+              }
+            })
+          ),
+
+          // ── Afbeeldingen selectie ───────────────────────────────────────────
+          importPreview.images?.length > 0 && !saved &&
+            React.createElement("div", {style:{
+              background:W.bg2, border:`1px solid ${W.splitBg}`,
+              borderRadius:"7px", padding:"10px 14px",
+            }},
+              React.createElement("div", {style:{
+                fontSize:"11px",color:"rgba(159,202,86,0.7)",
+                letterSpacing:"1.2px",marginBottom:"8px",fontWeight:"600",
+                display:"flex",alignItems:"center",gap:"8px",
+              }},
+                "AFBEELDINGEN",
+                React.createElement("span",{style:{color:W.fgDim,fontWeight:"400",letterSpacing:0}},
+                  `${selectedImages.size} van ${importPreview.images.length} geselecteerd`)
+              ),
+              React.createElement("div", {style:{
+                display:"flex", flexWrap:"wrap", gap:"8px",
+              }},
+                ...importPreview.images.map(img => {
+                  const sel = selectedImages.has(img.name);
+                  return React.createElement("div", {
+                    key: img.name,
+                    onClick: () => setSelectedImages(prev => {
+                      const n = new Set(prev);
+                      sel ? n.delete(img.name) : n.add(img.name);
+                      return n;
+                    }),
+                    style:{
+                      position:"relative", cursor:"pointer",
+                      border:`2px solid ${sel ? W.comment : "rgba(255,255,255,0.1)"}`,
+                      borderRadius:"5px", overflow:"hidden",
+                      width:"90px", height:"65px", flexShrink:0,
+                      background:W.bg3,
+                    }
+                  },
+                    React.createElement("img", {
+                      src: img.url, alt: img.name,
+                      style:{width:"100%",height:"100%",objectFit:"cover",display:"block"}
+                    }),
+                    sel && React.createElement("div", {style:{
+                      position:"absolute",top:"3px",right:"3px",
+                      background:W.comment,color:W.bg,
+                      borderRadius:"50%",width:"18px",height:"18px",
+                      display:"flex",alignItems:"center",justifyContent:"center",
+                      fontSize:"11px",fontWeight:"bold",
+                    }}, "✓")
+                  );
+                })
+              )
+            ),
+
+          // ── Scheiding ───────────────────────────────────────────────────────
+          React.createElement("div", {style:{
+            display:"flex", alignItems:"center", gap:"10px",
+          }},
+            React.createElement("div", {style:{
+              flex:1, height:"1px", background:`rgba(255,255,255,0.08)`
+            }}),
+            React.createElement("span", {style:{
+              fontSize:"11px", color:W.fgDim, letterSpacing:"1.5px",
+            }}, "ORIGINELE TEKST"),
+            React.createElement("div", {style:{
+              flex:1, height:"1px", background:`rgba(255,255,255,0.08)`
+            }})
+          ),
+
+          // ── Originele tekst als Markdown ────────────────────────────────────
+          React.createElement("div", {style:{
+            background:W.bg2, border:`1px solid ${W.splitBg}`,
+            borderRadius:"6px", padding:"16px 18px",
+            fontSize:"13px", color:W.fg, lineHeight:"1.8",
+            whiteSpace:"pre-wrap",
+            fontFamily:"'Courier New', monospace",
+          }}, editMd || "(geen tekst geïmporteerd)"),
+
+          // Bron-link
+          React.createElement("div", {style:{
+            fontSize:"12px", color:W.fgDim,
+            display:"flex", alignItems:"center", gap:"6px",
+          }},
+            React.createElement("span", null, "🌐"),
+            React.createElement("a", {
+              href: importPreview.url, target:"_blank", rel:"noopener",
+              style:{color:W.blue, overflow:"hidden",
+                     textOverflow:"ellipsis", whiteSpace:"nowrap"}
+            }, importPreview.url)
+          )
+        )
       )
     ),
   );
