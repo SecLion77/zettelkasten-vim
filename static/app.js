@@ -2342,7 +2342,7 @@ const TagFilterBar = ({tags=[], activeTag, onChange, compact=false, tagColors={}
 
 
 // ── Obsidian-stijl Knowledge Graph ────────────────────────────────────────────
-const Graph = ({notes, pdfNotes, onSelect, selectedId, localMode=false}) => {
+const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote}) => {
   const { useState, useRef, useCallback, useMemo, useEffect } = React;
 
   const cvRef      = useRef(null);
@@ -2352,11 +2352,11 @@ const Graph = ({notes, pdfNotes, onSelect, selectedId, localMode=false}) => {
   const hovering   = useRef(null);
   const isPanning  = useRef(false);
   const panStart   = useRef({x:0,y:0,ox:0,oy:0});
-  const viewRef    = useRef({scale:1, ox:0, oy:0}); // viewport transform
+  const viewRef    = useRef({scale:1, ox:0, oy:0});
 
   // ── Filter & weergave state ───────────────────────────────────────────────
   const [filterTag,    setFilterTag]   = useState(null);
-  const [depthLimit,   setDepthLimit]  = useState(0);   // 0 = geen limiet
+  const [depthLimit,   setDepthLimit]  = useState(0);
   const [searchQ,      setSearchQ]     = useState("");
   const [showLocal,    setShowLocal]   = useState(false);
   const [orphansOnly,  setOrphansOnly] = useState(false);
@@ -2369,9 +2369,9 @@ const Graph = ({notes, pdfNotes, onSelect, selectedId, localMode=false}) => {
   const [pathFrom,     setPathFrom]    = useState(null);
   const [pathTo,       setPathTo]      = useState(null);
   const [pathResult,   setPathResult]  = useState(null);
-  const [ctxMenu,      setCtxMenu]     = useState(null); // {x,y,node}
+  const [ctxMenu,      setCtxMenu]     = useState(null);
   const [pinnedIds,    setPinnedIds]   = useState(new Set());
-  const [scale,        setScale]       = useState(1);    // for re-render only
+  const [scale,        setScale]       = useState(1);
   const pathRef    = useRef(null);
   const semEdgesRef= useRef([]);
   const pinnedRef  = useRef(new Set());
@@ -2380,7 +2380,93 @@ const Graph = ({notes, pdfNotes, onSelect, selectedId, localMode=false}) => {
   useEffect(()=>{ semEdgesRef.current= semanticEdges; }, [semanticEdges]);
   useEffect(()=>{ pinnedRef.current  = pinnedIds; }, [pinnedIds]);
 
-  // ── Semantische edges ────────────────────────────────────────────────────
+  // ── Cleanup: verwijder broken links uit alle notities ─────────────────────
+  const [cleanupMsg,   setCleanupMsg]  = useState("");
+  const [emptyMsg,     setEmptyMsg]    = useState("");
+  const [orphanMsg,    setOrphanMsg]   = useState("");
+
+  const cleanupBrokenLinks = useCallback(async () => {
+    if (!onUpdateNote) return;
+    const noteIds = new Set(notes.map(n => n.id));
+    let fixed = 0;
+    for (const note of notes) {
+      const links = extractLinks(note.content||"");
+      const broken = links.filter(lid => !noteIds.has(lid));
+      if (broken.length === 0) continue;
+      let newContent = note.content;
+      broken.forEach(lid => {
+        newContent = newContent.replace(new RegExp(`\\[\\[${lid}\\]\\]`, 'g'), '');
+      });
+      await onUpdateNote({...note, content: newContent, modified: new Date().toISOString()});
+      fixed += broken.length;
+    }
+    setCleanupMsg(fixed > 0 ? `✓ ${fixed} link${fixed!==1?"s":""} verwijderd` : "✓ Geen gebroken links");
+    setTimeout(() => setCleanupMsg(""), 4000);
+  }, [notes, onUpdateNote]);
+
+  const cleanupEmptyNotes = useCallback(async () => {
+    if (!onUpdateNote) return;
+    // Een notitie is "leeg" als titel én content na trim() leeg of alleen whitespace/streepjes zijn
+    const isEmpty = n => {
+      const t = (n.title||"").trim();
+      const c = (n.content||"").replace(/^[-\s*#]+$/gm,"").trim();
+      return !t && !c;
+    };
+    const empty = notes.filter(isEmpty);
+    if (!empty.length) {
+      setEmptyMsg("✓ Geen lege notities");
+      setTimeout(() => setEmptyMsg(""), 3000);
+      return;
+    }
+    // Toon bevestiging via msg, tweede klik verwijdert
+    if (!emptyMsg.startsWith("⚠")) {
+      setEmptyMsg(`⚠ ${empty.length} lege notitie${empty.length!==1?"s":""} — klik nogmaals`);
+      return;
+    }
+    // Tweede klik: verwijder via server
+    let deleted = 0;
+    for (const note of empty) {
+      try {
+        await fetch(`/api/notes/${encodeURIComponent(note.id)}`, {method:"DELETE"});
+        deleted++;
+      } catch {}
+    }
+    setEmptyMsg(`✓ ${deleted} lege notitie${deleted!==1?"s":""} verwijderd`);
+    setTimeout(() => setEmptyMsg(""), 4000);
+  }, [notes, emptyMsg, onUpdateNote]);
+
+  const deleteOrphans = useCallback(async () => {
+    if (!onUpdateNote) return;
+    // Bepaal actuele orphans: notities zonder links en niet gelinkt door anderen
+    const noteIds   = new Set(notes.map(n => n.id));
+    const linkedIds = new Set(
+      notes.flatMap(n => extractLinks(n.content||"").filter(id => noteIds.has(id)))
+    );
+    const orphans = notes.filter(n =>
+      extractLinks(n.content||"").filter(id => noteIds.has(id)).length === 0 &&
+      !linkedIds.has(n.id)
+    );
+    if (!orphans.length) {
+      setOrphanMsg("✓ Geen wezen-notities");
+      setTimeout(() => setOrphanMsg(""), 3000);
+      return;
+    }
+    // Stap 1: toon aantal met bevestiging
+    if (!orphanMsg.startsWith("⚠")) {
+      setOrphanMsg(`⚠ ${orphans.length} wezen — klik nogmaals`);
+      return;
+    }
+    // Stap 2: verwijder
+    let deleted = 0;
+    for (const note of orphans) {
+      try {
+        await fetch(`/api/notes/${encodeURIComponent(note.id)}`, {method:"DELETE"});
+        deleted++;
+      } catch {}
+    }
+    setOrphanMsg(`✓ ${deleted} wezen-notitie${deleted!==1?"s":""} verwijderd`);
+    setTimeout(() => setOrphanMsg(""), 4000);
+  }, [notes, orphanMsg]);
   const fetchSemanticEdges = useCallback(async () => {
     if (!notes.length) return;
     setSemLoading(true);
@@ -2477,7 +2563,14 @@ const Graph = ({notes, pdfNotes, onSelect, selectedId, localMode=false}) => {
 
     let allNotes=notes;
 
-    // ── Tag-filter (bugfix: was nooit toegepast) ──────────────────────────
+    // Verwijder lege notities uit de graaf (geen titel én geen zinvolle content)
+    allNotes = allNotes.filter(n => {
+      const t = (n.title||"").trim();
+      const c = (n.content||"").replace(/[-\s*#\n]/g,"").trim();
+      return t || c;
+    });
+
+    // ── Tag-filter ──────────────────────────────────────────────────────────
     if (filterTag) {
       allNotes = allNotes.filter(n => (n.tags||[]).includes(filterTag));
     }
@@ -2524,12 +2617,6 @@ const Graph = ({notes, pdfNotes, onSelect, selectedId, localMode=false}) => {
     }
 
     // Orphan filter
-    if (orphansOnly) {
-      allNotes = allNotes.filter(n =>
-        extractLinks(n.content).length===0 &&
-        !notes.some(x=>extractLinks(x.content).includes(n.id)));
-    }
-
     // Lokale graaf
     if (showLocal && selectedId) {
       const sel = allNotes.find(n=>n.id===selectedId);
@@ -2542,9 +2629,6 @@ const Graph = ({notes, pdfNotes, onSelect, selectedId, localMode=false}) => {
     const tagNodes = [...new Set(allNotes.flatMap(n=>n.tags||[]))].map(t=>({
       id:"tag-"+t, title:"#"+t, links:[], tags:[t], type:"tag", color:tagColors[t]||W.comment
     }));
-    const pdfTagNodes = [...new Set(pdfNotes.flatMap(p=>p.tags||[]))]
-      .filter(t=>!allNotes.flatMap(n=>n.tags||[]).includes(t))
-      .map(t=>({id:"tag-"+t,title:"#"+t,links:[],tags:[t],type:"tag",color:tagColors[t]||W.fgMuted}));
 
     const all=[
       ...allNotes.map(n=>({
@@ -2554,12 +2638,38 @@ const Graph = ({notes, pdfNotes, onSelect, selectedId, localMode=false}) => {
         linkCount:extractLinks(n.content).length,
         backCount:notes.filter(x=>extractLinks(x.content).includes(n.id)).length,
       })),
-      ...pdfNotes.slice(0,20).map(p=>({
-        id:"pdf-"+p.id, title:"📄 "+(p.text||"").substring(0,20),
-        links:[], tags:p.tags||[], type:"pdf", linkCount:0, backCount:0
-      })),
-      ...tagNodes, ...pdfTagNodes,
+      ...tagNodes,
     ];
+
+    // Bouw een set van geldige IDs — filter daarna alle edges die naar niet-bestaande nodes wijzen
+    const validIds = new Set(all.map(n=>n.id));
+    all.forEach(n=>{
+      n.links = (n.links||[]).filter(lid => validIds.has(lid));
+      n.linkCount = n.links.length;
+    });
+
+    // Bouw snelle lookup: welke note-IDs worden gelinkt vanuit andere notes
+    const linkedByOthers = new Set();
+    all.forEach(n => n.links.forEach(lid => linkedByOthers.add(lid)));
+
+    // Orphan-filter: gebaseerd op gefilterde links
+    if (orphansOnly) {
+      const orphanIds = new Set(
+        all.filter(n => n.type==="note" && n.links.length===0 && !linkedByOthers.has(n.id))
+           .map(n => n.id)
+      );
+      // Verwijder alle non-orphan noten én bijbehorende tag-nodes
+      const orphanTags = new Set(
+        all.filter(n => orphanIds.has(n.id)).flatMap(n => n.tags||[])
+      );
+      all.splice(0, all.length, ...all.filter(n =>
+        n.type !== "note" && n.type !== "tag"
+          ? false  // pdf ook weghalen in orphan-modus
+          : n.type === "note"
+            ? orphanIds.has(n.id)
+            : orphanTags.has(n.tags?.[0])  // tag-node alleen als weesgeval die tag heeft
+      ));
+    }
 
     nodesRef.current = all.map(n => {
       const ex=nodesRef.current.find(x=>x.id===n.id);
@@ -2623,7 +2733,7 @@ const Graph = ({notes, pdfNotes, onSelect, selectedId, localMode=false}) => {
                    "#cae682","#e99a5a","#92b5dc","#5fd7ff","#87d787"];
     noteNodes.forEach(n=>{ n.communityColor=commPal[n.communityIdx%commPal.length]; });
 
-  },[notes,pdfNotes,selectedId,showLocal,orphansOnly,tagColors,filterTag,depthLimit]);
+  },[notes,selectedId,showLocal,orphansOnly,tagColors,filterTag,depthLimit]);
 
   // ── Resize + initial build ────────────────────────────────────────────────
   useEffect(()=>{
@@ -2643,7 +2753,7 @@ const Graph = ({notes, pdfNotes, onSelect, selectedId, localMode=false}) => {
     return()=>ro.disconnect();
   },[build]);
 
-  useEffect(()=>{ build(); },[notes,pdfNotes,build,showLocal,orphansOnly,filterTag,depthLimit]);
+  useEffect(()=>{ build(); },[notes,build,showLocal,orphansOnly,filterTag,depthLimit]);
   useEffect(()=>{ pathRef.current=pathResult; },[pathResult]);
 
   // ── Zoek-highlight ────────────────────────────────────────────────────────
@@ -2732,10 +2842,11 @@ const Graph = ({notes, pdfNotes, onSelect, selectedId, localMode=false}) => {
         semEdges.forEach(({from,to,score})=>{
           const a=nodes.find(n=>n.id===from), b=nodes.find(n=>n.id===to);
           if(!a||!b) return;
-          const alpha=Math.round((0.15+score*0.5)*255).toString(16).padStart(2,"0");
+          const alpha=(0.15+score*0.5).toFixed(2);
           ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);
           ctx.setLineDash([2/v.scale,6/v.scale]);
-          ctx.strokeStyle="#d787ff"+alpha; ctx.lineWidth=(0.8+score*1.2)/v.scale;
+          ctx.strokeStyle=`rgba(215,135,255,${alpha})`;
+          ctx.lineWidth=(0.8+score*1.2)/v.scale;
           ctx.stroke(); ctx.setLineDash([]);
         });
       }
@@ -2759,9 +2870,17 @@ const Graph = ({notes, pdfNotes, onSelect, selectedId, localMode=false}) => {
           const w=(n.edgeWeights||{})[id]||1;
           ctx.beginPath();ctx.moveTo(n.x,n.y);ctx.lineTo(t.x,t.y);
           ctx.setLineDash(dashed?[3/v.scale,5/v.scale]:[]);
-          if(onPath){ ctx.strokeStyle="#eae788"; ctx.lineWidth=3/v.scale; ctx.setLineDash([]); }
-          else if(sel){ ctx.strokeStyle=col; ctx.lineWidth=(1+w*0.4)/v.scale; }
-          else{ ctx.strokeStyle=col+(w>=4?"60":w>=3?"40":"28"); ctx.lineWidth=(0.4+w*0.25)/v.scale; }
+          if(onPath){
+            ctx.strokeStyle="#eae788"; ctx.lineWidth=3/v.scale; ctx.setLineDash([]);
+          } else if(sel){
+            ctx.strokeStyle=col; ctx.lineWidth=(1.5+w*0.5)/v.scale;
+          } else {
+            // Duidelijk zichtbare alpha — verhoogd voor beter contrast
+            const alpha=w>=4?0.75:w>=3?0.60:0.45;
+            const r2=parseInt(col.slice(1,3),16),g2=parseInt(col.slice(3,5),16),b2=parseInt(col.slice(5,7),16);
+            ctx.strokeStyle=`rgba(${r2},${g2},${b2},${alpha})`;
+            ctx.lineWidth=(0.8+w*0.4)/v.scale;
+          }
           ctx.stroke(); ctx.setLineDash([]);
         };
         n.links.forEach(l=>drawEdge(l,W.blue,false));
@@ -2908,7 +3027,7 @@ const Graph = ({notes, pdfNotes, onSelect, selectedId, localMode=false}) => {
     };
     afRef.current=requestAnimationFrame(tick);
     return()=>cancelAnimationFrame(afRef.current);
-  },[notes,pdfNotes,selectedId,tagColors,hubMode,communityMode,pathFrom,pathTo,searchQ,scale]);
+  },[notes,selectedId,tagColors,hubMode,communityMode,pathFrom,pathTo,searchQ,scale]);
 
   // ── Node under cursor (world coords) ─────────────────────────────────────
   const nodeAt=(sx,sy)=>{
@@ -3058,6 +3177,43 @@ const Graph = ({notes, pdfNotes, onSelect, selectedId, localMode=false}) => {
         },"1:1"),
         React.createElement("span",{style:{fontSize:"11px",color:W.fgDim,alignSelf:"center",paddingLeft:"2px"}},
           `${Math.round(viewRef.current.scale*100)}%`)
+      ),
+
+      // Cleanup knoppen
+      onUpdateNote && React.createElement("div",{style:{marginTop:"4px",display:"flex",flexDirection:"column",gap:"4px"}},
+        React.createElement("button",{
+          onClick: cleanupBrokenLinks,
+          title:"Verwijder [[links]] naar niet-bestaande notities",
+          style:{
+            background:"rgba(229,120,109,0.08)",
+            border:"1px solid rgba(229,120,109,0.2)",
+            color: cleanupMsg.startsWith("✓") ? W.comment : "#e5786d",
+            borderRadius:"4px", padding:"4px 9px",
+            fontSize:"11px", cursor:"pointer", textAlign:"left",
+          }
+        }, cleanupMsg || "🧹 Gebroken links opruimen"),
+        React.createElement("button",{
+          onClick: cleanupEmptyNotes,
+          title:"Zoek en verwijder lege notities (geen titel, geen inhoud)",
+          style:{
+            background: emptyMsg.startsWith("⚠") ? "rgba(234,231,136,0.08)" : "rgba(229,120,109,0.08)",
+            border:`1px solid ${emptyMsg.startsWith("⚠") ? "rgba(234,231,136,0.3)" : "rgba(229,120,109,0.2)"}`,
+            color: emptyMsg.startsWith("✓") ? W.comment : emptyMsg.startsWith("⚠") ? W.yellow : "#e5786d",
+            borderRadius:"4px", padding:"4px 9px",
+            fontSize:"11px", cursor:"pointer", textAlign:"left",
+          }
+        }, emptyMsg || "🗑 Lege notities verwijderen"),
+        React.createElement("button",{
+          onClick: deleteOrphans,
+          title:"Verwijder wezen-notities — geen links naar of van andere notities",
+          style:{
+            background: orphanMsg.startsWith("⚠") ? "rgba(234,231,136,0.08)" : "rgba(229,120,109,0.08)",
+            border:`1px solid ${orphanMsg.startsWith("⚠") ? "rgba(234,231,136,0.3)" : "rgba(229,120,109,0.2)"}`,
+            color: orphanMsg.startsWith("✓") ? W.comment : orphanMsg.startsWith("⚠") ? W.yellow : "#e5786d",
+            borderRadius:"4px", padding:"4px 9px",
+            fontSize:"11px", cursor:"pointer", textAlign:"left",
+          }
+        }, orphanMsg || "🔗 Wezen-notities verwijderen")
       ),
 
       // Tip
@@ -3392,7 +3548,7 @@ const MODEL_COLOR = (m) => {
   return o ? (PROVIDER_COLOR[o.provider] || "#e3e0d7") : "#9fca56";
 };
 
-const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, onAutoSummarize, onDeletePdf, onPasteToNote=null, onAddNote=null}) => {
+const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, onAutoSummarize, onDeletePdf, onPasteToNote=null, onAddNote=null, notes=[]}) => {
   const [pdfDoc,     setPdfDoc]     = useState(null);
   const [pdfFile,    setPdfFile]    = useState(null);
   const [pageNum,    setPageNum]    = useState(1);   // huidige zichtbare pagina (voor annotaties)
@@ -3558,6 +3714,23 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
 
   const onFileInput=async(e)=>{
     const file=e.target.files[0]; if(!file||!pdfjsReady) return;
+    e.target.value = ""; // reset zodat hetzelfde bestand opnieuw geselecteerd kan worden
+
+    // Duplicate check: kijk of bestandsnaam al in een notitie voorkomt
+    const fname = file.name;
+    const dupNote = notes.find(n =>
+      n.content && (
+        n.content.includes(`[[pdf:${fname}]]`) ||
+        n.content.includes(`📄 **Bron:** [[pdf:${fname}]]`)
+      )
+    );
+    if (dupNote) {
+      const ok = window.confirm(
+        `"${fname}" is al eerder geïmporteerd in notitie:\n"${dupNote.title||dupNote.id}"\n\nToch opnieuw uploaden?`
+      );
+      if (!ok) return;
+    }
+
     let savedName=file.name;
     setSummarizeErr(null);
     try{
@@ -10230,10 +10403,12 @@ const App = () => {
               },
             }));
           if(t==="graph") return React.createElement("div",{style:{flex:1,overflow:"hidden"}},
-            React.createElement(Graph,{notes,pdfNotes,
-              onSelect:id=>{setSelId(id);setTab("notes");},selectedId:selId}));
+            React.createElement(Graph,{notes,
+              onSelect:id=>{setSelId(id);setTab("notes");},selectedId:selId,
+              onUpdateNote:async(note)=>{ await NoteStore.save(note); setNotes([...NoteStore.getAll()]); }}));
           if(t==="pdf") return React.createElement("div",{style:{flex:1,overflow:"hidden"}},
             React.createElement(PDFViewer,{pdfNotes,setPdfNotes,allTags,serverPdfs,
+              notes,
               onRefreshPdfs:refreshPdfs,
               onAddNote:async(note)=>{ await NoteStore.save(note); setNotes([...NoteStore.getAll()]); },
               onDeletePdf:async(fname)=>{
@@ -10270,6 +10445,7 @@ const App = () => {
               onAddNote:async(note)=>{ await NoteStore.save(note); setNotes([...NoteStore.getAll()]); }}));
           if(t==="import") return React.createElement("div",{style:{flex:1,overflow:"hidden"}},
             React.createElement(WebImporter,{llmModel,allTags,
+              notes,
               onRefreshImages: refreshImages,
               addJob, updateJob,
               importPreview, setImportPreview,
@@ -10329,6 +10505,7 @@ const App = () => {
           const renderRightTab = (t) => {
             if(t==="pdf") return React.createElement("div",{style:{flex:1,overflow:"hidden"}},
               React.createElement(PDFViewer,{pdfNotes,setPdfNotes,allTags,serverPdfs,
+                notes,
                 onPasteToNote: handlePasteToNote,
                 onRefreshPdfs:refreshPdfs,
                 onAddNote:async(note)=>{ await NoteStore.save(note); setNotes([...NoteStore.getAll()]); },

@@ -14,7 +14,7 @@
 //   setImportPreview  fn
 
 const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, addJob, updateJob,
-                      importPreview, setImportPreview}) => {
+                      importPreview, setImportPreview, notes=[]}) => {
   const { useState, useRef, useCallback, useEffect } = React;
 
   // ── Alle state bovenaan (hooks volgorde mag niet variëren) ────────────────
@@ -32,8 +32,28 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, addJob, upd
   const [saved,          setSaved]          = useState(false);
   const [selectedImages, setSelectedImages] = useState(new Set());
   const [aiTagsLoading,  setAiTagsLoading]  = useState(false);
+  const [dupNote,        setDupNote]        = useState(null); // bestaande notitie met zelfde URL
   const urlRef      = useRef(null);
   const prevPreview = useRef(importPreview);
+
+  // ── Duplicate-check helper ─────────────────────────────────────────────────
+  const findDuplicateUrl = useCallback((checkUrl) => {
+    if (!checkUrl) return null;
+    // Normaliseer: verwijder trailing slash en utm-parameters
+    const norm = u => {
+      try {
+        const p = new URL(u);
+        // Verwijder tracking-parameters
+        ["utm_source","utm_medium","utm_campaign","utm_term","utm_content",
+         "fbclid","gclid","ref","source"].forEach(k => p.searchParams.delete(k));
+        return p.origin + p.pathname.replace(/\/$/,"") + (p.search||"");
+      } catch { return u.replace(/\/$/,""); }
+    };
+    const target = norm(checkUrl);
+    return notes.find(n => n.content && norm(
+      (n.content.match(/\]\((https?:\/\/[^)]+)\)/) || [])[1] || ""
+    ) === target) || null;
+  }, [notes]);
 
 
   // ── initFromPreview helper ─────────────────────────────────────────────────
@@ -63,9 +83,17 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, addJob, upd
 
 
 
-  const doImport = useCallback(() => {
+  const doImport = useCallback((force=false) => {
     const u = url.trim();
     if (!u) return;
+
+    // Duplicate check vóór de import (overslaan als force=true)
+    if (!force) {
+      const dup = findDuplicateUrl(u);
+      if (dup) { setDupNote(dup); setError(null); return; }
+    }
+    setDupNote(null);
+
     setBusy(true); setError(null); setImporting(true);
     setImportPreview(null); setSaved(false);
     setTimeout(() => setBusy(false), 400);
@@ -89,7 +117,7 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, addJob, upd
         updateJob && updateJob(jid,{status:"error", error:e.message});
       }
     })();
-  }, [url, llmModel, onRefreshImages, addJob, updateJob]);
+  }, [url, llmModel, onRefreshImages, addJob, updateJob, findDuplicateUrl]);
 
   const saveNote = useCallback(async () => {
     if (!importPreview) return;
@@ -123,7 +151,7 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, addJob, upd
     setUrl(""); setImportPreview(null);
     setEditMd(""); setEditTitle(""); setEditSummary("");
     setTags([]); setError(null); setSaved(false); setImporting(false);
-    setSelectedImages(new Set());
+    setSelectedImages(new Set()); setDupNote(null);
     setTimeout(()=>urlRef.current?.focus(), 50);
   };
 
@@ -211,7 +239,37 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, addJob, upd
               error && React.createElement("div", {style:{color:W.orange,fontSize:"14px",
                 background:"rgba(229,120,109,0.08)",border:`1px solid rgba(229,120,109,0.25)`,
                 borderRadius:"6px",padding:"10px 16px",maxWidth:"560px",width:"100%"}},
-                "⚠ "+error))
+                "⚠ "+error),
+
+              // Duplicate-melding
+              dupNote && React.createElement("div", {style:{
+                maxWidth:"560px", width:"100%",
+                background:"rgba(234,231,136,0.07)",
+                border:"1px solid rgba(234,231,136,0.3)",
+                borderRadius:"6px", padding:"12px 16px",
+                display:"flex", flexDirection:"column", gap:"8px",
+              }},
+                React.createElement("div", {style:{fontSize:"14px",color:W.yellow,fontWeight:"600"}},
+                  "⚠ Al geïmporteerd"),
+                React.createElement("div", {style:{fontSize:"13px",color:W.fgMuted}},
+                  "Deze URL staat al in notitie: ",
+                  React.createElement("strong", {style:{color:W.fg}}, dupNote.title||dupNote.id)
+                ),
+                React.createElement("div", {style:{display:"flex",gap:"8px",flexWrap:"wrap"}},
+                  React.createElement("button", {
+                    onClick: () => { setDupNote(null); doImport(true); },
+                    style:{background:"rgba(234,231,136,0.12)",border:"1px solid rgba(234,231,136,0.3)",
+                           color:W.yellow,borderRadius:"5px",padding:"5px 14px",
+                           fontSize:"13px",cursor:"pointer"}
+                  }, "↺ Toch opnieuw importeren"),
+                  React.createElement("button", {
+                    onClick: () => setDupNote(null),
+                    style:{background:"none",border:`1px solid ${W.splitBg}`,
+                           color:W.fgMuted,borderRadius:"5px",padding:"5px 12px",
+                           fontSize:"13px",cursor:"pointer"}
+                  }, "Annuleren")
+                )
+              ))
       ),
 
       // ── Preview na succesvolle import ───────────────────────────────────────
