@@ -10,6 +10,42 @@ from socketserver import ThreadingMixIn
 from urllib.parse import urlparse, unquote
 import argparse
 
+# ── Automatisch installeren van optionele PDF-pakketten ───────────────────────
+def _ensure_pdf_packages():
+    """Installeer pypdf, pikepdf, pdfminer.six en python-docx als ze ontbreken."""
+    needed = []
+    try: import pypdf
+    except ImportError: needed.append("pypdf")
+    try: import pikepdf
+    except ImportError: needed.append("pikepdf")
+    try: import pdfminer
+    except ImportError: needed.append("pdfminer.six")
+    try: import docx
+    except ImportError: needed.append("python-docx")
+    if needed:
+        print(f"[setup] Installeren: {', '.join(needed)} ...", flush=True)
+        import subprocess
+        result = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--quiet",
+             "--break-system-packages"] + needed,
+            capture_output=True, text=True
+        )
+        if result.returncode == 0:
+            print(f"[setup] ✓ Geïnstalleerd: {', '.join(needed)}", flush=True)
+        else:
+            # Probeer zonder --break-system-packages (virtualenv)
+            result2 = subprocess.run(
+                [sys.executable, "-m", "pip", "install", "--quiet"] + needed,
+                capture_output=True, text=True
+            )
+            if result2.returncode == 0:
+                print(f"[setup] ✓ Geïnstalleerd (venv): {', '.join(needed)}", flush=True)
+            else:
+                print(f"[setup] ⚠ Installatie mislukt: {result2.stderr[:200]}", flush=True)
+                print(f"[setup]   Handmatig: pip install {' '.join(needed)}", flush=True)
+
+_ensure_pdf_packages()
+
 DEFAULT_VAULT = Path.home() / "Zettelkasten"
 STATIC_DIR    = Path(__file__).parent / "static"
 VENDOR_DIR    = STATIC_DIR / "vendor"
@@ -83,26 +119,35 @@ class VaultManager:
     def _note_path(self, nid): return self.notes_dir / f"{nid}.md"
     def _serialize_note(self, note):
         tags = json.dumps(note.get("tags",[]))
-        return (f"---\nid: {note['id']}\ntitle: {note['title']}\ntags: {tags}\n"
-                f"created: {note.get('created',datetime.now().isoformat())}\n"
-                f"modified: {note.get('modified',datetime.now().isoformat())}\n---\n\n"
-                + note.get("content",""))
+        fm  = f"---\nid: {note['id']}\ntitle: {note['title']}\ntags: {tags}\n"
+        fm += f"created: {note.get('created',datetime.now().isoformat())}\n"
+        fm += f"modified: {note.get('modified',datetime.now().isoformat())}\n"
+        if note.get("sourceUrl"):   fm += f"sourceUrl: {note['sourceUrl']}\n"
+        if note.get("importedAt"):  fm += f"importedAt: {note['importedAt']}\n"
+        if note.get("isRead"):      fm += f"isRead: true\n"
+        fm += "---\n\n"
+        return fm + note.get("content","")
+
     def _parse_note(self, path):
         try: text = path.read_text(encoding="utf-8")
         except: return None
-        note = {"id":path.stem,"title":path.stem,"tags":[],"content":"","created":"","modified":""}
+        note = {"id":path.stem,"title":path.stem,"tags":[],"content":"",
+                "created":"","modified":"","sourceUrl":"","importedAt":"","isRead":False}
         if text.startswith("---"):
             parts = text.split("---",2)
             if len(parts)>=3:
                 note["content"] = parts[2].lstrip("\n")
                 for line in parts[1].strip().splitlines():
-                    if   line.startswith("id:"):       note["id"]      = line[3:].strip()
-                    elif line.startswith("title:"):    note["title"]   = line[6:].strip()
+                    if   line.startswith("id:"):         note["id"]         = line[3:].strip()
+                    elif line.startswith("title:"):      note["title"]      = line[6:].strip()
                     elif line.startswith("tags:"):
                         try: note["tags"] = json.loads(line[5:].strip())
                         except: note["tags"] = []
-                    elif line.startswith("created:"):  note["created"] = line[8:].strip()
-                    elif line.startswith("modified:"): note["modified"]= line[9:].strip()
+                    elif line.startswith("created:"):    note["created"]    = line[8:].strip()
+                    elif line.startswith("modified:"):   note["modified"]   = line[9:].strip()
+                    elif line.startswith("sourceUrl:"):  note["sourceUrl"]  = line[10:].strip()
+                    elif line.startswith("importedAt:"): note["importedAt"] = line[11:].strip()
+                    elif line.startswith("isRead:"):     note["isRead"]     = line[7:].strip().lower() == "true"
         else: note["content"] = text
         return note
     def load_notes(self):
@@ -178,44 +223,98 @@ class VaultManager:
         p=self.pdf_dir/filename; return p if p.exists() else None
     def extract_pdf_text(self, filename, max_chars=12000):
         """Extraheer tekst uit PDF — eerst puur stdlib, dan optionele packages.
-        Als personal_use ingeschakeld is worden extractie-restricties genegeerd."""
-        p=self.get_pdf_path(filename)
+        Als personal_use ingeschakeld is worden DRM-restricties genegeerd via pikepdf/qpdf."""
+        p = self.get_pdf_path(filename)
         if not p: return ""
 
-        cfg = self.get_config()
+        cfg          = self.get_config()
         personal_use = cfg.get("pdf_personal_use", False)
+
+        # ── Personal use: pikepdf of qpdf bypassen DRM-permissions ───────────
+        if personal_use:
+            import tempfile, os as _os
+
+            # Methode A: pikepdf ontsleutelt → pypdf extraheert tekst
+            try:
+                import pikepdf, pypdf
+                with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tf:
+                    tmp_path = tf.name
+                with pikepdf.open(str(p), password="",
+                                  allow_overwriting_input=False) as pdf:
+                    pdf.save(tmp_path)
+                reader = pypdf.PdfReader(tmp_path)
+                text = "\n\n".join(pg.extract_text() or "" for pg in reader.pages[:40])
+                try: _os.unlink(tmp_path)
+                except: pass
+                print(f"[extract-A pikepdf] {len(text.strip())} tekens", flush=True)
+                if len(text.strip()) > 100:
+                    return text[:max_chars]
+            except Exception as e:
+                print(f"[extract-A pikepdf] fout: {e}", flush=True)
+                try: _os.unlink(tmp_path)
+                except: pass
+
+            # Methode B: qpdf command-line → ontsleuteld PDF → pypdf
+            try:
+                import subprocess, pypdf
+                with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tf:
+                    tmp_path = tf.name
+                r = subprocess.run(
+                    ["qpdf", "--decrypt", "--stream-data=uncompress",
+                     str(p), tmp_path],
+                    capture_output=True, timeout=30)
+                print(f"[extract-B qpdf] returncode={r.returncode} stderr={r.stderr.decode()[:100]}", flush=True)
+                if r.returncode == 0:
+                    reader = pypdf.PdfReader(tmp_path)
+                    text = "\n\n".join(pg.extract_text() or "" for pg in reader.pages[:40])
+                    try: _os.unlink(tmp_path)
+                    except: pass
+                    print(f"[extract-B qpdf→pypdf] {len(text.strip())} tekens", flush=True)
+                    if len(text.strip()) > 100:
+                        return text[:max_chars]
+                try: _os.unlink(tmp_path)
+                except: pass
+            except Exception as e:
+                print(f"[extract-B qpdf] fout: {e}", flush=True)
+                try: _os.unlink(tmp_path)
+                except: pass
 
         # ── Methode 1: pure stdlib (zlib + struct) ────────────────────────────
         try:
             text = self._extract_pdf_stdlib(p.read_bytes(), max_chars)
+            print(f"[extract-1 stdlib] {len(text.strip())} tekens", flush=True)
             if len(text.strip()) > 100:
                 return text
-        except Exception: pass
+        except Exception as e:
+            print(f"[extract-1 stdlib] fout: {e}", flush=True)
 
-        # ── Methode 2: pypdf (optioneel) ──────────────────────────────────────
+        # ── Methode 2: pypdf ──────────────────────────────────────────────────
         try:
             import pypdf
             reader = pypdf.PdfReader(str(p))
-            # Bij personal use: probeer owner-password leeg te laten (laat pypdf zelf oplossen)
             if personal_use and reader.is_encrypted:
                 try: reader.decrypt("")
                 except Exception: pass
             text = "\n\n".join(page.extract_text() or "" for page in reader.pages[:30])
+            print(f"[extract-2 pypdf] {len(text.strip())} tekens, encrypted={reader.is_encrypted}", flush=True)
             if len(text.strip()) > 100: return text[:max_chars]
-        except Exception: pass
+        except Exception as e:
+            print(f"[extract-2 pypdf] fout: {e}", flush=True)
 
-        # ── Methode 3: pdfminer (optioneel) ───────────────────────────────────
+        # ── Methode 3: pdfminer ───────────────────────────────────────────────
         try:
             from pdfminer.high_level import extract_text as pm
-            return (pm(str(p), maxpages=20) or "")[:max_chars]
-        except Exception: pass
+            text = (pm(str(p), maxpages=20) or "")
+            print(f"[extract-3 pdfminer] {len(text.strip())} tekens", flush=True)
+            if len(text.strip()) > 100: return text[:max_chars]
+        except Exception as e:
+            print(f"[extract-3 pdfminer] fout: {e}", flush=True)
 
-        # ── Methode 4: ruwe bytes tekst (personal use fallback) ───────────────
+        # ── Methode 4: ruwe bytes (personal use laatste redmiddel) ────────────
         if personal_use:
             try:
-                raw = p.read_bytes()
-                # Haal leesbare tekst-stukken direct uit de PDF-bytes
                 import re as _re
+                raw = p.read_bytes()
                 chunks = _re.findall(rb'\(([^\\\(\)]{4,200})\)', raw)
                 parts = []
                 for c in chunks:
@@ -225,10 +324,13 @@ class VaultManager:
                             parts.append(t)
                     except: pass
                 text = ' '.join(parts)
+                print(f"[extract-4 rawbytes] {len(text.strip())} tekens", flush=True)
                 if len(text.strip()) > 100:
                     return text[:max_chars]
-            except Exception: pass
+            except Exception as e:
+                print(f"[extract-4 rawbytes] fout: {e}", flush=True)
 
+        print(f"[extract] ALLE methoden faalden voor {p.name}", flush=True)
         return ""
 
     def _extract_pdf_stdlib(self, data: bytes, max_chars=12000) -> str:
@@ -422,6 +524,41 @@ class VaultManager:
         p = Path(abs_path)
         if not p.exists() or not p.is_file(): return ""
         personal_use = self.get_config().get("pdf_personal_use", False)
+
+        # Personal use: pikepdf of qpdf
+        if personal_use:
+            import tempfile, os as _os
+            try:
+                import pikepdf, pypdf
+                with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tf:
+                    tmp = tf.name
+                with pikepdf.open(str(p), password="") as pdf:
+                    pdf.save(tmp)
+                text = "\n\n".join(pg.extract_text() or ""
+                                   for pg in pypdf.PdfReader(tmp).pages[:40])
+                try: _os.unlink(tmp)
+                except: pass
+                if len(text.strip()) > 100: return text[:max_chars]
+            except Exception:
+                try: _os.unlink(tmp)
+                except: pass
+            try:
+                import subprocess, pypdf
+                with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tf:
+                    tmp = tf.name
+                if subprocess.run(["qpdf","--decrypt","--stream-data=uncompress",
+                                   str(p), tmp], capture_output=True, timeout=30).returncode == 0:
+                    text = "\n\n".join(pg.extract_text() or ""
+                                      for pg in pypdf.PdfReader(tmp).pages[:40])
+                    try: _os.unlink(tmp)
+                    except: pass
+                    if len(text.strip()) > 100: return text[:max_chars]
+                try: _os.unlink(tmp)
+                except: pass
+            except Exception:
+                try: _os.unlink(tmp)
+                except: pass
+
         try:
             text = self._extract_pdf_stdlib(p.read_bytes(), max_chars)
             if len(text.strip()) > 100: return text
@@ -1288,7 +1425,7 @@ class ZKHandler(BaseHTTPRequestHandler):
         if p=="/api/api-keys":
             # Geeft terug welke providers geconfigureerd zijn + gemaskeerde waarde voor weergave
             result = {}
-            for pr in ("anthropic","openai","google","openrouter"):
+            for pr in ("anthropic","openai","google","openrouter","mistral"):
                 key = self.vault.get_api_key(pr)
                 result[pr] = {"set": bool(key), "preview": (key[:8]+"…"+key[-4:]) if len(key)>12 else ("●●●●" if key else "")}
             return self._send(200, result)
@@ -1405,17 +1542,17 @@ class ZKHandler(BaseHTTPRequestHandler):
         if p=="/api/llm/describe-image": return self._llm_describe_image()
         if p=="/api/llm/mindmap":        return self._llm_mindmap()
         if p=="/api/import-url":         return self._import_url()
+        if p=="/api/import-docx":        return self._import_docx()
         if p=="/api/ext-pdfs":
             dirs = self._body().get("dirs", [])
             self.vault.set_ext_pdf_dirs(dirs)
             return self._send(200, {"ok": True, "dirs": dirs})
         if p=="/api/api-keys":
             body = self._body()
-            for provider in ("anthropic","openai","google","openrouter"):
+            for provider in ("anthropic","openai","google","openrouter","mistral"):
                 if provider in body:
                     self.vault.set_api_key(provider, body[provider])
-            # Geef terug welke providers een sleutel hebben (zonder de waarde zelf)
-            status = {pr: bool(self.vault.get_api_key(pr)) for pr in ("anthropic","openai","google","openrouter")}
+            status = {pr: bool(self.vault.get_api_key(pr)) for pr in ("anthropic","openai","google","openrouter","mistral")}
             return self._send(200, {"ok": True, "configured": status})
         if p=="/api/vault":
             body=self._body()
@@ -1570,8 +1707,8 @@ class ZKHandler(BaseHTTPRequestHandler):
             return self._send(500, {"error": str(e)})
 
     def _llm_suggest_tags(self):
-        """Stel tags voor bij een notitie. Geeft gewone JSON terug (geen SSE).
-        Ondersteunt Ollama, Anthropic, OpenAI, Google en OpenRouter."""
+        """Stel slimme tags voor bij een notitie — gebruikt bestaande vault-tags semantisch.
+        Geeft gewone JSON terug (geen SSE)."""
         body        = self._body()
         content     = body.get("content", "").strip()
         model       = body.get("model", "")
@@ -1581,20 +1718,46 @@ class ZKHandler(BaseHTTPRequestHandler):
         if not content or not model:
             return self._send(400, {"error": "content en model zijn vereist"})
 
-        existing = (", ".join(all_tags[:60])) if all_tags else ""
+        # Bouw een frequentie-overzicht van bestaande tags (meest gebruikt = meest relevant)
+        # Haal ook notitie-titels op voor contextuele overlap
+        try:
+            notes = self.vault.load_notes()
+            tag_freq = {}
+            for n in notes:
+                for t in (n.get("tags") or []):
+                    tag_freq[t] = tag_freq.get(t, 0) + 1
+            # Sorteer op frequentie — meest gebruikte tags bovenaan
+            sorted_tags = sorted(tag_freq.items(), key=lambda x: -x[1])
+            top_tags = [t for t, _ in sorted_tags[:80]]
+        except Exception:
+            top_tags = all_tags[:60]
+
+        # Bepaal welke bestaande tags ook echt in de tekst voorkomen (directe match)
+        text_lower = content.lower()
+        matching_tags = [t for t in top_tags
+                         if t.replace("_"," ") in text_lower or t in text_lower][:20]
+
+        existing_str = ", ".join(top_tags[:60]) if top_tags else ""
+        matching_str = ", ".join(matching_tags) if matching_tags else "geen directe overeenkomsten"
+
         prompt = (
-            "Stel maximaal 6 tags voor bij deze Zettelkasten-notitie.\n"
-            "Regels: lowercase, enkelvoud, geen spaties (gebruik underscore), geen #-teken.\n"
-            + (f"Hergebruik bij voorkeur bestaande tags: {existing}\n" if existing else "")
-            + "Antwoord ALLEEN met een JSON-array, bijv: [\"concept\",\"ai\",\"methode\"]\n\n"
-            f"Tekst:\n{content[:1500]}"
+            "Je bent een Zettelkasten-assistent. Stel maximaal 6 tags voor bij de onderstaande tekst.\n\n"
+            "REGELS:\n"
+            "- Alleen lowercase, enkelvoud, geen spaties (gebruik underscore), geen #\n"
+            "- HERGEBRUIK bestaande tags waar mogelijk — dit verbindt notities\n"
+            "- Voeg maximaal 2 nieuwe tags toe als bestaande tags niet passend zijn\n"
+            "- Kies tags op conceptueel niveau (niet te specifiek, niet te breed)\n\n"
+            f"BESTAANDE TAGS IN DE VAULT (meest gebruikt eerst):\n{existing_str}\n\n"
+            f"TAGS DIE DIRECT IN DE TEKST VOORKOMEN (sterke kandidaten):\n{matching_str}\n\n"
+            f"HUIDIGE TAGS VAN DEZE NOTITIE (niet herhalen):\n{', '.join(current) if current else 'geen'}\n\n"
+            "Antwoord ALLEEN met een JSON-array, bijv: [\"concept\",\"ai\",\"methode\"]\n\n"
+            f"TEKST:\n{content[:4000]}"
         )
 
         try:
             text = ""
 
             if model.startswith("claude"):
-                # Anthropic — niet-streaming
                 api_key = self.vault.get_api_key("anthropic")
                 if not api_key:
                     return self._send(401, {"error": "Anthropic API-sleutel niet ingesteld"})
@@ -1603,13 +1766,10 @@ class ZKHandler(BaseHTTPRequestHandler):
                     "messages": [{"role": "user", "content": prompt}]
                 }).encode()
                 req = urllib.request.Request(
-                    "https://api.anthropic.com/v1/messages",
-                    data=payload,
+                    "https://api.anthropic.com/v1/messages", data=payload,
                     headers={"Content-Type": "application/json",
                              "x-api-key": api_key,
-                             "anthropic-version": "2023-06-01"},
-                    method="POST"
-                )
+                             "anthropic-version": "2023-06-01"}, method="POST")
                 with urllib.request.urlopen(req, timeout=30) as r:
                     d = json.loads(r.read())
                 text = d.get("content", [{}])[0].get("text", "")
@@ -1618,15 +1778,12 @@ class ZKHandler(BaseHTTPRequestHandler):
                 api_key = self.vault.get_api_key("google")
                 if not api_key:
                     return self._send(401, {"error": "Google API-sleutel niet ingesteld"})
-                gem_msgs = [
-                    {"role": "user",  "parts": [{"text": prompt}]},
-                ]
                 payload = json.dumps({
-                    "contents": gem_msgs,
+                    "contents": [{"role": "user", "parts": [{"text": prompt}]}],
                     "generationConfig": {"maxOutputTokens": 200, "temperature": 0.2}
                 }).encode()
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
-                req = urllib.request.Request(url, data=payload,
+                url2 = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+                req = urllib.request.Request(url2, data=payload,
                     headers={"Content-Type": "application/json"}, method="POST")
                 with urllib.request.urlopen(req, timeout=30) as r:
                     d = json.loads(r.read())
@@ -1641,17 +1798,14 @@ class ZKHandler(BaseHTTPRequestHandler):
                     "messages": [{"role": "user", "content": prompt}]
                 }).encode()
                 req = urllib.request.Request(
-                    "https://api.openai.com/v1/chat/completions",
-                    data=payload,
+                    "https://api.openai.com/v1/chat/completions", data=payload,
                     headers={"Content-Type": "application/json",
-                             "Authorization": "Bearer " + api_key},
-                    method="POST"
-                )
+                             "Authorization": "Bearer " + api_key}, method="POST")
                 with urllib.request.urlopen(req, timeout=30) as r:
                     d = json.loads(r.read())
                 text = d.get("choices", [{}])[0].get("message", {}).get("content", "")
 
-            elif "/" in model:
+            elif "/" in model:  # OpenRouter
                 api_key = self.vault.get_api_key("openrouter")
                 if not api_key:
                     return self._send(401, {"error": "OpenRouter API-sleutel niet ingesteld"})
@@ -1660,20 +1814,33 @@ class ZKHandler(BaseHTTPRequestHandler):
                     "messages": [{"role": "user", "content": prompt}]
                 }).encode()
                 req = urllib.request.Request(
-                    "https://openrouter.ai/api/v1/chat/completions",
-                    data=payload,
+                    "https://openrouter.ai/api/v1/chat/completions", data=payload,
                     headers={"Content-Type": "application/json",
                              "Authorization": "Bearer " + api_key,
                              "HTTP-Referer": "http://localhost:8899",
-                             "X-Title": "Zettelkasten"},
-                    method="POST"
-                )
+                             "X-Title": "Zettelkasten"}, method="POST")
+                with urllib.request.urlopen(req, timeout=30) as r:
+                    d = json.loads(r.read())
+                text = d.get("choices", [{}])[0].get("message", {}).get("content", "")
+
+            elif model.startswith("mistral") or model.startswith("magistral") or model.startswith("ministral"):
+                api_key = self.vault.get_api_key("mistral")
+                if not api_key:
+                    return self._send(401, {"error": "Mistral API-sleutel niet ingesteld"})
+                payload = json.dumps({
+                    "model": model, "max_tokens": 200,
+                    "messages": [{"role": "user", "content": prompt}]
+                }).encode()
+                req = urllib.request.Request(
+                    "https://api.mistral.ai/v1/chat/completions", data=payload,
+                    headers={"Content-Type": "application/json",
+                             "Authorization": "Bearer " + api_key}, method="POST")
                 with urllib.request.urlopen(req, timeout=30) as r:
                     d = json.loads(r.read())
                 text = d.get("choices", [{}])[0].get("message", {}).get("content", "")
 
             else:
-                # Ollama — niet-streaming
+                # Lokaal Ollama
                 payload = json.dumps({
                     "model": self._best_local_model(model),
                     "messages": [{"role": "user", "content": prompt}],
@@ -1681,37 +1848,26 @@ class ZKHandler(BaseHTTPRequestHandler):
                     "options": {"temperature": 0.2, "num_predict": 200}
                 }).encode()
                 req = urllib.request.Request(
-                    self._ollama() + "/api/chat",
-                    data=payload,
-                    headers={"Content-Type": "application/json"},
-                    method="POST"
-                )
-                with urllib.request.urlopen(req, timeout=45) as r:
+                    self._ollama() + "/api/chat", data=payload,
+                    headers={"Content-Type": "application/json"}, method="POST")
+                with urllib.request.urlopen(req, timeout=60) as r:
                     d = json.loads(r.read())
-                text = (d.get("message", {}).get("content", "") or "").strip()
+                text = d.get("message", {}).get("content", "")
 
-            # Parseer JSON-array uit de response
-            text = text.replace("```json", "").replace("```", "").strip()
-            match = __import__("re").search(r"\[[\s\S]*?\]", text)
-            if not match:
-                return self._send(200, {"tags": [], "raw": text})
-            tags = json.loads(match.group())
-            tags = [
-                str(t).strip().lower().replace(" ", "_").lstrip("#")
-                for t in tags if str(t).strip()
-            ]
+            # Extraheer JSON-array uit de response
+            import re as _re2
+            m = _re2.search(r'\[.*?\]', text, _re2.DOTALL)
+            if not m:
+                return self._send(200, {"tags": []})
+            tags = json.loads(m.group(0))
+            # Valideer en normaliseer
+            tags = [str(t).strip().lower().replace(" ","_").lstrip("#")
+                    for t in tags if isinstance(t,str) and t.strip()]
             tags = [t for t in tags if t and t not in current][:8]
             return self._send(200, {"tags": tags})
 
-        except urllib.error.HTTPError as e:
-            try:
-                detail = json.loads(e.read().decode()).get("error", {})
-                msg = detail.get("message", str(e)) if isinstance(detail, dict) else str(detail)
-            except: msg = str(e)
-            return self._send(e.code, {"error": msg})
         except Exception as e:
             return self._send(500, {"error": str(e)})
-
     def _build_context(self, body):
         """Bouw kenniscontext op vanuit notities, PDFs en afbeeldingen.
         Bewaakt een totaal-budget van ~60.000 tekens om 400-fouten te voorkomen."""
@@ -1751,14 +1907,14 @@ class ZKHandler(BaseHTTPRequestHandler):
                     lines = ['- "'+a["text"]+'"'+(("\n  Noot: "+a["note"]) if a.get("note") else "") for a in pa[:20]]
                     if not add(f"## PDF annotaties: {pn}\n"+"\n".join(lines)):
                         break
-                txt = self.vault.extract_pdf_text(pn, 4000)
+                txt = self.vault.extract_pdf_text(pn, 4000) or ""
                 if txt.strip():
                     if not add(f"## PDF tekst: {pn}\n{txt}"):
                         break
 
         if ctx_ext and used < BUDGET:
             for ep in ctx_ext[:4]:
-                txt  = self.vault.extract_pdf_text_from_path(ep, 4000)
+                txt  = self.vault.extract_pdf_text_from_path(ep, 4000) or ""
                 name = Path(ep).name
                 if not add(f"## Extern PDF: {name}\n"+(txt.strip() or "(geen tekst)")):
                     break
@@ -1792,8 +1948,11 @@ class ZKHandler(BaseHTTPRequestHandler):
             self._stream_google(raw_model, system, messages)
         elif raw_model.startswith("gpt") or raw_model.startswith("o1") or raw_model.startswith("o3") or raw_model.startswith("o4"):
             self._stream_openai(raw_model, system, messages)
-        elif "/" in raw_model:  # OpenRouter formaat: "org/model"
+        elif "/" in raw_model:  # OpenRouter formaat: "org/model" (incl. Kimi)
             self._stream_openrouter(raw_model, system, messages)
+        elif (raw_model.startswith("mistral") or raw_model.startswith("magistral")
+              or raw_model.startswith("ministral")):
+            self._stream_mistral(raw_model, system, messages)
         else:
             self._stream_ollama(self._best_local_model(raw_model), system, messages)
 
@@ -1976,6 +2135,9 @@ class ZKHandler(BaseHTTPRequestHandler):
             self._stream_openai(model, system, messages)
         elif "/" in model:
             self._stream_openrouter(model, system, messages)
+        elif (model.startswith("mistral") or model.startswith("magistral")
+              or model.startswith("ministral")):
+            self._stream_mistral(model, system, messages)
         else:
             self._stream_ollama(self._best_local_model(model), system, messages)
 
@@ -2178,6 +2340,52 @@ class ZKHandler(BaseHTTPRequestHandler):
             try: self.wfile.write(("data: "+json.dumps({"error":"OpenRouter: "+str(e)})+"\n\n").encode()); self.wfile.flush()
             except: pass
 
+    def _stream_mistral(self, model, system, messages):
+        """Streaming via Mistral AI API (OpenAI-compatibel SSE formaat)."""
+        api_key = self.vault.get_api_key("mistral")
+        if not api_key:
+            try: self.wfile.write(("data: "+json.dumps({"error":"Mistral API-sleutel niet ingesteld — voeg toe via ⚙ Instellingen → API-sleutels"})+"\n\n").encode()); self.wfile.flush()
+            except: pass
+            return
+        msgs = [{"role":"system","content":system}] + \
+               [{"role":m["role"],"content":(m.get("content") or "").strip()}
+                for m in messages if m.get("role") in ("user","assistant") and (m.get("content") or "").strip()]
+        if len(msgs) < 2:
+            msgs.append({"role":"user","content":"(Vervolg)"})
+        payload = {"model":model,"messages":msgs,"stream":True,"max_tokens":4096}
+        try:
+            req = urllib.request.Request("https://api.mistral.ai/v1/chat/completions",
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type":"application/json",
+                         "Authorization":"Bearer "+api_key},
+                method="POST")
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                for line in resp:
+                    line = line.strip()
+                    if not line: continue
+                    try:
+                        ls = line.decode("utf-8") if isinstance(line,bytes) else line
+                        if ls.startswith("data: "):
+                            data_s = ls[6:]
+                            if data_s == "[DONE]":
+                                self.wfile.write(("data: "+json.dumps({"delta":"","done":True})+"\n\n").encode("utf-8"))
+                                self.wfile.flush(); break
+                            ev = json.loads(data_s)
+                            delta = ev.get("choices",[{}])[0].get("delta",{}).get("content","") or ""
+                            self.wfile.write(("data: "+json.dumps({"delta":delta,"done":False})+"\n\n").encode("utf-8"))
+                            self.wfile.flush()
+                    except: pass
+        except urllib.error.HTTPError as e:
+            try:
+                body = e.read().decode("utf-8","replace")
+                detail = json.loads(body).get("message", body[:300])
+            except: detail = str(e)
+            try: self.wfile.write(("data: "+json.dumps({"error":f"Mistral {e.code}: {detail}"})+"\n\n").encode()); self.wfile.flush()
+            except: pass
+        except Exception as e:
+            try: self.wfile.write(("data: "+json.dumps({"error":"Mistral: "+str(e)})+"\n\n").encode()); self.wfile.flush()
+            except: pass
+
     def _stream_ollama(self, model, system, messages):
         """Streaming via lokale Ollama."""
         payload={"model":model,"messages":[{"role":"system","content":system}]+messages,"stream":True}
@@ -2245,81 +2453,333 @@ class ZKHandler(BaseHTTPRequestHandler):
         return "llama3.2"  # ultieme fallback
 
     def _llm_summarize_pdf(self):
-        body=self._body()
-        fname=body.get("filename",""); model=body.get("model","")
+        body  = self._body()
+        fname = body.get("filename","")
+        model = body.get("model","")
         if not fname: return self._send(400,{"error":"filename vereist"})
-        # Kies automatisch het beste beschikbare lokale model
-        model = self._best_local_model(model)
 
-        # Probeer eerst tekstextractie — ruim genoeg voor grote documenten
-        text=self.vault.extract_pdf_text(fname,40000)
+        cfg          = self.vault.get_config()
+        personal_use = cfg.get("pdf_personal_use", False)
 
-        # Als tekst beschikbaar: stuur als tekst-prompt
+        # ── Stap 1: tekst extraheren (personal_use wordt intern afgehandeld) ──
+        text = self.vault.extract_pdf_text(fname, 40000) or ""
+        print(f"[PDF-samenvatting] '{fname}': {len(text)} tekens geëxtraheerd (voor filter), "
+              f"personal_use={personal_use}, model={model}", flush=True)
+
+        # ── Stap 1b: verwijder DRM-watermerken en disclaimers uit de tekst ──────
+        if text:
+            import re as _re2
+
+            # Stap A: verwijder e-mailadressen ZELF (niet de hele regel)
+            text = _re2.sub(
+                r'[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}',
+                '', text
+            )
+
+            # Stap B: verwijder alleen expliciete disclaimer-zinnen
+            # BELANGRIJK: patronen zijn zo specifiek mogelijk om inhoudstekst te sparen
+            DISCLAIMER_PATTERNS = [
+                r'(?i)[^\n]*(enkel|alleen|uitsluitend)\s+(bedoeld|bestemd)\s+voor[^\n]*\n?',
+                r'(?i)[^\n]*bestemd\s+voor\s+persoonli[jk][^\n]*\n?',
+                r'(?i)[^\n]*bedoeld\s+voor\s+persoonli[jk][^\n]*\n?',
+                r'(?i)[^\n]*beperkt\s+tot\s+persoonli[jk][^\n]*\n?',
+                r'(?i)[^\n]*voor\s+persoonli[jk]\s+gebruik\s+door[^\n]*\n?',
+                r'(?i)[^\n]*geen\s+toegang\s+verleend[^\n]*\n?',
+                r'(?i)[^\n]*anderen\s+dan\s+de\s+aangegeven[^\n]*\n?',
+                r'(?i)[^\n]*niet\s+(verder\s+)?verspreid[^\n]*\n?',
+                r'(?i)[^\n]*personal\s+use\s+only[^\n]*\n?',
+                r'(?i)[^\n]*licensed?\s+(to|for|aan)\s+\w[^\n]*\n?',
+            ]
+            for pat in DISCLAIMER_PATTERNS:
+                text = _re2.sub(pat, '\n', text)
+
+            # Opschonen
+            text = _re2.sub(r'[ \t]{2,}', ' ', text)
+            text = _re2.sub(r'\n{3,}', '\n\n', text)
+            text = text.strip()
+
+        print(f"[PDF-samenvatting] '{fname}': {len(text)} tekens na disclaimer-filter", flush=True)
+
+        # ── Stap 3: bepaal welk model gebruikt wordt ──────────────────────────
+        # Online modellen worden direct gebruikt, lokaal via Ollama
+        is_cloud = any(model.startswith(p) for p in
+                       ("claude","gpt","gemini","o1","o3","o4",
+                        "mistral","magistral","ministral")) or "/" in model
+
+        def call_llm(prompt, images=None):
+            """Roep het juiste model aan — cloud of lokaal. Gooit Exception bij fout."""
+            import urllib.request as _r2
+            import urllib.error as _e2
+
+            def _http_error_msg(e):
+                """Lees foutdetail uit HTTP-response body."""
+                try:
+                    body = e.read().decode("utf-8","replace")
+                    detail = json.loads(body)
+                    # Anthropic
+                    if "error" in detail:
+                        return detail["error"].get("message", body[:200])
+                    # OpenAI / Gemini
+                    if "message" in detail:
+                        return detail["message"]
+                    return body[:200]
+                except Exception:
+                    return str(e)
+
+            if is_cloud and model.startswith("claude"):
+                api_key = self.vault.get_api_key("anthropic")
+                if not api_key:
+                    raise Exception("Geen Anthropic API-sleutel ingesteld. Voeg deze toe via Instellingen → API-sleutels.")
+                content = [{"type":"text","text":prompt}]
+                if images:
+                    for img_b64 in images[:3]:
+                        content.insert(0,{"type":"image","source":{
+                            "type":"base64","media_type":"image/png","data":img_b64}})
+                payload = json.dumps({"model":model,"max_tokens":4000,
+                                      "messages":[{"role":"user","content":content}]}).encode()
+                req = _r2.Request("https://api.anthropic.com/v1/messages", data=payload,
+                    headers={"Content-Type":"application/json","x-api-key":api_key,
+                             "anthropic-version":"2023-06-01"}, method="POST")
+                try:
+                    with _r2.urlopen(req, timeout=90) as r2:
+                        d2 = json.loads(r2.read())
+                    result = d2.get("content",[{}])[0].get("text","")
+                    if not result: raise Exception("Claude gaf een lege reactie terug.")
+                    return result
+                except _e2.HTTPError as e:
+                    raise Exception(f"Claude API-fout {e.code}: {_http_error_msg(e)}")
+                except _e2.URLError as e:
+                    raise Exception(f"Claude niet bereikbaar: {e.reason}")
+
+            elif is_cloud and (model.startswith("gpt") or model.startswith("o")):
+                api_key = self.vault.get_api_key("openai")
+                if not api_key:
+                    raise Exception("Geen OpenAI API-sleutel ingesteld. Voeg deze toe via Instellingen → API-sleutels.")
+                content = [{"type":"text","text":prompt}]
+                if images:
+                    for img_b64 in images[:3]:
+                        content.insert(0,{"type":"image_url","image_url":{
+                            "url":f"data:image/png;base64,{img_b64}"}})
+                payload = json.dumps({"model":model,"max_tokens":4000,
+                                      "messages":[{"role":"user","content":content}]}).encode()
+                req = _r2.Request("https://api.openai.com/v1/chat/completions", data=payload,
+                    headers={"Content-Type":"application/json","Authorization":"Bearer "+api_key},
+                    method="POST")
+                try:
+                    with _r2.urlopen(req, timeout=90) as r2:
+                        d2 = json.loads(r2.read())
+                    result = d2.get("choices",[{}])[0].get("message",{}).get("content","")
+                    if not result: raise Exception("OpenAI gaf een lege reactie terug.")
+                    return result
+                except _e2.HTTPError as e:
+                    raise Exception(f"OpenAI API-fout {e.code}: {_http_error_msg(e)}")
+                except _e2.URLError as e:
+                    raise Exception(f"OpenAI niet bereikbaar: {e.reason}")
+
+            elif is_cloud and model.startswith("gemini"):
+                api_key = self.vault.get_api_key("google")
+                if not api_key:
+                    raise Exception("Geen Google API-sleutel ingesteld. Voeg deze toe via Instellingen → API-sleutels.")
+                parts_list = [{"text":prompt}]
+                if images:
+                    for img_b64 in images[:3]:
+                        parts_list.insert(0,{"inlineData":{"mimeType":"image/png","data":img_b64}})
+                payload = json.dumps({"contents":[{"role":"user","parts":parts_list}],
+                                      "generationConfig":{"maxOutputTokens":2000}}).encode()
+                url2 = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+                req = _r2.Request(url2, data=payload,
+                    headers={"Content-Type":"application/json"}, method="POST")
+                try:
+                    with _r2.urlopen(req, timeout=90) as r2:
+                        d2 = json.loads(r2.read())
+                    result = d2.get("candidates",[{}])[0].get("content",{}).get("parts",[{}])[0].get("text","")
+                    if not result: raise Exception("Gemini gaf een lege reactie terug.")
+                    return result
+                except _e2.HTTPError as e:
+                    raise Exception(f"Gemini API-fout {e.code}: {_http_error_msg(e)}")
+                except _e2.URLError as e:
+                    raise Exception(f"Gemini niet bereikbaar: {e.reason}")
+
+            elif is_cloud and "/" in model:  # OpenRouter (Kimi, Llama, etc.)
+                api_key = self.vault.get_api_key("openrouter")
+                if not api_key:
+                    raise Exception("Geen OpenRouter API-sleutel ingesteld. Voeg deze toe via Instellingen → API-sleutels.")
+                payload = json.dumps({"model":model,"max_tokens":4000,
+                                      "messages":[{"role":"user","content":prompt}]}).encode()
+                req = _r2.Request("https://openrouter.ai/api/v1/chat/completions", data=payload,
+                    headers={"Content-Type":"application/json","Authorization":"Bearer "+api_key,
+                             "HTTP-Referer":"http://localhost:7842"}, method="POST")
+                try:
+                    with _r2.urlopen(req, timeout=90) as r2:
+                        d2 = json.loads(r2.read())
+                    result = d2.get("choices",[{}])[0].get("message",{}).get("content","")
+                    if not result: raise Exception("OpenRouter gaf een lege reactie terug.")
+                    return result
+                except _e2.HTTPError as e:
+                    raise Exception(f"OpenRouter API-fout {e.code}: {_http_error_msg(e)}")
+                except _e2.URLError as e:
+                    raise Exception(f"OpenRouter niet bereikbaar: {e.reason}")
+
+            elif (model.startswith("mistral") or model.startswith("magistral")
+                  or model.startswith("ministral")):
+                api_key = self.vault.get_api_key("mistral")
+                if not api_key:
+                    raise Exception("Geen Mistral API-sleutel ingesteld. Voeg deze toe via Instellingen → API-sleutels.")
+                payload = json.dumps({"model":model,"max_tokens":4000,
+                                      "messages":[{"role":"user","content":prompt}]}).encode()
+                req = _r2.Request("https://api.mistral.ai/v1/chat/completions", data=payload,
+                    headers={"Content-Type":"application/json",
+                             "Authorization":"Bearer "+api_key}, method="POST")
+                try:
+                    with _r2.urlopen(req, timeout=90) as r2:
+                        d2 = json.loads(r2.read())
+                    result = d2.get("choices",[{}])[0].get("message",{}).get("content","")
+                    if not result: raise Exception("Mistral gaf een lege reactie terug.")
+                    return result
+                except _e2.HTTPError as e:
+                    raise Exception(f"Mistral API-fout {e.code}: {_http_error_msg(e)}")
+                except _e2.URLError as e:
+                    raise Exception(f"Mistral niet bereikbaar: {e.reason}")
+
+            else:
+                # Lokaal Ollama
+                local_model = self._best_local_model(model)
+                try:
+                    payload = {"model":local_model,"prompt":prompt,"stream":False}
+                    if images:
+                        payload["images"] = images[:2]
+                    r = self._ollama_post("/api/generate", payload, 360)
+                    result = r.get("response","").strip()
+                    if not result: raise Exception(f"Ollama model '{local_model}' gaf een lege reactie.")
+                    return result
+                except Exception as e:
+                    raise Exception(f"Ollama fout ({local_model}): {e}")
+
+        # ── Stap 4: samenvatting maken ────────────────────────────────────────
+        prompt = (
+            "Je taak: schrijf een uitgebreide samenvatting van het DOCUMENT hieronder in Markdown.\n"
+            "GEBRUIK ALLEEN de inhoudelijke informatie — verzin niets.\n"
+            "Taal: gebruik de taal van het document (NL of EN).\n"
+            "Lengte: MINIMAAL 400 en MAXIMAAL 900 woorden.\n\n"
+            "STRIKT VERBODEN in de samenvatting — sla volledig over:\n"
+            "- Elke tekst over 'persoonlijk gebruik', 'bestemd voor', 'bedoeld voor', 'beperkt tot'\n"
+            "- Elke tekst over licenties, toegangsrechten, eigendom, vertrouwelijkheid\n"
+            "- Zinnen die beginnen met 'Dit rapport/document is...'\n"
+            "- E-mailadressen, namen van licentiehouders\n"
+            "- Kopteksten, voetteksten, paginanummers, watermerken\n\n"
+            "Structuur:\n"
+            "## Inleiding\n"
+            "Doel en context van het document (2-4 zinnen)\n\n"
+            "## Kernpunten\n"
+            "4-6 belangrijkste punten als bullets\n\n"
+            "## Inhoud\n"
+            "Samenvatting van de hoofdonderwerpen\n\n"
+            "## Conclusies\n"
+            "Conclusies en aanbevelingen\n\n"
+            "## Vervolgvragen\n"
+            "3-4 interessante vervolgvragen\n\n"
+        )
+
+        def call_llm_summarize(prompt_text, images=None):
+            """Wrapper voor samenvatting — zelfde als call_llm maar duidelijk benoemd."""
+            return call_llm(prompt_text, images)
+
+        # Met tekst
         if text.strip():
-            prompt=(
-                "Schrijf een uitgebreide Nederlandstalige samenvatting van dit document in Markdown.\n"
-                "De samenvatting moet MINIMAAL 600 en MAXIMAAL 900 woorden bevatten (vergelijkbaar met 2 A4).\n"
-                "Wees inhoudelijk en concreet — noem specifieke bevindingen, cijfers, namen en aanbevelingen.\n\n"
-                "Gebruik de volgende structuur:\n"
-                "## Inleiding\n"
-                "Wat is het doel en de context van dit document? (3-5 zinnen)\n\n"
-                "## Kernpunten\n"
-                "De 4-6 belangrijkste punten als bullets, elk 2-3 zinnen uitgewerkt.\n\n"
-                "## Uitwerking per hoofdonderwerp\n"
-                "Per hoofdonderwerp een korte sectie (### subkop) met de inhoud.\n\n"
-                "## Conclusies & Aanbevelingen\n"
-                "Wat zijn de conclusies? Welke acties worden aanbevolen?\n\n"
-                "## Zettelkasten-notities\n"
-                "3-5 concrete vervolgvragen of ideeën voor losse notities op basis van dit document.\n\n"
-                "--- DOCUMENT ---\n"+text+"\n--- EINDE ---"
+            print(f"[PDF-samenvatting] Tekst beschikbaar ({len(text)} tekens), stuur naar model...", flush=True)
+            try:
+                full_prompt = (prompt +
+                    "===BEGIN DOCUMENT===\n" + text[:35000] + "\n===EINDE DOCUMENT===\n\n"
+                    "Schrijf nu de samenvatting op basis van bovenstaand document:")
+                result = call_llm_summarize(full_prompt)
+                if result:
+                    print(f"[PDF-samenvatting] Samenvatting ontvangen ({len(result)} tekens)", flush=True)
+                    return self._send(200,{"ok":True,"summary":result,"filename":fname})
+            except Exception as e:
+                print(f"[PDF-samenvatting] Fout: {e}", flush=True)
+                return self._send(200,{"ok":False,"error":str(e),"summary":""})
+
+        # Geen tekst → vision met meerdere pagina's
+        images = self._pdf_pages_as_images(fname, max_pages=4)
+        if images:
+            vision_prompt = (
+                "Dit zijn pagina's uit een PDF-document. "
+                "Maak een Nederlandstalige samenvatting in Markdown van de inhoud. "
+                "Gebruik ## voor hoofdsecties en - voor bullets. "
+                "Wees zo concreet mogelijk over wat er in het document staat."
             )
             try:
-                r=self._ollama_post("/api/generate",{"model":model,"prompt":prompt,"stream":False},360)
-                return self._send(200,{"ok":True,"summary":r.get("response","").strip(),"filename":fname})
+                result = call_llm(vision_prompt, images=images)
+                if result:
+                    return self._send(200,{"ok":True,"summary":result,
+                                           "filename":fname,"method":"vision"})
             except Exception as e:
-                try:
-                    r=self._ollama_post("/api/generate",{"model":"llama3.2-vision","prompt":prompt,"stream":False},360)
-                    return self._send(200,{"ok":True,"summary":r.get("response","").strip(),"filename":fname})
-                except Exception as e2:
-                    return self._send(200,{"ok":False,"error":str(e2),"summary":""})
+                return self._send(200,{"ok":False,"error":str(e),"summary":""})
 
-        # Geen tekst: probeer visuele samenvatting met eerste pagina als afbeelding
-        img_data = self._pdf_first_page_image(fname)
-        if img_data:
-            prompt=("Dit is de eerste pagina van een PDF. "
-                    "Maak een Nederlandstalige samenvatting in Markdown van wat je ziet. "
-                    "Gebruik headers (##) en bullets (-).")
-            try:
-                r=self._ollama_post("/api/generate",
-                    {"model":model,"prompt":prompt,"images":[img_data],"stream":False},120)
-                return self._send(200,{"ok":True,"summary":r.get("response","").strip(),
-                                       "filename":fname,"method":"vision"})
-            except Exception as e:
-                return self._send(200,{"ok":False,
-                    "error":"Geen tekst extraheerbaar en vision mislukt: "+str(e),"summary":""})
+        msg = ("Geen tekst extraheerbaar uit dit PDF. "
+               + ("Schakel 'Persoonlijk gebruik' in bij Instellingen → PDF om extra extractie-methoden te proberen."
+                  if not personal_use else
+                  "Dit PDF lijkt volledig gescand of zwaar beveiligd — vision-analyse mislukt ook."))
+        return self._send(200,{"ok":False,"error":msg,"summary":""})
 
-        return self._send(200,{"ok":False,
-            "error":"Geen tekst extraheerbaar uit dit PDF (mogelijk gescand/beveiligd)","summary":""})
+    def _pdf_pages_as_images(self, filename, max_pages=4):
+        """Render PDF-pagina's naar base64 PNG's. Probeert pdftoppm, daarna pdf2image, daarna pypdf+PIL."""
+        import base64, subprocess, tempfile, os
+        pdf_path = self.vault.get_pdf_path(filename)
+        if not pdf_path: return []
+        images = []
 
-    def _pdf_first_page_image(self, filename):
-        """Render eerste PDF-pagina naar base64 PNG via stdlib (zonder PIL)."""
+        # Methode 1: pdftoppm (poppler)
         try:
-            import subprocess, tempfile, os
-            pdf_path = self.get_pdf_path(filename)
-            if not pdf_path: return None
-            # Probeer pdftoppm (poppler, vaak aanwezig)
             with tempfile.TemporaryDirectory() as td:
                 out = os.path.join(td, "page")
                 r = subprocess.run(
-                    ["pdftoppm","-r","120","-l","1","-png",str(pdf_path),out],
-                    capture_output=True, timeout=15)
+                    ["pdftoppm", "-r", "100", "-l", str(max_pages), "-png",
+                     str(pdf_path), out],
+                    capture_output=True, timeout=30)
                 if r.returncode == 0:
-                    imgs = sorted([f for f in os.listdir(td) if f.endswith(".png")])
-                    if imgs:
-                        import base64
-                        return base64.b64encode(open(os.path.join(td,imgs[0]),"rb").read()).decode()
+                    imgs = sorted([f for f in os.listdir(td) if f.endswith(".png")])[:max_pages]
+                    for img in imgs:
+                        data = open(os.path.join(td, img), "rb").read()
+                        images.append(base64.b64encode(data).decode())
+                    if images: return images
         except Exception: pass
-        return None
+
+        # Methode 2: pdf2image (pip install pdf2image)
+        try:
+            from pdf2image import convert_from_path
+            pages = convert_from_path(str(pdf_path), dpi=100,
+                                      first_page=1, last_page=max_pages)
+            import io
+            for page in pages:
+                buf = io.BytesIO()
+                page.save(buf, format="PNG")
+                images.append(base64.b64encode(buf.getvalue()).decode())
+            if images: return images
+        except Exception: pass
+
+        # Methode 3: pypdf + PIL (alleen eerste pagina via annotatie-stream)
+        try:
+            import pypdf
+            from PIL import Image
+            import io
+            reader = pypdf.PdfReader(str(pdf_path))
+            for i, page in enumerate(reader.pages[:max_pages]):
+                for name, obj in page.images:
+                    img = Image.open(io.BytesIO(obj.data))
+                    buf = io.BytesIO()
+                    img.save(buf, format="PNG")
+                    images.append(base64.b64encode(buf.getvalue()).decode())
+                    break  # één afbeelding per pagina
+            if images: return images
+        except Exception: pass
+
+        return []
+
+    def _pdf_first_page_image(self, filename):
+        """Legacy wrapper — geeft eerste pagina terug."""
+        imgs = self._pdf_pages_as_images(filename, max_pages=1)
+        return imgs[0] if imgs else None
 
     def _llm_describe_image(self):
         body=self._body()
@@ -2356,7 +2816,7 @@ class ZKHandler(BaseHTTPRequestHandler):
         if ctx_pdfs:
             source_type = "pdf" if not ctx_notes else "mixed"
             for pn in ctx_pdfs[:3]:
-                txt=self.vault.extract_pdf_text(pn, 8000)
+                txt=self.vault.extract_pdf_text(pn, 8000) or ""
                 if txt.strip():
                     parts.append("=== DOCUMENT: "+pn+" ===\n"+txt)
 
@@ -2431,13 +2891,338 @@ class ZKHandler(BaseHTTPRequestHandler):
         except Exception as e:
             return self._send(200,{"ok":False,"error":str(e)})
 
+    def _import_docx(self):
+        """Converteer een geüpload Word-document naar Markdown en verwerk als URL-import."""
+        import tempfile, os as _os, re as _re
+
+        ct = self.headers.get("Content-Type","")
+        if "multipart/form-data" not in ct:
+            return self._send(400, {"error": "multipart/form-data vereist"})
+
+        length = int(self.headers.get("Content-Length", 0))
+        raw    = self.rfile.read(length)
+
+        # Haal model op uit query-string
+        from urllib.parse import parse_qs, urlparse as _up
+        qs    = parse_qs(_up(self.path).query)
+        model = qs.get("model", ["llama3.2-vision"])[0]
+
+        # Zoek boundary (ondersteunt quoted en unquoted)
+        bm = _re.search(r'boundary=([^\s;]+)', ct)
+        if not bm:
+            return self._send(400, {"error": "Geen boundary gevonden in Content-Type"})
+        boundary = bm.group(1).strip('"').encode()
+
+        # Splits op boundary
+        parts = raw.split(b"--" + boundary)
+
+        docx_data = None
+        filename  = "document.docx"
+        for part in parts:
+            if b'filename=' not in part:
+                continue
+            # Bestandsnaam uit Content-Disposition
+            m = _re.search(rb'filename=["\']?([^"\'\r\n]+)["\']?', part)
+            if m:
+                filename = m.group(1).decode("utf-8", "replace").strip()
+            # Body staat na de dubbele CRLF
+            sep = b"\r\n\r\n"
+            if sep in part:
+                body = part.split(sep, 1)[1]
+                # Verwijder afsluitende CRLF en boundary-resten
+                body = body.rstrip(b"\r\n-")
+                docx_data = body
+            break
+
+        if not docx_data:
+            return self._send(400, {"error": "Geen Word-bestand ontvangen"})
+
+        # Schrijf tijdelijk naar schijf
+        with tempfile.NamedTemporaryFile(suffix=".docx", delete=False) as tf:
+            tf.write(docx_data)
+            tmp_path = tf.name
+
+        try:
+            markdown, title = self._docx_to_markdown(tmp_path)
+        finally:
+            try: _os.unlink(tmp_path)
+            except: pass
+
+        if not markdown.strip():
+            return self._send(400, {"error": "Kon geen tekst uit het Word-document halen"})
+
+        # Samenvatting + opschoning via LLM (zelfde flow als URL-import)
+        clean_md, summary = self._llm_clean_article(markdown, model)
+
+        stem = _re.sub(r'\.(docx?|DOC[Xx]?)$', '', filename)
+        if not title:
+            title = stem
+
+        return self._send(200, {
+            "ok":      True,
+            "title":   title,
+            "md":      clean_md or markdown,
+            "summary": summary,
+            "source":  filename,
+            "images":  [],
+        })
+
+    def _docx_to_markdown(self, path):
+        """Converteer .docx naar Markdown. Geeft (markdown, title) terug."""
+        import re as _re
+
+        # ── Methode A: python-docx ────────────────────────────────────────────
+        try:
+            from docx import Document
+
+            doc   = Document(path)
+            lines = []
+            title = ""
+
+            for para in doc.paragraphs:
+                text = para.text.strip()
+                if not text:
+                    lines.append("")
+                    continue
+                try:
+                    sname = para.style.name or ""
+                except Exception:
+                    sname = ""
+                style = sname.lower()
+
+                if style == "title" or style == "heading 1":
+                    if not title: title = text
+                    lines.append(f"# {text}")
+                elif "heading 2" in style:
+                    lines.append(f"## {text}")
+                elif "heading 3" in style:
+                    lines.append(f"### {text}")
+                elif "heading" in style:
+                    lines.append(f"#### {text}")
+                elif "list" in style or sname.startswith("List"):
+                    try:
+                        indent = para.paragraph_format.left_indent
+                        prefix = "  " * min(int((indent or 0) / 360000), 3)
+                    except Exception:
+                        prefix = ""
+                    lines.append(f"{prefix}- {text}")
+                elif style in ("quote", "intense quote", "block text"):
+                    lines.append(f"> {text}")
+                else:
+                    lines.append(text)
+
+            for table in doc.tables:
+                if not table.rows: continue
+                header = [c.text.strip() for c in table.rows[0].cells]
+                lines.append("")
+                lines.append("| " + " | ".join(header) + " |")
+                lines.append("| " + " | ".join(["---"] * len(header)) + " |")
+                for row in table.rows[1:]:
+                    lines.append("| " + " | ".join(c.text.strip() for c in row.cells) + " |")
+                lines.append("")
+
+            md = _re.sub(r'\n{3,}', '\n\n', "\n".join(lines)).strip()
+            if not title and md:
+                title = next((l.lstrip("#").strip() for l in md.splitlines() if l.strip()), "")[:80]
+            return md, title
+
+        except ImportError:
+            print("[docx] python-docx niet gevonden — gebruik XML-fallback. "
+                  "Installeer met: pip install python-docx", flush=True)
+
+        # ── Methode B: ruwe XML uit .docx zip (geen externe packages) ────────
+        try:
+            import zipfile, xml.etree.ElementTree as ET
+
+            NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+
+            with zipfile.ZipFile(path, "r") as zf:
+                xml_bytes = zf.read("word/document.xml")
+
+            root  = ET.fromstring(xml_bytes)
+            lines = []
+            title = ""
+
+            for para in root.iter(f"{{{NS}}}p"):
+                # Stijlnaam
+                pPr   = para.find(f".//{{{NS}}}pStyle")
+                sname = pPr.get(f"{{{NS}}}val", "") if pPr is not None else ""
+                style = sname.lower()
+
+                # Alle tekst in de paragraaf
+                text = "".join(t.text or "" for t in para.iter(f"{{{NS}}}t")).strip()
+                if not text:
+                    lines.append("")
+                    continue
+
+                if style in ("title", "heading1"):
+                    if not title: title = text
+                    lines.append(f"# {text}")
+                elif style == "heading2":
+                    lines.append(f"## {text}")
+                elif style == "heading3":
+                    lines.append(f"### {text}")
+                elif style.startswith("heading"):
+                    lines.append(f"#### {text}")
+                elif "list" in style:
+                    lines.append(f"- {text}")
+                else:
+                    lines.append(text)
+
+            md = _re.sub(r'\n{3,}', '\n\n', "\n".join(lines)).strip()
+            if not title and md:
+                title = next((l.lstrip("#").strip() for l in md.splitlines() if l.strip()), "")[:80]
+            print(f"[docx] XML-fallback: {len(md)} tekens geëxtraheerd", flush=True)
+            return md, title
+
+        except Exception as e:
+            print(f"[docx] XML-fallback fout: {e}", flush=True)
+            return "", ""
+
+    def _llm_clean_article(self, text, model=""):
+        """Maak een Markdown-samenvatting van een tekst via LLM.
+        Geeft (opgeschoonde_tekst, samenvatting) terug.
+        Bij lokale modellen of fouten: geeft (tekst, '') terug."""
+        if not text.strip():
+            return text, ""
+
+        # Bepaal of we een cloud-model hebben
+        is_cloud = any(model.startswith(p) for p in
+                       ("claude","gpt","gemini","o1","o3","o4",
+                        "mistral","magistral","ministral")) or "/" in model
+
+        summary_prompt = (
+            "Schrijf een beknopte samenvatting (3-5 zinnen) van onderstaande tekst. "
+            "Gebruik de taal van de tekst (NL of EN). "
+            "Geef ALLEEN de samenvatting terug, geen inleiding of labels.\n\n"
+            f"TEKST:\n{text[:6000]}"
+        )
+
+        summary = ""
+        try:
+            if model.startswith("claude"):
+                api_key = self.vault.get_api_key("anthropic")
+                if api_key:
+                    import urllib.request as _r2
+                    payload = json.dumps({"model":model,"max_tokens":400,
+                                          "messages":[{"role":"user","content":summary_prompt}]}).encode()
+                    req = _r2.Request("https://api.anthropic.com/v1/messages", data=payload,
+                        headers={"Content-Type":"application/json","x-api-key":api_key,
+                                 "anthropic-version":"2023-06-01"}, method="POST")
+                    with _r2.urlopen(req, timeout=30) as r:
+                        summary = json.loads(r.read()).get("content",[{}])[0].get("text","")
+
+            elif model.startswith("gpt") or model.startswith("o"):
+                api_key = self.vault.get_api_key("openai")
+                if api_key:
+                    import urllib.request as _r2
+                    payload = json.dumps({"model":model,"max_tokens":400,
+                                          "messages":[{"role":"user","content":summary_prompt}]}).encode()
+                    req = _r2.Request("https://api.openai.com/v1/chat/completions", data=payload,
+                        headers={"Content-Type":"application/json","Authorization":"Bearer "+api_key},
+                        method="POST")
+                    with _r2.urlopen(req, timeout=30) as r:
+                        summary = json.loads(r.read()).get("choices",[{}])[0].get("message",{}).get("content","")
+
+            elif model.startswith("gemini"):
+                api_key = self.vault.get_api_key("google")
+                if api_key:
+                    import urllib.request as _r2
+                    payload = json.dumps({"contents":[{"role":"user","parts":[{"text":summary_prompt}]}],
+                                          "generationConfig":{"maxOutputTokens":400}}).encode()
+                    url2 = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+                    req = _r2.Request(url2, data=payload,
+                        headers={"Content-Type":"application/json"}, method="POST")
+                    with _r2.urlopen(req, timeout=30) as r:
+                        summary = json.loads(r.read()).get("candidates",[{}])[0].get("content",{}).get("parts",[{}])[0].get("text","")
+
+            elif model.startswith("mistral") or model.startswith("magistral"):
+                api_key = self.vault.get_api_key("mistral")
+                if api_key:
+                    import urllib.request as _r2
+                    payload = json.dumps({"model":model,"max_tokens":400,
+                                          "messages":[{"role":"user","content":summary_prompt}]}).encode()
+                    req = _r2.Request("https://api.mistral.ai/v1/chat/completions", data=payload,
+                        headers={"Content-Type":"application/json","Authorization":"Bearer "+api_key},
+                        method="POST")
+                    with _r2.urlopen(req, timeout=30) as r:
+                        summary = json.loads(r.read()).get("choices",[{}])[0].get("message",{}).get("content","")
+
+            elif "/" in model:  # OpenRouter
+                api_key = self.vault.get_api_key("openrouter")
+                if api_key:
+                    import urllib.request as _r2
+                    payload = json.dumps({"model":model,"max_tokens":400,
+                                          "messages":[{"role":"user","content":summary_prompt}]}).encode()
+                    req = _r2.Request("https://openrouter.ai/api/v1/chat/completions", data=payload,
+                        headers={"Content-Type":"application/json","Authorization":"Bearer "+api_key,
+                                 "HTTP-Referer":"http://localhost:7842"}, method="POST")
+                    with _r2.urlopen(req, timeout=30) as r:
+                        summary = json.loads(r.read()).get("choices",[{}])[0].get("message",{}).get("content","")
+
+            else:
+                # Lokaal Ollama
+                try:
+                    local = self._best_local_model(model)
+                    r = self._ollama_post("/api/generate",
+                        {"model":local,"prompt":summary_prompt,"stream":False}, 60)
+                    summary = r.get("response","").strip()
+                except Exception:
+                    summary = ""
+
+        except Exception as e:
+            print(f"[docx-samenvatting] fout: {e}", flush=True)
+            summary = ""
+
+        return text, summary.strip()
+
     def _import_url(self):
         """Haal inhoud van een URL op en converteer naar Markdown — Instapaper-stijl."""
         body  = self._body()
         url   = body.get("url","").strip()
         model = body.get("model","llama3.2-vision")
+        force = body.get("force", False)   # True = toch importeren ook al bestaat het
         if not url:
             return self._send(400,{"error":"url vereist"})
+
+        # ── Server-side duplicate check ───────────────────────────────────────
+        if not force:
+            import re as _re_dup
+            def _norm_url(u):
+                try:
+                    from urllib.parse import urlparse, urlencode, parse_qs, urlunparse
+                    p = urlparse(u)
+                    # Verwijder tracking-parameters
+                    skip = {"utm_source","utm_medium","utm_campaign","utm_term",
+                            "utm_content","fbclid","gclid","ref","source","si"}
+                    qs = {k:v for k,v in parse_qs(p.query).items() if k not in skip}
+                    clean = p._replace(query=urlencode(qs,doseq=True),
+                                       path=p.path.rstrip("/"))
+                    return urlunparse(clean).lower()
+                except:
+                    return u.rstrip("/").lower()
+
+            target = _norm_url(url)
+            for note in self.vault.load_notes():
+                # Check 1: sourceUrl frontmatter
+                if note.get("sourceUrl") and _norm_url(note["sourceUrl"]) == target:
+                    return self._send(200, {
+                        "ok": False, "duplicate": True,
+                        "duplicate_id": note["id"],
+                        "duplicate_title": note.get("title",""),
+                        "error": f"Al geïmporteerd als: {note.get('title','onbekend')}"
+                    })
+                # Check 2: bron-link in content
+                content = note.get("content","")
+                urls_in_content = _re_dup.findall(r'\]\((https?://[^)]+)\)', content)
+                if any(_norm_url(u) == target for u in urls_in_content):
+                    return self._send(200, {
+                        "ok": False, "duplicate": True,
+                        "duplicate_id": note["id"],
+                        "duplicate_title": note.get("title",""),
+                        "error": f"Al geïmporteerd als: {note.get('title','onbekend')}"
+                    })
+
         result = self._do_import_url(url, model)
         return self._send(200, result)
 
@@ -2470,96 +3255,107 @@ class ZKHandler(BaseHTTPRequestHandler):
         from html.parser import HTMLParser
 
         class ArticleExtractor(HTMLParser):
-            SKIP_TAGS = {"script","style","nav","footer","header","aside",
-                         "noscript","form","button","svg","iframe","ads"}
-            BLOCK_TAGS = {"p","h1","h2","h3","h4","li","blockquote","pre","td","th","figcaption"}
+            SKIP_TAGS    = {"script","style","nav","footer","header","aside",
+                            "noscript","form","button","svg","iframe"}
+            PARA_TAGS    = {"p","div","section","article","main",
+                            "td","th","figcaption","blockquote","pre"}
+            HEADING_TAGS = {"h1","h2","h3","h4","h5","h6"}
+            LIST_TAGS    = {"li"}
 
             def __init__(self):
                 super().__init__()
-                self.skip_depth  = 0
-                self.text_chunks = []
-                self.title       = ""
-                self._in_title   = False
-                self.img_srcs    = []   # alle gevonden afbeelding-URLs (gededupliceerd)
-                self._img_seen   = set()
-                self.og_image    = ""   # Open Graph hoofdafbeelding
+                self.skip_depth   = 0
+                self.chunks       = []
+                self.title        = ""
+                self._in_title    = False
+                self.img_srcs     = []
+                self._img_seen    = set()
+                self.og_image     = ""
+                self._cur_heading = None
+
+            @property
+            def text_chunks(self): return self.chunks
 
             def _add_img(self, src):
-                """Voeg src toe als het geldig en nog niet gezien is."""
-                if not src or src.startswith("data:") or src in self._img_seen:
-                    return
-                self._img_seen.add(src)
-                self.img_srcs.append(src)
+                if not src or src.startswith("data:") or src in self._img_seen: return
+                self._img_seen.add(src); self.img_srcs.append(src)
 
             def handle_starttag(self, tag, attrs):
                 attr_d = dict(attrs)
-                if tag == "title": self._in_title = True
-                if tag in self.SKIP_TAGS: self.skip_depth += 1
-                if tag in self.BLOCK_TAGS and self.text_chunks:
-                    self.text_chunks.append("\n")
+                if tag == "title": self._in_title = True; return
+                if tag in self.SKIP_TAGS: self.skip_depth += 1; return
+                if self.skip_depth > 0: return
 
-                # Open Graph afbeelding (staat vaak in <head> buiten artikel)
+                if tag in self.HEADING_TAGS:
+                    level = int(tag[1])
+                    prefix = "#" * min(level + 1, 4)
+                    self.chunks.append("")
+                    self.chunks.append(prefix + " ")
+                    self._cur_heading = tag; return
+
+                if tag in self.LIST_TAGS:
+                    self.chunks.append("- "); return
+
+                if tag in self.PARA_TAGS:
+                    if self.chunks and self.chunks[-1] not in ("",):
+                        self.chunks.append("")
+                    return
+
                 if tag == "meta":
                     prop = attr_d.get("property","") or attr_d.get("name","")
                     if prop in ("og:image","og:image:secure_url","twitter:image"):
-                        content = attr_d.get("content","").strip()
-                        if content and not content.startswith("data:"):
-                            self.og_image = content
+                        c = attr_d.get("content","").strip()
+                        if c and not c.startswith("data:"): self.og_image = c
 
-                # Alle <img> tags — ook binnen nav/header voor volledigheid,
-                # want redactionele afbeeldingen zitten soms in "article > header"
                 if tag == "img":
-                    # Prioriteit: src → data-src → data-lazy-src → data-original
-                    # → data-src-medium → data-full-url → srcset (eerste URL)
-                    candidates = [
-                        attr_d.get("src",""),
-                        attr_d.get("data-src",""),
-                        attr_d.get("data-lazy-src",""),
-                        attr_d.get("data-original",""),
-                        attr_d.get("data-original-src",""),
-                        attr_d.get("data-full-url",""),
-                        attr_d.get("data-hi-res-src",""),
-                        attr_d.get("data-src-medium",""),
-                        attr_d.get("data-echo",""),
-                    ]
-                    for c in candidates:
-                        if c and not c.startswith("data:"):
-                            self._add_img(c)
-                            break   # eerste geldige volstaat
-                    # srcset: pak de hoogste-resolutie URL (laatste in lijst)
+                    for key in ("src","data-src","data-lazy-src","data-original",
+                                "data-original-src","data-full-url","data-hi-res-src",
+                                "data-src-medium","data-echo"):
+                        c = attr_d.get(key,"")
+                        if c and not c.startswith("data:"): self._add_img(c); break
                     srcset = attr_d.get("srcset","") or attr_d.get("data-srcset","")
                     if srcset:
                         parts = [p.strip().split()[0] for p in srcset.split(",") if p.strip()]
-                        if parts:
-                            self._add_img(parts[-1])  # hoogste resolutie
+                        if parts: self._add_img(parts[-1])
 
-                # <source> binnen <picture>
                 if tag == "source":
                     srcset = attr_d.get("srcset","") or attr_d.get("data-srcset","")
                     if srcset:
                         parts = [p.strip().split()[0] for p in srcset.split(",") if p.strip()]
-                        if parts:
-                            self._add_img(parts[-1])
+                        if parts: self._add_img(parts[-1])
 
             def handle_endtag(self, tag):
-                if tag == "title": self._in_title = False
+                if tag == "title": self._in_title = False; return
                 if tag in self.SKIP_TAGS and self.skip_depth > 0:
-                    self.skip_depth -= 1
+                    self.skip_depth -= 1; return
+                if self.skip_depth > 0: return
+                if tag in self.HEADING_TAGS:
+                    self.chunks.append(""); self._cur_heading = None; return
+                if tag in self.PARA_TAGS or tag in self.LIST_TAGS:
+                    if self.chunks and self.chunks[-1] not in ("",):
+                        self.chunks.append("")
 
             def handle_data(self, data):
-                if self._in_title:
-                    self.title += data
-                    return
+                if self._in_title: self.title += data; return
                 if self.skip_depth > 0: return
                 t = data.strip()
-                if t: self.text_chunks.append(t)
+                if not t: return
+                # Plak tekst aan lopende heading of list-item
+                if self.chunks and (self.chunks[-1].startswith("#") or self.chunks[-1] == "- "):
+                    self.chunks[-1] += t
+                else:
+                    self.chunks.append(t)
 
         parser = ArticleExtractor()
         parser.feed(html)
 
         page_title = parser.title.strip() or url
-        raw_text   = " ".join(parser.text_chunks)
-        raw_text   = re.sub(r'\s{3,}', ' ', raw_text)[:12000]
+
+        # Join met newlines — behoudt structuur
+        raw_text = "\n".join(parser.chunks)
+        raw_text = re.sub(r'\n{3,}', '\n\n', raw_text)   # max 2 opeenvolgende lege regels
+        raw_text = re.sub(r'[ \t]+\n', '\n', raw_text)    # spaties voor newline
+        raw_text = raw_text.strip()[:14000]
 
         if len(raw_text) < 100:
             return self._send(200,{"ok":False,
@@ -2629,13 +3425,14 @@ class ZKHandler(BaseHTTPRequestHandler):
         # ── Stap 0: ruwe tekst opschonen (regex, geen LLM nodig) ──────────────
         import re as _re
 
-        # LinkedIn en andere login/paywall-fragmenten letterlijk weggooien
+        # ── LinkedIn en andere login/paywall-fragmenten verwijderen ─────────────
+        is_linkedin = "linkedin.com" in url
+
         LITERAL_JUNK = [
             # Cookie/privacy standaard
-            "Lees meer in ons Cookiebeleid",
-            "Lees meer in ons cookiebeleid",
+            "Lees meer in ons Cookiebeleid", "Lees meer in ons cookiebeleid",
             "meer in ons Cookiebeleid",
-            # LinkedIn
+            # LinkedIn UI-elementen
             "LinkedIn respecteert uw",
             "Selecteer Accepteren of Afwijzen om niet-essentiële",
             "U kunt uw keuzen op elk gewenst moment bijwerken in uw instellingen",
@@ -2646,12 +3443,20 @@ class ZKHandler(BaseHTTPRequestHandler):
             "gaat u akkoord met de gebruikersovereenkomst",
             "Meer informatie over onze privacybeleid",
             "Overgeslagen naar hoofdinhoud",
+            "Topcommentaren", "Top comments",
+            "Commentaren van mensen die u volgt",
+            "Anderen bekeken ook", "Others also viewed",
+            "Meer artikelen van", "More from",
+            "Reacties weergeven", "View comments",
+            "Vind ik leuk", "Like", "Reageren", "Delen", "Opslaan",
+            "volgers", "verbindingen",
+            "Volg", "Connect", "Bericht",
+            "Uitgelicht door", "Featured by",
+            "mensen vinden dit", "people find this",
             # Algemeen
             "Accept all cookies", "Alle cookies accepteren",
             "Manage preferences", "Voorkeuren beheren",
             "Cookie settings", "Cookie-instellingen",
-            "Privacy Policy", "Privacybeleid",
-            "Terms of Service", "Servicevoorwaarden",
             "Sign in to continue", "Log in to continue",
             "Subscribe to read", "Abonneer om te lezen",
             "This content is for subscribers",
@@ -2668,6 +3473,10 @@ class ZKHandler(BaseHTTPRequestHandler):
             r'(?i)(subscribe|abonneer|sign up|aanmelden)[^.]{0,150}newsletter[^.]{0,100}[.\n]',
             r'(?i)\bpaywall\b[^.]{0,200}[.\n]',
             r'(?i)(register|registreer) (to|om) (read|lezen|access|verder)[^.]{0,200}[.\n]',
+            # LinkedIn: getal + reacties/likes/shares
+            r'\d+\s*(reacties?|commentaren?|comments?|likes?|shares?|reposts?)\b',
+            # LinkedIn: "X volgers • Y verbindingen"
+            r'\d[\d.,]*\s*(volgers?|followers?|verbindingen?|connections?)',
         ]
 
         clean_text = raw_text
@@ -2687,27 +3496,38 @@ class ZKHandler(BaseHTTPRequestHandler):
         clean_text = _re.sub(r'\s{3,}', ' ', clean_text).strip()
 
         # ── Stap 1: één LLM-aanroep voor samenvatting + Markdown ─────────────
-        # Werkt met Ollama (lokaal) én met externe modellen (Claude, GPT, Gemini)
-        # ── Stap 1: één LLM-aanroep voor samenvatting + Markdown ─────────────
-        # Eenvoudig format dat lokale modellen (llama, mistral etc.) goed begrijpen
+        linkedin_hint = (
+            "\n\nLET OP — dit is een LinkedIn-artikel. Verwijder strikt:\n"
+            "- Reactie-/like-/share-/repost-tellers (bijv. '42 reacties', '1.2K likes')\n"
+            "- Profiel-blokken: naam, functie, bedrijf, volgers, verbindingen\n"
+            "- Uitgelichte reacties, commentaren en antwoorden\n"
+            "- 'Anderen bekeken ook', 'Meer van deze auteur', aanbevelingen\n"
+            "- UI-labels: Volgen, Reageren, Delen, Opslaan, Bericht, Connect\n"
+            "- Datum/tijdstempel van de post (niet van het artikel zelf)\n"
+            "Behoud UITSLUITEND de doorlopende artikeltekst.\n"
+        ) if is_linkedin else ""
+
         combined_prompt = (
-            "Verwerk de onderstaande webpagina-tekst in twee stappen.\n\n"
-            "Stap 1: schrijf een samenvatting van 3-5 zinnen. "
-            "Gebruik de taal van de tekst (NL of EN). Geen koppen, geen bullets.\n\n"
-            "Stap 2: zet de volledige artikeltekst om naar Markdown (Instapaper-stijl).\n"
-            "- Begin met ## voor de eerste sectie (geen herhaling van de titel)\n"
-            "- ## voor hoofdsecties, ### voor subsecties\n"
+            "De onderstaande tekst is al gedeeltelijk opgemaakt als Markdown "
+            "(koppen met ##, lijstitems met -).\n\n"
+            "Stap 1: schrijf een samenvatting van 3-5 zinnen in de taal van de tekst (NL of EN). "
+            "Geen koppen, geen bullets.\n\n"
+            "Stap 2: maak de Markdown af tot een goed leesbaar artikel.\n"
+            "- Bewaar bestaande ## koppen en lijstitems\n"
+            "- Voeg ontbrekende ## sectiekoppen toe waar logisch\n"
             "- **vet** voor kernbegrippen, *cursief* voor termen\n"
-            "- Gebruik - voor lijsten, > voor citaten\n"
-            "- Verwijder ALLES wat geen artikel is: navigatie, cookies, login-verzoeken, "
-            "reclame, social-knoppen, cookieteksten, privacyteksten\n\n"
-            "Geef je antwoord PRECIES in dit format:\n"
+            "- Gebruik > voor citaten\n"
+            "- Zorg voor een lege regel tussen elke alinea\n"
+            "- Verwijder: navigatie, cookies, login-verzoeken, reclame, "
+            "social-knoppen, reacties, profielinfo"
+            + linkedin_hint + "\n\n"
+            "Geef je antwoord PRECIES in dit format (geen extra tekst):\n"
             "===SAMENVATTING===\n"
             "<samenvatting hier>\n"
             "===ARTIKEL===\n"
             "<markdown hier>\n\n"
             f"Titel: {page_title}\n\n"
-            f"Tekst:\n{clean_text[:7000]}"
+            f"Tekst:\n{clean_text[:8000]}"
         )
 
         summary = ""

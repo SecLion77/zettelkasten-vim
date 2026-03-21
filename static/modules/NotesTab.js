@@ -61,6 +61,7 @@ const NotesTab = ({
 
   const contentRef = useRef(null);
   const sidebarW   = isMobile ? Math.min(320, window.innerWidth - 40) : 240;
+  const [tabletSidebarOpen, setTabletSidebarOpen] = useState(true);
 
   const selNote = useMemo(() =>
     notes.find(n => n.id === selectedId) || null,
@@ -96,17 +97,17 @@ const NotesTab = ({
                       created:  new Date().toISOString(),
                       modified: new Date().toISOString() };
     setVimMode(true);
-    if (!isDesktop) onSidebarToggle?.(false);
+    if (!isDesktop && !isTablet) onSidebarToggle?.(false);
     const saved = await NoteStore.save(note);
     onNotesChange(NoteStore.getAll());
     onSelectNote(saved.id);
-  }, [isDesktop]);
+  }, [isDesktop, isTablet]);
 
   const handleSelect = useCallback((id) => {
     onSelectNote(id);
     setVimMode(false);
-    if (!isDesktop) onSidebarToggle?.(false);
-  }, [isDesktop]);
+    if (!isDesktop && !isTablet) onSidebarToggle?.(false);
+  }, [isDesktop, isTablet]);
 
   const handleSave = useCallback(async (updatedNote) => {
     await NoteStore.save(updatedNote);
@@ -338,14 +339,14 @@ const NotesTab = ({
         linkMenuContent:  showLinkMenu ? buildLinkDropdown() : null,
         onSplitCmd,
       })
-    : React.createElement("div", { style: { flex: 1, display: "flex", overflow: "hidden" } },
+    : React.createElement("div", { style: { flex: 1, position: "relative", minHeight: 0, overflow: "hidden" } },
         React.createElement(NotePreview, {
           note:               selNote,
           notes,
           renderMode,
           isMobile,
           onEdit:             () => {
-            if (selNote) { setVimMode(true); if (!isDesktop) onSidebarToggle?.(false); }
+            if (selNote) { setVimMode(true); if (!isDesktop && !isTablet) onSidebarToggle?.(false); }
             else handleNew();
           },
           onDelete:           handleDelete,
@@ -356,6 +357,11 @@ const NotesTab = ({
           backlinks,
           onBacklinkSelect:   id => { onSelectNote(id); setVimMode(false); },
           onAddLink:          handleAddLink,
+          onToggleRead:       async (note) => {
+            const updated = { ...note, isRead: !note.isRead, modified: new Date().toISOString() };
+            await NoteStore.save(updated);
+            onNotesChange(NoteStore.getAll());
+          },
         }),
         isDesktop && !goyoMode && React.createElement(NotesMeta, {
           note:          selNote,
@@ -387,23 +393,54 @@ const NotesTab = ({
   );
 
   // ── Render ────────────────────────────────────────────────────────────────
+  const tabletToggleBtn = isTablet && React.createElement("button", {
+    onClick: () => setTabletSidebarOpen(p => !p),
+    title: tabletSidebarOpen ? "Lijst inklappen" : "Lijst uitklappen",
+    style: {
+      background: "none", border: "none",
+      borderRight: `1px solid ${W.splitBg}`,
+      color: tabletSidebarOpen ? W.blue : W.fgMuted,
+      padding: "0 10px", height: "100%",
+      fontSize: "16px", cursor: "pointer", flexShrink: 0,
+    }
+  }, tabletSidebarOpen ? "◀" : "▶");
+
   return React.createElement("div", {
-    style: { flex: 1, display: "flex", overflow: "hidden" }
+    style: { flex: 1, display: "flex", overflow: "hidden", minHeight: 0 }
   },
     mermaidOverlay,
 
-    // Desktop sidebar (inline)
-    isDesktop && React.createElement("div", {
+    // Sidebar — desktop altijd zichtbaar, tablet inklapbaar
+    (isDesktop || (isTablet && tabletSidebarOpen)) && React.createElement("div", {
       className: "sidebar",
-      style: { width: `${sidebarW}px`, flexShrink: 0,
-               borderRight: `1px solid ${W.splitBg}`,
-               display: "flex", flexDirection: "column" }
+      style: {
+        width: isTablet ? "200px" : `${sidebarW}px`, flexShrink: 0,
+        borderRight: `1px solid ${W.splitBg}`,
+        display: "flex", flexDirection: "column",
+        minHeight: 0, overflow: "hidden",
+        transition: isTablet ? "width 0.2s ease" : "none",
+      }
     }, sidebar),
 
     // Hoofd area
     React.createElement("div", {
       style: { flex: 1, display: "flex", flexDirection: "column",
-               overflow: "hidden", minWidth: 0 }
-    }, mainContent)
+               overflow: "hidden", minWidth: 0, minHeight: 0 }
+    },
+      // Tablet toggle-knop bovenaan de editor-balk injecteren
+      isTablet && React.createElement("div", {
+        style: {
+          display: "flex", alignItems: "center",
+          background: W.bg2, borderBottom: `1px solid ${W.splitBg}`,
+          flexShrink: 0, height: "34px",
+        }
+      },
+        tabletToggleBtn,
+        React.createElement("span", {
+          style: { fontSize: "12px", color: W.fgMuted, paddingLeft: "8px" }
+        }, tabletSidebarOpen ? "Lijst" : "▶ Lijst tonen")
+      ),
+      mainContent
+    )
   );
 };

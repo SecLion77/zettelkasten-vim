@@ -150,7 +150,7 @@ const NoteEditor = ({
   // ── Render ─────────────────────────────────────────────────────────────────
   return React.createElement("div", {
     className: goyoMode ? "goyo-mode" : "",
-    style: { flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }
+    style: { flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minHeight: 0 }
   },
     !goyoMode && toolbar,
     tagStrip,

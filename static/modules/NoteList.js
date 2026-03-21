@@ -15,7 +15,24 @@ const NoteList = ({
   isMobile = false,
   onCloseSidebar,
 }) => {
-  const { useMemo } = React;
+  const { useMemo, useRef, useEffect } = React;
+  const listRef = useRef(null);
+
+  // iOS Safari fix: zet hoogte expliciet zodat overflow:auto werkt
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el) return;
+    const setH = () => {
+      const parent = el.parentElement;
+      if (!parent) return;
+      const h = parent.offsetHeight || parent.clientHeight;
+      if (h > 0) el.style.height = h + "px";
+    };
+    setH();
+    const ro = new ResizeObserver(setH);
+    ro.observe(el.parentElement || document.body);
+    return () => ro.disconnect();
+  }, []);
 
   // ── Filtering (SRP: alleen filteren, geen API) ───────────────────────────
   const filtered = useMemo(() => {
@@ -117,7 +134,10 @@ const NoteList = ({
 
     // ── Lijst ───────────────────────────────────────────────────────────────
     React.createElement("div", {
-      style: { flex: 1, overflowY: "auto", WebkitOverflowScrolling: "touch" }
+      ref: listRef,
+      style: { flex: 1, minHeight: 0,
+               overflowY: "auto",
+               WebkitOverflowScrolling: "touch" }
     },
       filtered.length === 0
         ? React.createElement("div", {

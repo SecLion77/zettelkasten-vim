@@ -66,26 +66,20 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, addJob, upd
   // ── Duplicate-check helper ─────────────────────────────────────────────────
   const findDuplicateUrl = useCallback((checkUrl) => {
     if (!checkUrl) return null;
-    // Normaliseer: verwijder trailing slash en tracking-parameters
+    // Normaliseer: verwijder trailing slash en utm-parameters
     const norm = u => {
       try {
         const p = new URL(u);
+        // Verwijder tracking-parameters
         ["utm_source","utm_medium","utm_campaign","utm_term","utm_content",
-         "fbclid","gclid","ref","source","si"].forEach(k => p.searchParams.delete(k));
+         "fbclid","gclid","ref","source"].forEach(k => p.searchParams.delete(k));
         return p.origin + p.pathname.replace(/\/$/,"") + (p.search||"");
       } catch { return u.replace(/\/$/,""); }
     };
     const target = norm(checkUrl);
-    return notes.find(n => {
-      // Check 1: sourceUrl frontmatter-veld (nieuwste notities)
-      if (n.sourceUrl && norm(n.sourceUrl) === target) return true;
-      // Check 2: bron-link aan het einde van de content (oudere notities)
-      if (n.content) {
-        const matches = [...n.content.matchAll(/\]\((https?:\/\/[^)]+)\)/g)];
-        if (matches.some(m => norm(m[1]) === target)) return true;
-      }
-      return false;
-    }) || null;
+    return notes.find(n => n.content && norm(
+      (n.content.match(/\]\((https?:\/\/[^)]+)\)/) || [])[1] || ""
+    ) === target) || null;
   }, [notes]);
 
 
@@ -110,21 +104,6 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, addJob, upd
     const {md, title, summary, tags: newTags} = initFromPreview(importPreview);
     setEditMd(md); setEditTitle(title); setEditSummary(summary); setTags(newTags);
     setSaved(false); setImporting(false);
-
-    // Automatische tag-suggestie direct na import
-    if (llmModel && (md || summary)) {
-      setAiTagsLoading(true);
-      const textForTags = (summary + " " + md).slice(0, 4000);
-      _aiTagSuggest(textForTags, newTags, allTags, llmModel)
-        .then(suggested => {
-          if (suggested.length > 0) setTags(prev => {
-            const combined = [...new Set([...prev, ...suggested])];
-            return combined;
-          });
-        })
-        .catch(() => {})
-        .finally(() => setAiTagsLoading(false));
-    }
   }, [importPreview]);
 
 
@@ -135,16 +114,10 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, addJob, upd
     const u = url.trim();
     if (!u) return;
 
-    // Client-side duplicate check (snel, op basis van al geladen notities)
+    // Duplicate check vóór de import (overslaan als force=true)
     if (!force) {
       const dup = findDuplicateUrl(u);
-      if (dup) {
-        setDupNote(dup);
-        setError(null);
-        setBusy(false);
-        setImporting(false);
-        return;
-      }
+      if (dup) { setDupNote(dup); setError(null); return; }
     }
     setDupNote(null);
 
@@ -156,22 +129,11 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, addJob, upd
     addJob && addJob({id:jid, type:"import", label:"🌐 Importeren: "+shortUrl+"…"});
     (async () => {
       try {
-        const res = await api.importUrl({url: u, model: llmModel||"llama3.2-vision", force});
-        if (res?.duplicate) {
-          // Server meldt duplicate — toon waarschuwing met "Toch importeren" optie
-          setDupNote({ id: res.duplicate_id, title: res.duplicate_title });
-          setImporting(false);
-          updateJob && updateJob(jid,{status:"done", result:"Al aanwezig"});
-        } else if (res?.ok) {
+        const res = await api.importUrl({url: u, model: llmModel||"llama3.2-vision"});
+        if (res?.ok) {
           setImportPreview(res);
           if (res.images?.length && onRefreshImages) onRefreshImages();
-          // Sla alleen veilige scalaire velden op in job (geen circulaire refs)
-          const safeResult = {
-            title: res.title||"", url: res.url||"",
-            summary: res.summary||"", markdown: res.markdown||"",
-            images: (res.images||[]).map(i => ({name: i.name, url: i.url})),
-          };
-          updateJob && updateJob(jid,{status:"done", result: res.title?.slice(0,44)||"Klaar", importResult: safeResult});
+          updateJob && updateJob(jid,{status:"done", result: res.title?.slice(0,44)||"Klaar", importResult: res});
         } else {
           const msg = res?.error || "Import mislukt";
           setError(msg); setImporting(false);
@@ -207,8 +169,6 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, addJob, upd
     content += `\n\n---\n🌐 **Bron:** [${bronLabel}](${importPreview.url})`;
     await onAddNote({
       id: genId(), title: editTitle, content, tags,
-      sourceUrl: importPreview.url,
-      importedAt: new Date().toISOString(),
       created: new Date().toISOString(), modified: new Date().toISOString(),
     });
     setSaved(true);
@@ -240,7 +200,7 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, addJob, upd
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return React.createElement("div", {
-    style:{display:"flex", flexDirection:"column", flex:1, minHeight:0, overflow:"hidden"}
+    style:{display:"flex", flexDirection:"column", height:"100%", overflow:"hidden"}
   },
 
     // Tab-bar
@@ -395,7 +355,8 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, addJob, upd
         // ── Scrollbaar inhoudspaneel ─────────────────────────────────────────
         React.createElement("div", {style:{
           flex:1, overflowY:"auto", padding:"16px 20px",
-          display:"flex", flexDirection:"column", gap:"14px", minHeight:0, WebkitOverflowScrolling:"touch",}},
+          display:"flex", flexDirection:"column", gap:"14px",
+        }},
 
           // ── Tags (SmartTagEditor) ───────────────────────────────────────────
           !saved && React.createElement("div", {style:{
@@ -405,19 +366,12 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, addJob, upd
             React.createElement("div", {style:{
               fontSize:"11px",color:"rgba(138,198,242,0.6)",
               letterSpacing:"1.2px",marginBottom:"6px",fontWeight:"600",
-              display:"flex", alignItems:"center", gap:"8px",
-            }},
-              "TAGS",
-              aiTagsLoading && React.createElement("span", {style:{
-                fontSize:"11px", color:W.yellow, fontWeight:"400",
-                letterSpacing:0, animation:"ai-pulse 1.4s ease-in-out infinite"
-              }}, "✦ tags worden gesuggereerd…")
-            ),
+            }}, "TAGS"),
             React.createElement(SmartTagEditor, {
               tags,
               onChange: setTags,
               allTags,
-              content: (editSummary + " " + editMd).slice(0, 4000),
+              content: (editSummary + " " + editMd).slice(0, 1500),
               llmModel,
             })
           ),
@@ -627,7 +581,7 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, addJob, upd
 
         // Tags + preview
         React.createElement("div", {style:{flex:1,overflowY:"auto",padding:"16px 20px",
-          display:"flex",flexDirection:"column",gap:"14px", minHeight:0, WebkitOverflowScrolling:"touch",}},
+          display:"flex",flexDirection:"column",gap:"14px"}},
 
           // Tags — SmartTagEditor
           React.createElement("div", {style:{
@@ -705,22 +659,34 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, addJob, upd
                 `/api/import-docx?model=${encodeURIComponent(llmModel)}`,
                 { method:"POST", body:fd }
               );
-              if (!resp.ok) throw new Error(`Server fout: ${resp.status}`);
               const data = await resp.json();
               if (!data.ok) throw new Error(data.error || "Conversie mislukt");
 
+              // Tekst is binnen — toon preview
               setDocxMd(data.md || "");
               setDocxTitle(data.title || file.name.replace(/\.docx?$/i,""));
-              setDocxSummary(data.summary || "");
               setDocxPreview({ filename: file.name });
-              setDocxStatus("");
 
-              // Automatische tag-suggestie
-              if (llmModel && data.md) {
-                const textForTags = ((data.summary||"") + " " + data.md).slice(0, 4000);
-                _aiTagSuggest(textForTags, [], allTags, llmModel)
-                  .then(suggested => { if (suggested.length) setDocxTags(suggested); })
-                  .catch(() => {});
+              // Samenvatting kan even duren — toon indicator
+              if (data.summary) {
+                setDocxSummary(data.summary);
+                setDocxStatus("");
+              } else {
+                setDocxStatus("✦ Samenvatting wordt gegenereerd…");
+                setDocxSummary("");
+                // Vraag samenvatting apart op (non-blocking)
+                try {
+                  const r2 = await fetch("/api/import-docx/summary", {
+                    method:"POST",
+                    headers:{"Content-Type":"application/json"},
+                    body: JSON.stringify({ text: data.md, model: llmModel })
+                  });
+                  if (r2.ok) {
+                    const d2 = await r2.json();
+                    setDocxSummary(d2.summary || "");
+                  }
+                } catch(_) {}
+                setDocxStatus("");
               }
             } catch(err) {
               setDocxError(err.message);
@@ -839,7 +805,7 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, addJob, upd
 
         // Scrollbaar paneel
         React.createElement("div", {style:{flex:1,overflowY:"auto",padding:"16px 20px",
-          display:"flex",flexDirection:"column",gap:"14px", minHeight:0, WebkitOverflowScrolling:"touch",}},
+          display:"flex",flexDirection:"column",gap:"14px"}},
 
           // Tags
           !docxSaved && React.createElement("div", {style:{

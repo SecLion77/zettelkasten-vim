@@ -441,7 +441,7 @@ const TagManagerPanel=({allTags=[],notes=[],onMergeTags,onRenameTag,onDeleteTag,
     return {sorted,total,withTags,withoutTags,avgTagsPerNote,tagCountDist,topCo};
   },[uniqueTags,notes,tagStats]);
 
-  return React.createElement("div",{style:{display:"flex",flexDirection:"column",height:"100%",
+  return React.createElement("div",{style:{display:"flex",flexDirection:"column",flex:1,minHeight:0,
     background:W2.bg,color:W2.fg,overflow:"hidden"}},
 
     // Header
@@ -468,7 +468,7 @@ const TagManagerPanel=({allTags=[],notes=[],onMergeTags,onRenameTag,onDeleteTag,
             borderRadius:"4px",color:W2.fg,padding:"6px 10px",fontSize:"13px",
             outline:"none",boxSizing:"border-box"}})
       ),
-      React.createElement("div",{style:{flex:1,overflowY:"auto",position:"relative"}},
+      React.createElement("div",{style:{flex:1,overflowY:"auto",position:"relative", minHeight:0, WebkitOverflowScrolling:"touch",}},
         filtered.length===0&&React.createElement("div",{style:{color:W2.fgMuted,padding:"24px",textAlign:"center",fontSize:"13px"}},"Geen tags"),
         filtered.map(tag=>{
           const isRen=renaming===tag;
@@ -563,7 +563,7 @@ const TagManagerPanel=({allTags=[],notes=[],onMergeTags,onRenameTag,onDeleteTag,
           placeholder:"Filter…",style:{background:W2.bg3,border:`1px solid ${W2.splitBg}`,
           borderRadius:"4px",color:W2.fg,padding:"5px 10px",fontSize:"12px",outline:"none",width:"110px"}})
       ),
-      React.createElement("div",{style:{flex:1,overflowY:"auto",padding:"12px 16px"}},
+      React.createElement("div",{style:{flex:1,overflowY:"auto",padding:"12px 16px", minHeight:0, WebkitOverflowScrolling:"touch",}},
 
         // Handmatig samenvoegen
         React.createElement("div",{style:{
@@ -685,7 +685,7 @@ const TagManagerPanel=({allTags=[],notes=[],onMergeTags,onRenameTag,onDeleteTag,
 
     // ── STATISTIEKEN ─────────────────────────────────────────────────────────
     tab==="statistieken"&&React.createElement("div",{style:{flex:1,overflowY:"auto",padding:"14px 16px",
-      display:"flex",flexDirection:"column",gap:"20px"}},
+      display:"flex",flexDirection:"column",gap:"20px", minHeight:0, WebkitOverflowScrolling:"touch",}},
 
       // Samenvattingskaarten
       React.createElement("div",{style:{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:"8px"}},
@@ -795,7 +795,7 @@ const TagManagerPanel=({allTags=[],notes=[],onMergeTags,onRenameTag,onDeleteTag,
     ),
 
     // ── OPRUIMEN ─────────────────────────────────────────────────────────────
-    tab==="opruimen"&&React.createElement("div",{style:{flex:1,overflowY:"auto",padding:"14px 16px"}},
+    tab==="opruimen"&&React.createElement("div",{style:{flex:1,overflowY:"auto",padding:"14px 16px", minHeight:0, WebkitOverflowScrolling:"touch",}},
 
       // Ongebruikt
       React.createElement("div",{style:{marginBottom:"20px"}},
