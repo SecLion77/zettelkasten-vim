@@ -131,6 +131,21 @@ const genId = () => {
 };
 const extractLinks = (c="")=>[...new Set([...c.matchAll(/\[\[([^\]]+)\]\]/g)].map(m=>m[1]))];
 const extractTags  = (c="")=>[...new Set([...c.matchAll(/#(\w+)/g)].map(m=>m[1]))];
+// Extracts typed links: [[target|type]] → {target, type}
+// Types: inspireert, weerlegt, bouwt-voort-op, zie-ook, verwijst-naar
+const LINK_TYPES = {
+  "inspireert":      { color: "#9fca56", label: "inspireert",      dash: false },
+  "weerlegt":        { color: "#e5786d", label: "weerlegt",         dash: false },
+  "bouwt-voort-op":  { color: "#8ac6f2", label: "bouwt voort op",  dash: false },
+  "zie-ook":         { color: "#d787ff", label: "zie ook",          dash: true  },
+  "verwijst-naar":   { color: "#eae788", label: "verwijst naar",   dash: true  },
+};
+const extractTypedLinks = (c="") => [
+  ...new Set(
+    [...c.matchAll(/\[\[([^\]|]+)\|([^\]]+)\]\]/g)]
+    .map(m => ({ target: m[1].trim(), type: m[2].trim().toLowerCase() }))
+  )
+];
 
 // ── Enhanced Markdown renderer ─────────────────────────────────────────────────
 const renderMd = (text, notes=[]) => {
@@ -182,6 +197,15 @@ const renderMd = (text, notes=[]) => {
     return `%%MEDIA${i}%%`;
   });
 
+  // Pre-sanitering: CSS-rommel overal strippen VOOR html-escaping
+  // Lokale modellen stoppen soms inline CSS in samenvattingen:
+  // "#8ac6f2;font-weight:bold;font-size:13px;margin-bottom:6px">TEKST"
+  h = h.replace(/#?[0-9a-fA-F]{0,8};?(?:[\w-]+:[^;">\n]{1,60};?){1,10}"?>/g, '');
+  h = h.replace(/<[^>]{0,300}>/g, '');
+  // Verwijder lege koppen (# alleen op een regel)
+  h = h.replace(/^#+\s*$/gm, '');
+  h = h.replace(/\n{3,}/g, '\n\n');
+
   // Nu HTML-escapen (raakt placeholders niet)
   h = h.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 
@@ -216,7 +240,8 @@ const renderMd = (text, notes=[]) => {
     "ai":      { icon:"🧠", color:"#d787ff", bg:"rgba(215,135,255,0.07)", border:"rgba(215,135,255,0.3)"  },
     "note":    { icon:"📝", color:"#eae788", bg:"rgba(234,231,136,0.07)", border:"rgba(234,231,136,0.25)" },
     "warning": { icon:"⚠",  color:"#e5786d", bg:"rgba(229,120,109,0.07)", border:"rgba(229,120,109,0.25)" },
-    "idea":    { icon:"💡", color:"#9fca56", bg:"rgba(159,202,86,0.07)",  border:"rgba(159,202,86,0.25)"  },
+    "idea":        { icon:"💡", color:"#9fca56", bg:"rgba(159,202,86,0.07)",  border:"rgba(159,202,86,0.25)"  },
+    "samenvatting":{ icon:"📋", color:"#8ac6f2", bg:"rgba(138,198,242,0.07)", border:"rgba(138,198,242,0.3)"  },
   };
   h = h.replace(/^(&gt;.*\n?)+/gm, block => {
     const lines = block.split("\n").filter(l => l.trim());
@@ -228,7 +253,24 @@ const renderMd = (text, notes=[]) => {
       const type  = calloutMatch[1].toLowerCase();
       const title = calloutMatch[2].trim();
       const meta  = calloutMeta[type] || { icon:"💬", color:"#a0a8b0", bg:"rgba(255,255,255,0.04)", border:"rgba(255,255,255,0.12)" };
-      const body  = cleaned.slice(1).join("<br>").replace(/^&gt;\s?/gm,"").trim();
+      // Saniteer body: verwijder CSS-rommel die lokale modellen soms toevoegen
+      const rawBody = cleaned.slice(1).join("\n").replace(/^&gt;\s?/gm,"").trim();
+      const body = rawBody
+        // HTML-tags verwijderen
+        .replace(/&lt;[^&]*&gt;/g, "")
+        // CSS-stijl fragmenten: #hexkleur;eigenschap:waarde;...
+        .replace(/#?[0-9a-fA-F]{3,8};[\w-]+:[^;\n<]{1,80}(?:;[\w-]+:[^;\n<]{1,80})*/g, "")
+        // CSS property:value; patronen
+        .replace(/\b[\w-]+:[\w\s#.,%()]+;(?:[\w-]+:[\w\s#.,%()]+;?)*/g, "")
+        // Losse > tekens die overblijven
+        .replace(/^[\s>]+/gm, "")
+        // Samenvatting-labels die het model toevoegt
+        .replace(/\*{0,2}(?:SAMENVATTING|Samenvatting|SUMMARY|Summary)\*{0,2}\s*[:\n]/g, "")
+        // Meerdere lege regels
+        .replace(/\n{3,}/g, "\n\n")
+        .trim()
+        // Regels samenvoegen voor weergave
+        .replace(/\n/g, "<br>");
       return `<div style="border-left:3px solid ${meta.border};background:${meta.bg};border-radius:0 6px 6px 0;padding:10px 14px;margin:10px 0">` +
              `<div style="color:${meta.color};font-weight:bold;font-size:13px;margin-bottom:${body?"6px":"0"}">${meta.icon} ${type.toUpperCase()}${title?" — "+title:""}</div>` +
              (body ? `<div style="color:#e3e0d7;font-size:14px;line-height:1.7">${body}</div>` : "") +
@@ -261,10 +303,12 @@ const renderMd = (text, notes=[]) => {
   h = h.replace(/^\d+\. (.+)$/gm,"<li>$1</li>");
   h = h.replace(/(<li>[\s\S]*?<\/li>\n?)+/g,"<ul>$&</ul>");
 
-  // Zettelkasten links
+  // Zettelkasten links — pill-stijl, broken links gemarkeerd
   h = h.replace(/\[\[([^\]]+)\]\]/g,(_,id)=>{
     const n=notes.find(x=>x.id===id||x.title===id);
-    return `<span class="zlink" data-id="${id}">${n?n.title:id}</span>`;
+    if (n) return `<span class="zlink" data-id="${id}">${n.title}</span>`;
+    // Broken link: notitie bestaat niet
+    return `<span class="zlink broken" data-id="${id}">${id}</span>`;
   });
 
   // Tags
@@ -2387,7 +2431,7 @@ const TagFilterBar = ({tags=[], activeTag, onChange, compact=false, tagColors={}
 
 
 // ── Obsidian-stijl Knowledge Graph ────────────────────────────────────────────
-const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote}) => {
+const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDeleteNote}) => {
   const { useState, useRef, useCallback, useMemo, useEffect } = React;
 
   const cvRef      = useRef(null);
@@ -2474,12 +2518,13 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote}) => 
     for (const note of empty) {
       try {
         await fetch(`/api/notes/${encodeURIComponent(note.id)}`, {method:"DELETE"});
+        onDeleteNote?.(note.id);
         deleted++;
       } catch {}
     }
     setEmptyMsg(`✓ ${deleted} lege notitie${deleted!==1?"s":""} verwijderd`);
     setTimeout(() => setEmptyMsg(""), 4000);
-  }, [notes, emptyMsg, onUpdateNote]);
+  }, [notes, emptyMsg, onUpdateNote, onDeleteNote]);
 
   const deleteOrphans = useCallback(async () => {
     if (!onUpdateNote) return;
@@ -2507,12 +2552,13 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote}) => 
     for (const note of orphans) {
       try {
         await fetch(`/api/notes/${encodeURIComponent(note.id)}`, {method:"DELETE"});
+        onDeleteNote?.(note.id);
         deleted++;
       } catch {}
     }
     setOrphanMsg(`✓ ${deleted} wezen-notitie${deleted!==1?"s":""} verwijderd`);
     setTimeout(() => setOrphanMsg(""), 4000);
-  }, [notes, orphanMsg]);
+  }, [notes, orphanMsg, onDeleteNote]);
   const fetchSemanticEdges = useCallback(async () => {
     if (!notes.length) return;
     setSemLoading(true);
@@ -2697,6 +2743,7 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote}) => 
       ...allNotes.map(n=>({
         id:n.id, title:n.title,
         links:extractLinks(n.content),
+        typedLinks:extractTypedLinks(n.content||""),
         tags:n.tags||[], type:"note",
         linkCount:extractLinks(n.content).length,
         backCount:notes.filter(x=>extractLinks(x.content).includes(n.id)).length,
@@ -2704,10 +2751,20 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote}) => 
       ...tagNodes,
     ];
 
-    // Bouw een set van geldige IDs — filter daarna alle edges die naar niet-bestaande nodes wijzen
-    const validIds = new Set(all.map(n=>n.id));
+    // Bouw een set van geldige IDs én een titel→ID map voor title-based links
+    const validIds  = new Set(all.map(n=>n.id));
+    const titleToId = {};
+    all.forEach(n=>{ if(n.title) titleToId[n.title.toLowerCase().trim()] = n.id; });
+
+    // Resolveer alle links: ID direct geldig → behoud; anders probeer titel-lookup
     all.forEach(n=>{
-      n.links = (n.links||[]).filter(lid => validIds.has(lid));
+      n.links = (n.links||[]).map(raw => {
+        if (validIds.has(raw)) return raw;                           // al een geldig ID
+        const byTitle = titleToId[raw.toLowerCase().trim()];
+        return byTitle || null;                                      // titel gevonden of weg
+      }).filter(Boolean);
+      // Dedupliceer
+      n.links = [...new Set(n.links)];
       n.linkCount = n.links.length;
     });
 
@@ -3674,6 +3731,184 @@ const MODEL_COLOR = (m) => {
   return o ? (PROVIDER_COLOR[o.provider] || "#e3e0d7") : "#9fca56";
 };
 
+// ── PDFUploadPanel — clean upload-paneel voor Invoer → PDF tab ───────────────
+const PDFUploadPanel = ({ serverPdfs=[], onRefreshPdfs, onOpenPdf, llmModel,
+                          allTags=[], notes=[], onAddNote, addJob, updateJob }) => {
+  const { useState, useRef, useCallback } = React;
+  const [dragOver,   setDragOver]   = useState(false);
+  const [uploading,  setUploading]  = useState(false);
+  const [uploaded,   setUploaded]   = useState([]);   // [{name, isNew}]
+  const [error,      setError]      = useState(null);
+  const fileRef = useRef(null);
+
+  const doUpload = useCallback(async (files) => {
+    const pdfs = [...files].filter(f => f.name.toLowerCase().endsWith(".pdf"));
+    if (!pdfs.length) return;
+    setUploading(true); setError(null);
+    const added = [];
+    for (const file of pdfs) {
+      try {
+        const jid = addJob?.({ id: Math.random().toString(36).slice(2),
+          type: "pdf", label: "📄 Uploaden: " + file.name.slice(0,30) + "…" });
+        const res = await PDFService.uploadPdf(file);
+        const name = res?.name || file.name;
+        added.push({ name });
+        updateJob?.(jid, { status: "done", result: "Geüpload" });
+      } catch(e) {
+        setError(e.message);
+      }
+    }
+    await onRefreshPdfs?.();
+    setUploaded(prev => [...added, ...prev]);
+    setUploading(false);
+  }, [onRefreshPdfs, addJob, updateJob]);
+
+  const onDrop = useCallback((e) => {
+    e.preventDefault(); setDragOver(false);
+    doUpload(e.dataTransfer.files);
+  }, [doUpload]);
+
+  return React.createElement("div", {
+    style: { flex: 1, display: "flex", flexDirection: "column",
+             overflow: "hidden", minHeight: 0, background: W.bg }
+  },
+    // Header
+    React.createElement("div", {
+      style: { background: W.bg2, borderBottom: `1px solid ${W.splitBg}`,
+               padding: "10px 16px", flexShrink: 0,
+               display: "flex", alignItems: "center", gap: "12px" }
+    },
+      React.createElement("span", {
+        style: { fontSize: "13px", color: W.statusFg, fontWeight: "700",
+                 letterSpacing: "1.5px" }
+      }, "PDF IMPORTEREN"),
+      React.createElement("span", {
+        style: { background: W.blue, color: W.bg,
+                 borderRadius: "10px", padding: "0 8px", fontSize: "13px" }
+      }, serverPdfs.length),
+      React.createElement("button", {
+        onClick: () => fileRef.current?.click(),
+        style: { marginLeft: "auto", background: W.blue, color: W.bg,
+                 border: "none", borderRadius: "6px",
+                 padding: "6px 14px", fontSize: "13px",
+                 cursor: "pointer", fontWeight: "bold" }
+      }, uploading ? "⏳ Bezig…" : "+ Kies bestand(en)")
+    ),
+
+    // Scroll-gebied
+    React.createElement("div", {
+      style: { flex: 1, overflowY: "auto", padding: "20px",
+               WebkitOverflowScrolling: "touch" }
+    },
+      // Drop-zone
+      React.createElement("div", {
+        style: {
+          border: `2px dashed ${dragOver ? W.blue : W.splitBg}`,
+          borderRadius: "12px",
+          background: dragOver ? "rgba(138,198,242,0.06)" : "rgba(255,255,255,0.02)",
+          padding: "40px 20px", textAlign: "center",
+          cursor: "pointer", marginBottom: "20px",
+          transition: "all 0.15s",
+        },
+        onClick: () => fileRef.current?.click(),
+        onDragOver: e => { e.preventDefault(); setDragOver(true); },
+        onDragLeave: () => setDragOver(false),
+        onDrop,
+      },
+        React.createElement("div", { style: { fontSize: "40px", marginBottom: "10px" } }, "📄"),
+        React.createElement("div", {
+          style: { fontSize: "15px", color: W.fg, fontWeight: "500", marginBottom: "6px" }
+        }, "Sleep PDF-bestanden hierheen"),
+        React.createElement("div", {
+          style: { fontSize: "13px", color: W.fgMuted }
+        }, "of klik om te bladeren · Meerdere bestanden tegelijk mogelijk"),
+        error && React.createElement("div", {
+          style: { marginTop: "10px", fontSize: "13px", color: W.orange }
+        }, "⚠ " + error)
+      ),
+
+      // Recent geüpload
+      uploaded.length > 0 && React.createElement("div", null,
+        React.createElement("div", {
+          style: { fontSize: "11px", color: W.fgMuted, letterSpacing: "1px",
+                   marginBottom: "8px", fontWeight: "600" }
+        }, "ZOJUIST GEÜPLOAD"),
+        ...uploaded.map((u, i) =>
+          React.createElement("div", {
+            key: i,
+            style: { display: "flex", alignItems: "center", gap: "10px",
+                     padding: "8px 12px", borderRadius: "6px",
+                     background: "rgba(159,202,86,0.06)",
+                     border: `1px solid rgba(159,202,86,0.2)`,
+                     marginBottom: "6px" }
+          },
+            React.createElement("span", { style: { fontSize: "16px" } }, "📄"),
+            React.createElement("span", {
+              style: { flex: 1, fontSize: "13px", color: W.fg,
+                       overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }
+            }, u.name),
+            React.createElement("button", {
+              onClick: () => onOpenPdf?.(u.name),
+              style: { background: "rgba(138,198,242,0.1)",
+                       border: `1px solid rgba(138,198,242,0.3)`,
+                       borderRadius: "5px", color: W.blue,
+                       padding: "3px 10px", fontSize: "12px", cursor: "pointer" }
+            }, "→ Openen")
+          )
+        )
+      ),
+
+      // Vault bibliotheek overzicht
+      serverPdfs.length > 0 && React.createElement("div", null,
+        React.createElement("div", {
+          style: { fontSize: "11px", color: W.fgMuted, letterSpacing: "1px",
+                   marginBottom: "8px", fontWeight: "600", marginTop: uploaded.length ? "20px" : "0" }
+        }, `IN VAULT (${serverPdfs.length})`),
+        ...serverPdfs.map((pdf, i) => {
+          const pdfName = typeof pdf === "string" ? pdf : pdf.name;
+          const pdfSize = pdf.size ? ` · ${(pdf.size/1024/1024).toFixed(1)} MB` : "";
+          return React.createElement("div", {
+            key: i,
+            style: { display: "flex", alignItems: "center", gap: "10px",
+                     padding: "7px 12px", borderRadius: "5px",
+                     borderBottom: `1px solid ${W.splitBg}`,
+                     cursor: "pointer" },
+            onClick: () => onOpenPdf?.(pdfName),
+            onMouseEnter: e => e.currentTarget.style.background = "rgba(255,255,255,0.03)",
+            onMouseLeave: e => e.currentTarget.style.background = "transparent",
+          },
+            React.createElement("span", { style: { fontSize: "14px", flexShrink: 0 } }, "📄"),
+            React.createElement("div", { style: { flex: 1, minWidth: 0 } },
+              React.createElement("div", {
+                style: { fontSize: "13px", color: W.fg,
+                         overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }
+              }, pdfName),
+              pdfSize && React.createElement("div", {
+                style: { fontSize: "10px", color: W.fgMuted, marginTop: "1px" }
+              }, pdfSize)
+            ),
+            React.createElement("span", {
+              style: { fontSize: "11px", color: W.blue, flexShrink: 0 }
+            }, "→ open")
+          );
+        })
+      ),
+
+      serverPdfs.length === 0 && uploaded.length === 0 &&
+        React.createElement("div", {
+          style: { textAlign: "center", color: W.fgMuted, fontSize: "13px",
+                   marginTop: "20px" }
+        }, "Nog geen PDFs in de vault.")
+    ),
+
+    React.createElement("input", {
+      ref: fileRef, type: "file", multiple: true, accept: ".pdf",
+      style: { display: "none" },
+      onChange: e => { doUpload(e.target.files); e.target.value = ""; }
+    })
+  );
+};
+
 const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, onAutoSummarize, onDeletePdf, onPasteToNote=null, onAddNote=null, notes=[], isTablet=false}) => {
   const [pdfDoc,     setPdfDoc]     = useState(null);
   const [pdfFile,    setPdfFile]    = useState(null);
@@ -3692,7 +3927,7 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
   const [quickNote,  setQuickNote]  = useState("");
   const [quickTags,  setQuickTags]  = useState([]);
   const [showLibrary,   setShowLibrary]   = useState(true);
-  const [showAnnotPanel,setShowAnnotPanel]= useState(true);
+  const [showAnnotPanel,setShowAnnotPanel]= useState(!isTablet);
   const [summarizing,   setSummarizing]   = useState(false);
   const [summarizeErr,  setSummarizeErr]  = useState(null);
   const [renderedPages, setRenderedPages] = useState([]);  // [{num, canvas, textLayer}]
@@ -4367,7 +4602,7 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
             const dx=e.touches[0].clientX-e.touches[1].clientX;
             const dy=e.touches[0].clientY-e.touches[1].clientY;
             pinchRef.current={active:true, dist0:Math.hypot(dx,dy), scale0:scale};
-            e.preventDefault();
+            // Geen preventDefault hier — dat blokkeert iOS single-finger scroll
           }
         },
         onTouchMove:(e)=>{
@@ -4411,10 +4646,9 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
                 boxShadow:"0 4px 20px rgba(0,0,0,0.6)",
                 marginBottom:"16px",
                 userSelect:"text", WebkitUserSelect:"text",
-                // touchAction:none op de pagina zelf zodat iOS de selectie
-                // niet afkapt aan de pagina-grens; scroll wordt afgehandeld
-                // door de scroll-container erboven
-                touchAction:"none",
+                // touchAction:"pan-y" zodat iOS verticaal scrollen doorgeeft
+                // aan de scroll-container, maar pinch-zoom ook werkt
+                touchAction:"pan-y",
               }
             },
               // Canvas als img-achtige container
@@ -5211,6 +5445,8 @@ const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote, setAiStatu
   const [lightbox,      setLightbox]     = useState(null);
   const [dragOver,      setDragOver]     = useState(false);
   const [descFilter,    setDescFilter]   = useState("");  // zoek in beschrijvingen
+  const galleryRef = React.useRef(null);
+  const toolbarRef  = React.useRef(null);
 
   // Annotatie state — identiek aan PDF
   const [annotations,   setAnnotations]  = useState(imgNotes||[]);
@@ -5226,8 +5462,15 @@ const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote, setAiStatu
   const fileRef   = useRef(null);
   const imgRef    = useRef(null);   // ref naar actieve afbeelding in annotatiemodus
 
-  // Sync imgNotes → lokale state
-  useEffect(() => { setAnnotations(imgNotes||[]); }, [imgNotes]);
+  // Sync imgNotes → lokale state + herstel descriptions
+  useEffect(() => {
+    const notes = imgNotes||[];
+    setAnnotations(notes);
+    // Beschrijvingen zitten als {file, description} entries in imgNotes
+    const descMap = {};
+    notes.forEach(n => { if (n.file && n.description) descMap[n.file] = n.description; });
+    if (Object.keys(descMap).length > 0) setDescs(p => ({...p, ...descMap}));
+  }, [imgNotes]);
 
   const saveAnnotations = useCallback(async (updated) => {
     setAnnotations(updated);
@@ -5326,11 +5569,19 @@ const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote, setAiStatu
         const model = llmModel || "llama3.2-vision";
         const res   = await api.llmDescribeImage(fname, model);
         if (res?.description) {
+          // Sla beschrijving op in setDescs (live UI)
           setDescs(p=>({...p, [fname]: res.description}));
+          // Sla ook op in imgNotes voor persistentie + badge na herlaad
+          const current = await api.getImgAnnotations();
+          const updated = (current||[]).filter(a=>!(a.file===fname && !a.x));
+          updated.push({file:fname, description:res.description});
+          await api.saveImgAnnotations(updated);
+          setImgNotes?.([...updated]);
+          // Maak notitie aan
           if (onAddNote) {
             await onAddNote({
               id: genId(), title: "Afbeelding — "+stem,
-              content: "*Automatisch gegenereerd*\n\n![[img:"+fname+"]]\n\n## Beschrijving\n\n"+res.description,
+              content: "![[img:"+fname+"]]\n\n## Beschrijving\n\n"+res.description,
               tags: ["afbeelding","media"],
               created: new Date().toISOString(), modified: new Date().toISOString(),
             });
@@ -5345,7 +5596,7 @@ const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote, setAiStatu
         updateJob && updateJob(jid,{status:"error", error:e.message});
       } finally { setBusy(null); }
     })();
-  }, [llmModel, onAddNote, addJob, updateJob]);
+  }, [llmModel, onAddNote, addJob, updateJob, setImgNotes]);
 
   const deleteImg = useCallback(async (fname) => {
     const linked = (notes||[]).filter(n =>
@@ -5381,7 +5632,7 @@ const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote, setAiStatu
   });
 
   return React.createElement("div", {
-    style:{display:"flex",flex:1,minHeight:0,overflow:"hidden",position:"relative"}
+    style:{display:"flex",flex:1,minHeight:0,overflow:"hidden"}
   },
 
     // ── Hoofdkolom: toolbar + galerij ────────────────────────────────────────
@@ -5389,6 +5640,7 @@ const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote, setAiStatu
 
       // Toolbar
       React.createElement("div",{
+        ref: toolbarRef,
         style:{background:W.bg2,borderBottom:`1px solid ${W.splitBg}`,
                padding:"8px 14px",display:"flex",alignItems:"center",
                gap:"10px",flexShrink:0,flexWrap:"wrap"}
@@ -5397,17 +5649,6 @@ const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote, setAiStatu
           letterSpacing:"1.5px",fontWeight:"bold"}},"AFBEELDINGEN"),
         React.createElement("span",{style:{background:W.blue,color:W.bg,
           borderRadius:"10px",padding:"0 7px",fontSize:"14px"}}, imgs.length),
-        activeImg && React.createElement("span",{
-          style:{fontSize:"14px",color:W.comment,background:"rgba(159,202,86,0.1)",
-                 border:"1px solid rgba(159,202,86,0.3)",borderRadius:"4px",
-                 padding:"2px 8px",maxWidth:"180px",overflow:"hidden",
-                 textOverflow:"ellipsis",whiteSpace:"nowrap"}
-        },"✏ "+activeImg),
-        activeImg && React.createElement("button",{
-          onClick:()=>{ setActiveImg(null); setPendingPin(null); },
-          style:{background:"none",border:`1px solid ${W.splitBg}`,color:W.fgMuted,
-                 borderRadius:"4px",padding:"2px 8px",fontSize:"14px",cursor:"pointer"}
-        },"× sluiten"),
         React.createElement("div",{style:{flex:1}}),
         // Zoekbalk: naam + beschrijving
         React.createElement("input",{
@@ -5418,8 +5659,7 @@ const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote, setAiStatu
                  borderRadius:"5px",color:W.fg,padding:"4px 10px",fontSize:"13px",
                  width:"200px",outline:"none"}
         }),
-        React.createElement("span",{style:{fontSize:"14px",color:W.fgMuted}},
-          activeImg ? "klik op afbeelding om een annotatie te plaatsen" : "klik ✏ om te annoteren"),
+
         React.createElement("button",{
           onClick:()=>fileRef.current?.click(),
           style:{background:W.blue,color:W.bg,border:"none",borderRadius:"6px",
@@ -5434,9 +5674,10 @@ const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote, setAiStatu
 
       // Galerij / annotatie-view
       React.createElement("div",{
-        style:{flex:1,overflowY:"auto",padding:"16px",
+        ref: galleryRef,
+        style:{flex:1, overflowY:"auto", padding:"16px", minHeight:0,
                background: dragOver?"rgba(138,198,242,0.05)":W.bg,
-               WebkitOverflowScrolling:"touch", minHeight:0,},
+               WebkitOverflowScrolling:"touch"},
         onDragOver:e=>{ e.preventDefault(); setDragOver(true); },
         onDragLeave:()=>setDragOver(false),
         onDrop,
@@ -5606,74 +5847,92 @@ const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote, setAiStatu
                          display:"flex",alignItems:"center",justifyContent:"center",
                          color:"#a8d8f0",fontSize:"14px",gap:"6px"}
                 },"⏳ AI verwerkt…"),
-                // Annotatie-teller badge
-                annotCount>0 && React.createElement("div",{
-                  style:{position:"absolute",top:"6px",right:"6px",
-                         background:"rgba(229,120,109,0.85)",color:"white",
-                         borderRadius:"10px",padding:"1px 7px",fontSize:"14px",
-                         fontWeight:"bold",backdropFilter:"blur(4px)"}
-                },"📌 "+annotCount)
+                // Beschrijving-badge op thumbnail
+                React.createElement("div",{
+                  style:{position:"absolute",top:"6px",left:"6px",
+                         background: desc ? "rgba(159,202,86,0.88)" : "rgba(80,80,90,0.75)",
+                         color:"white", borderRadius:"10px",
+                         padding:"1px 8px",fontSize:"11px",
+                         fontWeight:"600",backdropFilter:"blur(4px)"}
+                }, desc ? "✓ beschrijving" : "geen beschrijving")
               ),
               // Info
               React.createElement("div",{style:{padding:"10px 12px",flex:1,
                 display:"flex",flexDirection:"column",gap:"6px"}},
-                React.createElement("div",{style:{fontSize:"14px",color:W.fg,
-                  fontWeight:"bold",overflow:"hidden",textOverflow:"ellipsis",
+                React.createElement("div",{style:{fontSize:"13px",color:W.fg,
+                  fontWeight:"600",overflow:"hidden",textOverflow:"ellipsis",
                   whiteSpace:"nowrap"}}, img.name),
+                // Beschrijving of knop om te genereren
                 desc
-                  ? React.createElement("div",{style:{fontSize:"14px",color:W.fgDim,
-                      lineHeight:"1.55",flex:1}}, desc)
+                  ? React.createElement("div",{style:{fontSize:"13px",color:W.fgDim,
+                      lineHeight:"1.5",flex:1,
+                      display:"-webkit-box",WebkitLineClamp:3,
+                      WebkitBoxOrient:"vertical",overflow:"hidden"}}, desc)
                   : React.createElement("button",{
                       onClick:()=>describeImage(img.name), disabled:!!busy,
                       style:{background:"rgba(138,198,242,0.07)",
                              border:"1px solid rgba(138,198,242,0.2)",color:"#a8d8f0",
-                             borderRadius:"4px",padding:"4px 10px",fontSize:"14px",
-                             cursor:busy?"not-allowed":"pointer",opacity:busy?0.5:1}
-                    },"🧠 AI beschrijving genereren"),
+                             borderRadius:"4px",padding:"4px 10px",fontSize:"13px",
+                             cursor:busy?"not-allowed":"pointer",opacity:busy?0.5:1,
+                             textAlign:"left"}
+                    },"🧠 Beschrijving genereren"),
                 // Acties
                 React.createElement("div",{style:{display:"flex",gap:"5px",marginTop:"4px"}},
+                  // 🔍 Lightbox
                   React.createElement("button",{
                     onClick:()=>setLightbox(img.name),
+                    title:"Vergroot",
                     style:{flex:1,background:"none",border:`1px solid ${W.splitBg}`,
                            color:W.fgMuted,borderRadius:"4px",padding:"4px",
                            fontSize:"14px",cursor:"pointer"}
                   },"🔍"),
-                  React.createElement("button",{
-                    onClick:()=>{ setActiveImg(img.name); setPendingPin(null); setEditingId(null); setFilterTag(null); },
-                    style:{flex:1,background:"rgba(229,120,109,0.08)",
-                           border:`1px solid rgba(229,120,109,0.2)`,
-                           color:W.orange,borderRadius:"4px",padding:"4px",
-                           fontSize:"14px",cursor:"pointer"}
-                  },"✏ "+(annotCount>0?annotCount+" ann.":"annoteren")),
-                  desc && onAddNote && React.createElement("button",{
+                  // → Notitie openen of aanmaken
+                  onAddNote && React.createElement("button",{
                     onClick:async()=>{
-                      const stem=img.name.replace(/\.[^.]+$/,"");
-                      await onAddNote({
-                        id:genId(),title:"Afbeelding — "+stem,
-                        content:"*Automatisch gegenereerd*\n\n![[img:"+img.name+"]]\n\n## Beschrijving\n\n"+desc,
-                        tags:["afbeelding","media"],
-                        created:new Date().toISOString(),modified:new Date().toISOString()
-                      });
+                      const stem = img.name.replace(/\.[^.]+$/,"");
+                      // Zoek bestaande notitie voor deze afbeelding
+                      const existing = (notes||[]).find(n =>
+                        n.content?.includes(`![[img:${img.name}]]`) ||
+                        n.title === "Afbeelding — "+stem
+                      );
+                      if (existing) {
+                        // Navigeer naar bestaande notitie
+                        await onAddNote({_navigate: existing.id});
+                      } else {
+                        // Maak nieuwe notitie
+                        await onAddNote({
+                          id:genId(), title:"Afbeelding — "+stem,
+                          content: "![[img:"+img.name+"]]"
+                            + (desc ? "\n\n## Beschrijving\n\n"+desc : ""),
+                          tags:["afbeelding","media"],
+                          created:new Date().toISOString(),
+                          modified:new Date().toISOString()
+                        });
+                      }
                     },
-                    style:{flex:1,background:"rgba(138,198,242,0.08)",
+                    title: desc ? "Open of maak notitie met beschrijving"
+                                : "Maak notitie met afbeelding",
+                    style:{flex:2,
+                           background: desc ? "rgba(138,198,242,0.08)" : "rgba(138,198,242,0.04)",
                            border:"1px solid rgba(138,198,242,0.2)",color:"#a8d8f0",
-                           borderRadius:"4px",padding:"4px",fontSize:"14px",cursor:"pointer"}
-                  },"📝"),
-                  // Plakken in open notitie (split-modus)
+                           borderRadius:"4px",padding:"4px",fontSize:"13px",cursor:"pointer"}
+                  }, desc ? "📝 → notitie" : "📝 notitie"),
+                  // 📋 Plakken in split-modus
                   onPasteToNote && React.createElement("button",{
                     onClick:()=>onPasteToNote({
-                      text: (desc ? `![[img:${img.name}]]\n\n${desc}` : `![[img:${img.name}]]`),
-                      source: img.name,
-                      page: null,
+                      text: desc ? `![[img:${img.name}]]\n\n${desc}` : `![[img:${img.name}]]`,
+                      source: img.name, page:null,
                       url: `/api/image/${encodeURIComponent(img.name)}`,
                     }),
-                    title:"Plak afbeelding + beschrijving in open notitie",
+                    title:"Plak in open notitie",
                     style:{flex:1,background:"rgba(159,202,86,0.08)",
                            border:"1px solid rgba(159,202,86,0.25)",color:W.comment,
                            borderRadius:"4px",padding:"4px",fontSize:"14px",cursor:"pointer"}
                   },"📋"),
+                  // 🗑 Verwijderen
                   React.createElement("button",{
                     onClick:()=>deleteImg(img.name),
+                    title:"Verwijder afbeelding",
                     style:{background:"rgba(229,120,109,0.08)",
                            border:"1px solid rgba(229,120,109,0.2)",color:W.orange,
                            borderRadius:"4px",padding:"4px 8px",fontSize:"14px",cursor:"pointer"}
@@ -5686,197 +5945,6 @@ const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote, setAiStatu
       )
     ),
 
-    // ── Annotatiepaneel rechts — identiek aan PDF ─────────────────────────────
-    activeImg && React.createElement("button",{
-      onClick:()=>setShowAnnotPanel(p=>!p),
-      title: showAnnotPanel ? "Annotaties verbergen" : "Annotaties tonen",
-      style:{
-        position:"absolute", right:(showAnnotPanel && !isTablet)?286:0, top:"50%",
-        transform:"translateY(-50%)",
-        background:W.bg2, border:`1px solid ${W.splitBg}`,
-        borderRight:showAnnotPanel?"none":"1px solid "+W.splitBg,
-        borderRadius:showAnnotPanel?"4px 0 0 4px":"0 4px 4px 0",
-        color:W.fgMuted, fontSize:"14px", cursor:"pointer",
-        padding:"8px 5px", zIndex:10, lineHeight:1,
-        writingMode:"vertical-rl",
-      }
-    }, showAnnotPanel ? "▶" : "◀ " + (fileAnnots.length > 0 ? fileAnnots.length : "")),
-
-    activeImg && showAnnotPanel && React.createElement("div",{style:{
-      width:"280px",flexShrink:0,background:W.bg2,
-      borderLeft:`1px solid ${W.splitBg}`,
-      display:"flex",flexDirection:"column",
-      ...(window.innerWidth<768 ? {
-        position:"absolute",right:0,top:0,bottom:0,zIndex:20,
-        boxShadow:"-4px 0 20px rgba(0,0,0,0.5)"
-      } : {}),
-    }},
-      // Paneel header
-      React.createElement("div",{style:{background:W.statusBg,
-        borderBottom:`1px solid ${W.splitBg}`,padding:"6px 10px",
-        display:"flex",alignItems:"center",gap:"6px",flexShrink:0}},
-        React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:"1px",flex:1}},
-          React.createElement("span",{style:{fontSize:"14px",color:W.statusFg,
-            letterSpacing:"1px"}},"ANNOTATIES"),
-          React.createElement("span",{style:{fontSize:"9px",color:W.fgMuted,
-            maxWidth:"180px",overflow:"hidden",textOverflow:"ellipsis",
-            whiteSpace:"nowrap"}}, activeImg)
-        ),
-        React.createElement("span",{style:{background:W.blue,color:W.bg,
-          borderRadius:"10px",padding:"0 6px",fontSize:"14px"}}, fileAnnots.length),
-        React.createElement("div",{style:{flex:1}}),
-        filterTag&&React.createElement("button",{
-          onClick:()=>setFilterTag(null),
-          style:{background:"rgba(159,202,86,0.16)",color:"#b8e06a",
-                 border:"1px solid rgba(159,202,86,0.45)",
-                 borderRadius:"5px",fontSize:"12px",fontWeight:"600",
-                 padding:"3px 9px",cursor:"pointer",
-                 display:"flex",alignItems:"center",gap:"4px"}
-        },
-          React.createElement("span",{style:{fontSize:"10px",opacity:0.7}},"#"),
-          filterTag,
-          React.createElement("span",{style:{marginLeft:"3px",fontSize:"13px",opacity:0.7}},"×")
-        ),
-        React.createElement("button",{
-          onClick:()=>setShowAnnotPanel(false),
-          style:{background:"none",border:"none",color:W.fgMuted,
-                 fontSize:"16px",cursor:"pointer",padding:"0 2px",lineHeight:1}
-        },"×")
-      ),
-      // Pending pin invoerformulier bovenaan de sidebar
-      pendingPin && React.createElement("div",{style:{
-        padding:"12px 12px 10px",
-        borderBottom:`2px solid ${activeColor.border}`,
-        background: activeColor.bg,
-        flexShrink:0,
-      }},
-        React.createElement("div",{style:{fontSize:"11px",fontWeight:"600",color:activeColor.border,
-          letterSpacing:"1px",marginBottom:"8px",fontWeight:"bold"}},"📌 NIEUWE ANNOTATIE"),
-        React.createElement("div",{style:{display:"flex",gap:"5px",
-          marginBottom:"8px",alignItems:"center"}},
-          React.createElement("span",{style:{fontSize:"14px",color:W.fgMuted,
-            marginRight:"2px"}},"kleur:"),
-          ...HCOLORS.map(c=>React.createElement("button",{key:c.id,
-            onClick:()=>setActiveColor(c),
-            style:{width:"20px",height:"20px",borderRadius:"3px",background:c.bg,
-                   border:`2px solid ${activeColor.id===c.id?c.border:W.splitBg}`,
-                   cursor:"pointer",padding:0}}))
-        ),
-        React.createElement("textarea",{
-          autoFocus:true,
-          value:quickNote,
-          onChange:e=>setQuickNote(e.target.value),
-          onKeyDown:e=>{
-            if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();addAnnotation();}
-            if(e.key==="Escape"){setPendingPin(null);}
-          },
-          placeholder:"Notitie… (Enter=opslaan · Esc=annuleren)",
-          rows:2,
-          style:{width:"100%",background:W.bg,border:`1px solid ${W.splitBg}`,
-                 borderRadius:"4px",padding:"6px 8px",color:W.fg,
-                 fontSize:"14px",outline:"none",resize:"none",marginBottom:"6px"}
-        }),
-        React.createElement(SmartTagEditor,{tags:quickTags,onChange:setQuickTags,
-          allTags:[...(allTags||[]),...allAnnotTags]}),
-        React.createElement("div",{style:{display:"flex",gap:"6px",marginTop:"8px"}},
-          React.createElement("button",{
-            onClick:addAnnotation,
-            style:{background:activeColor.border,color:W.bg,border:"none",
-                   borderRadius:"4px",padding:"5px 14px",fontSize:"14px",
-                   cursor:"pointer",fontWeight:"bold"}
-          },"✓ Opslaan"),
-          React.createElement("button",{
-            onClick:()=>setPendingPin(null),
-            style:{background:"none",color:W.fgMuted,border:`1px solid ${W.splitBg}`,
-                   borderRadius:"4px",padding:"5px 10px",fontSize:"14px",cursor:"pointer"}
-          },"✕ Annuleren")
-        )
-      ),
-      // Tag filter
-      allAnnotTags.length>0 && React.createElement("div",{style:{padding:"5px 8px",borderBottom:`1px solid ${W.splitBg}`,background:"rgba(0,0,0,0.15)",flexShrink:0}},
-        React.createElement(TagFilterBar,{tags:allAnnotTags,activeTag:filterTag,onChange:setFilterTag,compact:true,maxVisible:5})
-      ),
-      // Annotatielijst
-      React.createElement("div",{style:{flex:1,overflow:"auto"}},
-        panelAnnots.length===0
-          ? React.createElement("div",{style:{padding:"24px 14px",color:W.fgMuted,
-              fontSize:"14px",textAlign:"center",lineHeight:"2"}},
-              filterTag
-                ? `Geen annotaties met #${filterTag}`
-                : React.createElement(React.Fragment,null,
-                    React.createElement("div",{style:{fontSize:"20px",marginBottom:"8px"}},"📌"),
-                    React.createElement("div",{style:{color:W.fgDim}},"Nog geen annotaties"),
-                    React.createElement("div",{style:{fontSize:"14px",color:W.splitBg,
-                      lineHeight:"1.7",marginTop:"4px"}},
-                      "Klik op de afbeelding\nom een pin te plaatsen.")
-                  ))
-          : panelAnnots.map(a => {
-              const col = HCOLORS.find(c=>c.id===a.colorId)||HCOLORS[0];
-              const isEditing = editingId===a.id;
-              return React.createElement("div",{key:a.id,style:{
-                borderBottom:`1px solid ${W.splitBg}`,
-                borderLeft:`3px solid ${col.border}`,
-                background:isEditing?"rgba(255,255,255,0.025)":"transparent"
-              }},
-                React.createElement("div",{
-                  style:{padding:"8px 10px",cursor:"pointer"},
-                  onClick:()=>setEditingId(isEditing?null:a.id)
-                },
-                  React.createElement("div",{style:{fontSize:"14px",color:W.fg,
-                    lineHeight:"1.5",marginBottom:"3px"}},
-                    a.note||(React.createElement("span",{style:{color:W.fgMuted,fontStyle:"italic"}},"(geen notitie)"))),
-                  React.createElement("div",{style:{display:"flex",gap:"3px",
-                    flexWrap:"wrap",alignItems:"center"}},
-                    ...(a.tags||[]).map(t=>React.createElement(TagPill,{key:t,tag:t,small:true})),
-                    React.createElement("span",{style:{fontSize:"9px",color:W.fgMuted,marginLeft:"auto"}},
-                      `${Math.round(a.x*100)}%,${Math.round(a.y*100)}%`),
-                    React.createElement("span",{style:{fontSize:"9px",color:W.splitBg}},
-                      isEditing?"▲":"▼")
-                  )
-                ),
-                isEditing && React.createElement("div",{style:{
-                  padding:"0 10px 12px",borderTop:`1px solid ${W.splitBg}`}},
-                  React.createElement("div",{style:{fontSize:"9px",color:W.fgMuted,
-                    margin:"8px 0 4px",letterSpacing:"1px"}},"NOTITIE"),
-                  React.createElement("textarea",{
-                    value:a.note||"",
-                    onChange:e=>updateAnnotation(a.id,{note:e.target.value}),
-                    rows:3,
-                    style:{width:"100%",background:W.bg,border:`1px solid ${W.splitBg}`,
-                           borderRadius:"4px",padding:"6px 8px",color:W.fg,
-                           fontSize:"14px",outline:"none",resize:"vertical"},
-                    placeholder:"Notitie toevoegen…"
-                  }),
-                  React.createElement("div",{style:{fontSize:"9px",color:W.fgMuted,
-                    margin:"8px 0 4px",letterSpacing:"1px"}},"TAGS"),
-                  React.createElement(SmartTagEditor,{tags:a.tags||[],
-                    onChange:tags=>updateAnnotation(a.id,{tags}),
-                    allTags:[...(allTags||[]),...allAnnotTags]}),
-                  React.createElement("div",{style:{display:"flex",gap:"5px",margin:"8px 0"}},
-                    ...HCOLORS.map(c=>React.createElement("button",{key:c.id,
-                      onClick:()=>updateAnnotation(a.id,{colorId:c.id}),
-                      style:{width:"18px",height:"18px",borderRadius:"3px",background:c.bg,
-                             border:`2px solid ${a.colorId===c.id?c.border:W.splitBg}`,
-                             cursor:"pointer",padding:0}}))
-                  ),
-                  React.createElement("div",{style:{display:"flex",gap:"6px"}},
-                    React.createElement("button",{
-                      onClick:()=>setEditingId(null),
-                      style:{background:W.comment,color:W.bg,border:"none",borderRadius:"3px",
-                             padding:"3px 10px",fontSize:"14px",cursor:"pointer",fontWeight:"bold"}
-                    },"✓ klaar"),
-                    React.createElement("button",{
-                      onClick:()=>removeAnnotation(a.id),
-                      style:{background:"none",color:W.orange,
-                             border:`1px solid rgba(229,120,109,0.3)`,
-                             borderRadius:"3px",padding:"3px 8px",fontSize:"14px",cursor:"pointer"}
-                    },":del")
-                  )
-                )
-              );
-            })
-      )
-    ),
 
     // ── Lightbox ─────────────────────────────────────────────────────────────
     lightbox && React.createElement("div",{
@@ -9764,6 +9832,7 @@ const FuzzySearch = ({ notes, allTags, onOpenNote, onAddNote, onUpdateNote, onPa
   const [saved,      setSaved]      = useState({});     // {id → bool}  (groen vinkje)
   const [tagInput,   setTagInput]   = useState({});     // {id → string}
   const [typeFilter, setTypeFilter] = useState("all"); // "all" | "note" | "pdf"
+  const [searchMode, setSearchMode] = useState("fuzzy"); // "fuzzy" | "fulltext"
   const inputRef = useRef(null);
   const debRef   = useRef(null);
 
@@ -9777,11 +9846,13 @@ const FuzzySearch = ({ notes, allTags, onOpenNote, onAddNote, onUpdateNote, onPa
     [results, typeFilter]
   );
 
-  // Debounced zoekfunctie
-  const doSearch = useCallback((q) => {
+  // Debounced zoekfunctie — fuzzy of fulltext
+  const doSearch = useCallback((q, mode) => {
+    const m = mode || searchMode;
     if (!q.trim()) { setResults([]); setSelIdx(null); setError(null); return; }
     setLoading(true); setError(null);
-    fetch("/api/search", {
+    const endpoint = m === "fulltext" ? "/api/fulltext" : "/api/search";
+    fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ query: q }),
@@ -9796,12 +9867,21 @@ const FuzzySearch = ({ notes, allTags, onOpenNote, onAddNote, onUpdateNote, onPa
         setLoading(false);
       })
       .catch(e => { setError(e.message); setLoading(false); });
-  }, []);
+  }, [searchMode]);
 
   const handleQueryChange = (q) => {
     setQuery(q);
     clearTimeout(debRef.current);
-    debRef.current = setTimeout(() => doSearch(q), 280);
+    debRef.current = setTimeout(() => doSearch(q, searchMode), 280);
+  };
+
+  const handleModeChange = (mode) => {
+    setSearchMode(mode);
+    setResults([]);
+    if (query.trim()) {
+      clearTimeout(debRef.current);
+      debRef.current = setTimeout(() => doSearch(query, mode), 100);
+    }
   };
 
   // Toetsenbord navigatie (pijl op/neer, Enter opent)
@@ -10001,6 +10081,50 @@ const FuzzySearch = ({ notes, allTags, onOpenNote, onAddNote, onUpdateNote, onPa
         ? `Geen ${typeFilter === "note" ? "notitie" : "PDF"}-resultaten — ${results.length} resultaten totaal`
         : `Geen resultaten voor "${query}"`
     );
+
+    // Full-text modus: toon alle matches per notitie
+    if (searchMode === "fulltext") {
+      return filteredResults.map((r, idx) => {
+        const sel = selIdx === idx;
+        const mc  = r.match_count || 0;
+        return React.createElement("div", {
+          key: r.id || idx,
+          style: { ...css.item(sel, "note"), cursor: "pointer" },
+          onClick: () => { setSelIdx(idx); onOpenNote?.(r.id); },
+        },
+          // Kop
+          React.createElement("div", { style:{display:"flex",alignItems:"center",gap:"6px",marginBottom:"4px"} },
+            r.title_match && React.createElement("span",{style:{fontSize:"10px",color:W.yellow,background:"rgba(234,231,136,0.15)",borderRadius:"3px",padding:"1px 5px"}},"titel"),
+            React.createElement("span", { style: css.itemTitle }, r.title || "(geen titel)"),
+            React.createElement("span",{style:{marginLeft:"auto",fontSize:"10px",color:W.blue,flexShrink:0,background:"rgba(138,198,242,0.1)",borderRadius:"10px",padding:"1px 7px"}},
+              mc + "×"
+            ),
+          ),
+          // Tags
+          r.tags?.length > 0 && React.createElement("div",{style:{display:"flex",gap:"3px",flexWrap:"wrap",marginBottom:"5px"}},
+            r.tags.slice(0,4).map(t => React.createElement(TagPill,{key:t,tag:t,small:true}))
+          ),
+          // Match-snippets (max 3 tonen)
+          React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:"3px"}},
+            (r.matches||[]).slice(0,3).map((m,i) =>
+              React.createElement("div",{key:i,style:{
+                fontSize:"11px",color:W.fgDim,lineHeight:"1.5",
+                background:"rgba(255,255,255,0.03)",borderRadius:"3px",
+                padding:"3px 6px",borderLeft:`2px solid rgba(138,198,242,0.3)`,
+              }},
+                React.createElement("span",{style:{color:W.fgMuted,marginRight:"5px",fontSize:"10px"}},
+                  `r.${m.line_no}`
+                ),
+                highlight(m.line, query)
+              )
+            ),
+            mc > 3 && React.createElement("div",{style:{fontSize:"10px",color:W.fgMuted,padding:"2px 6px"}},
+              `+ ${mc-3} meer treffer${mc-3>1?"s":""}…`
+            )
+          )
+        );
+      });
+    }
 
     return filteredResults.map((r, idx) => {
       const key = resultKey(r, idx);
@@ -10246,16 +10370,34 @@ const FuzzySearch = ({ notes, allTags, onOpenNote, onAddNote, onUpdateNote, onPa
           onClick:()=>{ setQuery(""); setResults([]); setSelIdx(null); inputRef.current?.focus(); }
         }, "×"),
       ),
-      // Filter-tabs + teller
+      // Mode-toggle: fuzzy vs full-text
       React.createElement("div", { style:{display:"flex",alignItems:"center",gap:"6px",marginTop:"8px",flexWrap:"wrap"} },
+        // Zoek-modus
+        React.createElement("div", { style:{display:"flex",background:W.bg3,borderRadius:"8px",padding:"2px",gap:"2px",flexShrink:0} },
+          React.createElement("button", {
+            onClick: () => handleModeChange("fuzzy"),
+            style:{ padding:"3px 12px", borderRadius:"6px", fontSize:"11px", fontWeight:"bold",
+                    cursor:"pointer", border:"none", fontFamily:"inherit", transition:"all 0.15s",
+                    background: searchMode==="fuzzy" ? W.blue : "transparent",
+                    color:       searchMode==="fuzzy" ? W.bg   : W.fgMuted }
+          }, "⚡ Fuzzy"),
+          React.createElement("button", {
+            onClick: () => handleModeChange("fulltext"),
+            style:{ padding:"3px 12px", borderRadius:"6px", fontSize:"11px", fontWeight:"bold",
+                    cursor:"pointer", border:"none", fontFamily:"inherit", transition:"all 0.15s",
+                    background: searchMode==="fulltext" ? W.yellow : "transparent",
+                    color:       searchMode==="fulltext" ? W.bg     : W.fgMuted }
+          }, "🔎 Volledig"),
+        ),
+        // Type-filters
         React.createElement("button", { style:filterBtnStyle(typeFilter==="all"), onClick:()=>setTypeFilter("all") },
           `Alles${results.length ? " ("+results.length+")" : ""}`),
-        React.createElement("button", { style:filterBtnStyle(typeFilter==="note"), onClick:()=>setTypeFilter("note") },
-          `📝 Notities${nNotes ? " ("+nNotes+")" : ""}`),
-        React.createElement("button", { style:{...filterBtnStyle(typeFilter==="pdf"), background:typeFilter==="pdf"?W.yellow:W.bg, color:typeFilter==="pdf"?W.bg:W.fgMuted}, onClick:()=>setTypeFilter("pdf") },
-          `📄 PDF${nPdfs ? " ("+nPdfs+")" : ""}`),
+        searchMode === "fuzzy" && React.createElement("button", {
+          style:{...filterBtnStyle(typeFilter==="pdf"), background:typeFilter==="pdf"?W.yellow:W.bg, color:typeFilter==="pdf"?W.bg:W.fgMuted},
+          onClick:()=>setTypeFilter(typeFilter==="pdf" ? "all" : "pdf")
+        }, `📄 PDF${nPdfs ? " ("+nPdfs+")" : ""}`),
         results.length > 0 && React.createElement("span",{style:{fontSize:"11px",color:W.fgDim,marginLeft:"4px"}},
-          `${filteredResults.length} zichtbaar`
+          `${filteredResults.length} gevonden`
         ),
       ),
     ),
@@ -10592,6 +10734,45 @@ const App = () => {
       "Zorg dat server.py draait, ververs dan de pagina.")
   );
 
+  const MAIN_TABS = [
+    { id:"notes",     icon:"📝", label:"Schrijven",  sub: null },
+    { id:"library",   icon:"📚", label:"Bibliotheek", sub: [
+        {id:"pdf",     icon:"📄", label:"PDF"},
+        {id:"images",  icon:"🖼",  label:"Plaatjes"},
+        {id:"reading", icon:"📖", label:"Leeslijst"},
+        {id:"review",  icon:"🔁", label:"Review"},
+      ]},
+    { id:"discover",  icon:"🔍", label:"Ontdekken",  sub: [
+        {id:"search",  icon:"🔍", label:"Zoeken"},
+        {id:"graph",   icon:"🕸",  label:"Graaf"},
+        {id:"mindmap", icon:"🗺",  label:"Mindmap"},
+        {id:"llm",     icon:"🧠", label:"Notebook"},
+      ]},
+    { id:"input",     icon:"🌐", label:"Invoer",     sub: [
+        {id:"import",  icon:"🌐", label:"URL / Word"},
+        {id:"pdfimport",icon:"📄", label:"PDF"},
+      ]},
+    { id:"manage",    icon:"⚙",  label:"Beheer",     sub: [
+        {id:"tags",    icon:"🏷",  label:"Tags"},
+        {id:"stats",   icon:"📊", label:"Statistieken"},
+      ]},
+  ];
+
+  // Bepaal welke hoofdtab actief is op basis van de huidige subtab
+  const activeMain = React.useMemo(() => {
+    if (tab === "notes") return "notes";
+    for (const mt of MAIN_TABS) {
+      if (mt.sub?.some(s => s.id === tab)) return mt.id;
+    }
+    return "notes";
+  }, [tab]);
+
+  // Haal subtabs op voor actieve hoofdtab
+  const activeSubs = React.useMemo(() => {
+    const mt = MAIN_TABS.find(m => m.id === activeMain);
+    return mt?.sub || null;
+  }, [activeMain]);
+
   if (!loaded) return React.createElement("div", {
     style:{display:"flex",alignItems:"center",justifyContent:"center",
            height:"100vh",background:W.bg,color:W.blue,fontSize:"14px"}
@@ -10651,18 +10832,20 @@ const App = () => {
   );
 
   // ── Tab definitie ────────────────────────────────────────────────────────
-  const tabs = [
-    {id:"notes",   icon:"📝", label:"Notities"},
-    {id:"graph",   icon:"🕸",  label:"Graaf"},
-    {id:"pdf",     icon:"📄", label:"PDF"},
-    {id:"images",  icon:"🖼",  label:"Plaatjes"},
-    {id:"search",  icon:"🔍", label:"Zoeken"},
-    {id:"import",  icon:"🌐", label:"Import"},
-    {id:"reading", icon:"📚", label:"Leeslijst"},
-    {id:"mindmap", icon:"🗺",  label:"Mindmap"},
-    {id:"llm",     icon:"🧠", label:"Notebook"},
-    {id:"tags",    icon:"🏷",  label:"Tags"},
-  ];
+  // ── Hoofd-tabs met subtab-structuur ─────────────────────────────────────────
+  // Elke hoofdtab heeft een standaard subtab (eerste kind)
+  // Bij klikken op hoofdtab: open de eerste subtab (of notes direct)
+  const handleMainTab = (mainId) => {
+    if (mainId === "notes") { setTab("notes"); return; }
+    const mt = MAIN_TABS.find(m => m.id === mainId);
+    if (!mt?.sub) return;
+    // Blijf op huidige subtab als die al tot deze hoofdtab behoort
+    if (mt.sub.some(s => s.id === tab)) return;
+    setTab(mt.sub[0].id);
+  };
+
+  // Mobile tabs = alleen de hoofdtabs
+  const tabs = MAIN_TABS;
 
   // ── Top bar (desktop/tablet) ──────────────────────────────────────────────
   const topBar = !isMobile && React.createElement("div", {
@@ -10698,22 +10881,27 @@ const App = () => {
         height:"100%",
       },
     },
-      tabs.map(({id, icon, label}) => React.createElement("button", {
-        key:id, onClick:()=>setTab(id),
-        className: `topbar-tab${tab===id?" active":""}`,
-        style:{
-          borderRight: `1px solid ${W.splitBg}`,
-          flexShrink: 0,
-          whiteSpace: "nowrap",
-          // Op tablet: alleen icoon, label verbergen
-          padding: isTablet ? "0 10px" : undefined,
-          fontSize: isTablet ? "18px" : undefined,
-          gap: isTablet ? "0" : undefined,
-        }
-      },
-        React.createElement("span", {style:{fontSize: isTablet ? "18px" : "14px", lineHeight:1}}, icon),
-        !isTablet && React.createElement("span", null, label)
-      ))
+      // Hoofdtab-knoppen
+      MAIN_TABS.map(({id, icon, label}) => {
+        const isActive = activeMain === id;
+        return React.createElement("button", {
+          key:id,
+          onClick: () => handleMainTab(id),
+          className: `topbar-tab${isActive?" active":""}`,
+          style:{
+            borderRight: `1px solid ${W.splitBg}`,
+            flexShrink: 0,
+            whiteSpace: "nowrap",
+            borderBottom: isActive ? `2px solid ${W.yellow}` : "2px solid transparent",
+            padding: isTablet ? "0 10px" : undefined,
+            fontSize: isTablet ? "18px" : undefined,
+            gap: isTablet ? "0" : undefined,
+          }
+        },
+          React.createElement("span", {style:{fontSize: isTablet ? "18px" : "14px", lineHeight:1}}, icon),
+          !isTablet && React.createElement("span", null, label)
+        );
+      })
     ),
     // Rechter knoppen — op tablet sterk ingekort
     React.createElement("div", {style:{
@@ -10877,22 +11065,39 @@ const App = () => {
     }, "⚙")
   );
 
-  // ── Bottom nav (mobile) ───────────────────────────────────────────────────
+  // ── Bottom nav (mobile) — toont hoofdtabs ───────────────────────────────────
   const bottomNav = isMobile && React.createElement("div", {
-    style:{height:"56px",background:W.statusBg,borderTop:`1px solid ${W.splitBg}`,
-           display:"flex",flexShrink:0,paddingBottom:"env(safe-area-inset-bottom,0px)"}
+    style:{background:W.statusBg,borderTop:`1px solid ${W.splitBg}`,
+           display:"flex",flexDirection:"column",flexShrink:0,
+           paddingBottom:"env(safe-area-inset-bottom,0px)"}
   },
-    tabs.map(({id,icon,label}) => React.createElement("button", {
-      key:id, onClick:()=>setTab(id),
-      style:{flex:1,background:"none",border:"none",
-             borderTop:tab===id?`2px solid ${W.yellow}`:"2px solid transparent",
-             color:tab===id?W.yellow:W.fgMuted,
-             display:"flex",flexDirection:"column",alignItems:"center",
-             justifyContent:"center",gap:"2px",cursor:"pointer",fontSize:"18px",paddingTop:"6px"}
+    // Subtabs (als actieve hoofdtab subtabs heeft)
+    activeSubs && React.createElement("div", {
+      style:{display:"flex",borderBottom:`1px solid ${W.splitBg}`,
+             background:W.bg2, height:"34px"}
     },
-      React.createElement("span", null, icon),
-      React.createElement("span", {style:{fontSize:"14px",letterSpacing:"0.5px"}}, label)
-    ))
+      activeSubs.map(s => React.createElement("button", {
+        key:s.id, onClick:()=>setTab(s.id),
+        style:{flex:1,background:"none",border:"none",
+               borderBottom:tab===s.id?`2px solid ${W.blue}`:"2px solid transparent",
+               color:tab===s.id?W.blue:W.fgMuted,
+               fontSize:"11px",cursor:"pointer",padding:"0 4px",letterSpacing:"0.3px"}
+      }, s.icon+" "+s.label))
+    ),
+    // Hoofdtabs
+    React.createElement("div", {style:{display:"flex",height:"52px"}},
+      MAIN_TABS.map(({id,icon,label}) => React.createElement("button", {
+        key:id, onClick:()=>handleMainTab(id),
+        style:{flex:1,background:"none",border:"none",
+               borderTop:activeMain===id?`2px solid ${W.yellow}`:"2px solid transparent",
+               color:activeMain===id?W.yellow:W.fgMuted,
+               display:"flex",flexDirection:"column",alignItems:"center",
+               justifyContent:"center",gap:"2px",cursor:"pointer",fontSize:"18px",paddingTop:"6px"}
+      },
+        React.createElement("span", null, icon),
+        React.createElement("span", {style:{fontSize:"9px",letterSpacing:"0.5px"}}, label)
+      ))
+    )
   );
 
 
@@ -10907,6 +11112,41 @@ const App = () => {
   },
     mobileTopBar,
     topBar,
+
+    // ── Subtab-balk (desktop+tablet, alleen als actieve hoofdtab subtabs heeft) ──
+    !isMobile && activeSubs && React.createElement("div", {
+      style:{
+        height: "34px", flexShrink: 0,
+        background: W.bg2,
+        borderBottom: `1px solid ${W.splitBg}`,
+        display: "flex", alignItems: "stretch",
+        paddingLeft: isTablet ? "8px" : "16px",
+        gap: "0",
+      }
+    },
+      activeSubs.map(s => React.createElement("button", {
+        key: s.id,
+        onClick: () => setTab(s.id),
+        style:{
+          background: "none", border: "none",
+          borderBottom: tab===s.id ? `2px solid ${W.blue}` : "2px solid transparent",
+          color: tab===s.id ? W.blue : W.fgMuted,
+          padding: isTablet ? "0 12px" : "0 16px",
+          fontSize: "12px", cursor: "pointer",
+          fontWeight: tab===s.id ? "600" : "400",
+          letterSpacing: "0.3px",
+          display: "flex", alignItems: "center", gap: "5px",
+          transition: "all 0.12s",
+          whiteSpace: "nowrap",
+        },
+        onMouseEnter: e => { if(tab!==s.id) e.currentTarget.style.color=W.fg; },
+        onMouseLeave: e => { if(tab!==s.id) e.currentTarget.style.color=W.fgMuted; },
+      },
+        React.createElement("span", {style:{fontSize:"14px"}}, s.icon),
+        s.label
+      ))
+    ),
+
     showSettings && React.createElement(VaultSettings, {
       vaultPath, onChangeVault:setVaultPath, onClose:()=>setShowSettings(false)
     }),
@@ -10930,6 +11170,7 @@ const App = () => {
         const renderTab = (t) => {
           if(t==="search") return React.createElement("div",{style:{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",minHeight:0}},
             React.createElement(FuzzySearch,{
+              onPasteToNote: selId ? handlePasteToNote : null,
               notes, allTags,
               onOpenNote: (id) => { setSelId(id); setTab("notes"); },
               onAddNote:  async(note) => {
@@ -10944,11 +11185,13 @@ const App = () => {
           if(t==="graph") return React.createElement("div",{style:{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",minHeight:0}},
             React.createElement(Graph,{notes,
               onSelect:id=>{setSelId(id);setTab("notes");},selectedId:selId,
-              onUpdateNote:async(note)=>{ await NoteStore.save(note); setNotes([...NoteStore.getAll()]); }}));
+              onUpdateNote:async(note)=>{ await NoteStore.save(note); setNotes([...NoteStore.getAll()]); },
+              onDeleteNote:(id)=>{ NoteStore.remove(id).then(()=>setNotes([...NoteStore.getAll()])); }}));
           if(t==="pdf") return React.createElement("div",{style:{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",minHeight:0}},
             React.createElement(PDFViewer,{pdfNotes,setPdfNotes,allTags,serverPdfs,
               notes,isTablet,
               onRefreshPdfs:refreshPdfs,
+              onPasteToNote: selId ? handlePasteToNote : null,
               onAddNote:async(note)=>{ await NoteStore.save(note); setNotes([...NoteStore.getAll()]); },
               onDeletePdf:async(fname)=>{
                 const stem=fname.replace(/\.pdf$/i,"");
@@ -10980,15 +11223,64 @@ const App = () => {
                   }
                 })();
               }}));
-          if(t==="images") return React.createElement("div",{style:{flex:1,position:"relative",overflow:"hidden",minHeight:0}},
+          if(t==="images") return React.createElement("div",{style:{flex:1,display:"flex",flexDirection:"column",minHeight:0,overflow:"hidden"}},
             React.createElement(ImagesGallery,{serverImages,onRefresh:refreshImages,llmModel,setAiStatus,notes,imgNotes,setImgNotes,allTags,
               addJob, updateJob,
+              onPasteToNote: selId ? handlePasteToNote : null,
               onDeleteNote: id => { NoteStore.remove(id).then(() => setNotes([...NoteStore.getAll()])); },
-              onAddNote:async(note)=>{ await NoteStore.save(note); setNotes([...NoteStore.getAll()]); }}));
+              onAddNote: async(note) => {
+                // _navigate: ga naar bestaande notitie zonder aanmaken
+                if (note._navigate) {
+                  setSelId(note._navigate);
+                  setTab("notes");
+                  return;
+                }
+                const saved = await NoteStore.save(note);
+                setNotes([...NoteStore.getAll()]);
+                // Navigeer naar de notitie na aanmaken
+                setSelId(saved.id);
+                setTab("notes");
+              }}));
+          if(t==="pdfimport") return React.createElement("div",{style:{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",minHeight:0}},
+            React.createElement(PDFUploadPanel,{
+              serverPdfs,
+              onRefreshPdfs: refreshPdfs,
+              onOpenPdf: (name) => { setSplitTab("pdf"); setTab("pdf"); },
+              allTags,
+              notes,
+              onAddNote: async(note) => { await NoteStore.save(note); setNotes([...NoteStore.getAll()]); },
+              llmModel,
+              addJob, updateJob,
+            }));
           if(t==="import") return React.createElement("div",{style:{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",minHeight:0}},
             React.createElement(WebImporter,{llmModel,allTags,
               notes,
               onRefreshImages: refreshImages,
+              onDescribeImages: (fnames) => {
+                // Beschrijf elke geïmporteerde afbeelding automatisch
+                fnames.forEach(fname => {
+                  const jid = genId();
+                  const stem = fname.replace(/\.[^.]+$/,"");
+                  addJob({id:jid, type:"describe", label:"🖼 Beschrijven: "+stem.slice(0,26)+"…"});
+                  fetch("/api/llm/describe-image", {
+                    method:"POST",
+                    headers:{"Content-Type":"application/json"},
+                    body: JSON.stringify({filename:fname, model:llmModel})
+                  })
+                  .then(r=>r.json())
+                  .then(d=>{
+                    if (d.ok && d.description) {
+                      const annots = AnnotationStore.getAll().filter(a=>a.file!==fname);
+                      annots.push({file:fname, description:d.description, pins:[]});
+                      AnnotationStore.setAll(annots);
+                      updateJob(jid,{status:"done", result:stem.slice(0,30)});
+                    } else {
+                      updateJob(jid,{status:"error", error:"Geen beschrijving"});
+                    }
+                  })
+                  .catch(e=>updateJob(jid,{status:"error", error:e.message}));
+                });
+              },
               addJob, updateJob,
               importPreview, setImportPreview,
               onAddNote:async(note)=>{
@@ -11027,7 +11319,8 @@ const App = () => {
               onAddNote:async(note)=>{
                 const saved=await NoteStore.save(note);
                 setNotes([...NoteStore.getAll()]); setSelId(saved.id); setTab("notes");
-              }}));
+              },
+              onPasteToNote: selId ? handlePasteToNote : null}));
           if(t==="tags") return React.createElement("div",{style:{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",minHeight:0}},
             React.createElement(TagManagerPanel,{
               allTags, notes,
@@ -11036,6 +11329,14 @@ const App = () => {
               onRenameTag: handleRenameTag,
               onDeleteTag: handleDeleteTag,
             }));
+          if(t==="stats") return React.createElement(StatsPanel,{
+            notes, serverPdfs, serverImages,
+          });
+          if(t==="review") return React.createElement(ReviewPanel,{
+            notes,
+            onOpenNote: id => { setSelId(id); setTab("notes"); },
+            onUpdateNote: async note => { await NoteStore.save(note); setNotes([...NoteStore.getAll()]); },
+          });
         };
 
         // Split-screen
@@ -11060,15 +11361,21 @@ const App = () => {
                 background:W.bg2,borderBottom:`1px solid ${W.splitBg}`,
                 padding:"0",display:"flex",alignItems:"center",flexShrink:0,height:"36px"
               }},
-                tabs.filter(t=>t.id!=="notes").map(({id,icon,label})=>React.createElement("button",{
-                  key:id,
-                  onClick:e=>{e.stopPropagation();setSplitTab(id);},
-                  style:{background:splitTab===id?W.bg:"none",
-                    border:"none",borderBottom:splitTab===id?`2px solid ${W.yellow}`:"2px solid transparent",
-                    color:splitTab===id?W.statusFg:W.fgMuted,
-                    padding:"0 14px",height:"100%",fontSize:"14px",
-                    cursor:"pointer",letterSpacing:"0.5px",flexShrink:0}
-                },icon," ",label))
+                // Platte lijst van alle subtabs voor de split-balk
+                MAIN_TABS.flatMap(mt => mt.sub || [])
+                  .map(({id,icon,label})=>React.createElement("button",{
+                    key:id,
+                    onClick:e=>{e.stopPropagation();setSplitTab(id);},
+                    style:{background:splitTab===id?W.bg:"none",
+                      border:"none",borderBottom:splitTab===id?`2px solid ${W.yellow}`:"2px solid transparent",
+                      color:splitTab===id?W.statusFg:W.fgMuted,
+                      padding:"0 10px",height:"100%",fontSize:"13px",
+                      cursor:"pointer",flexShrink:0,
+                      display:"flex",alignItems:"center",gap:"4px"}
+                  },
+                    React.createElement("span",{style:{fontSize:"14px"}},icon),
+                    label
+                  ))
               ),
               renderTab(splitTab)
             )

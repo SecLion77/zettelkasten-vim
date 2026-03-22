@@ -154,9 +154,24 @@ class VaultManager:
         return [n for n in (self._parse_note(p) for p in
                 sorted(self.notes_dir.glob("*.md"),key=lambda x:x.stat().st_mtime,reverse=True)) if n]
     def save_note(self, note):
+        import tempfile as _tf, os as _os
         note["modified"] = datetime.now().isoformat()
         if not note.get("created"): note["created"] = note["modified"]
-        self._note_path(note["id"]).write_text(self._serialize_note(note), encoding="utf-8")
+        path = self._note_path(note["id"])
+        text = self._serialize_note(note)
+        # Atomisch schrijven: temp + rename (veilig voor OneDrive/Google Drive sync)
+        try:
+            fd, tmp = _tf.mkstemp(dir=str(path.parent), suffix=".tmp")
+            try:
+                with _os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(text)
+                _os.replace(tmp, str(path))
+            except Exception:
+                try: _os.unlink(tmp)
+                except: pass
+                raise
+        except OSError:
+            path.write_text(text, encoding="utf-8")
         return note
     def delete_note(self, nid):
         p = self._note_path(nid)
@@ -800,6 +815,132 @@ class VaultManager:
                 del VaultManager._pdf_page_cache[oldest]
         return VaultManager._pdf_page_cache[key]
 
+    def _tfidf_vectors(self, docs):
+        """Berekent TF-IDF vectoren voor een lijst teksten. Geeft (vocab, matrix) terug."""
+        import math, re
+        stopwords = {"de","het","een","van","in","is","op","en","te","dat","die","zijn","met",
+                     "voor","aan","er","maar","om","dan","als","ook","dit","nog","wel","ze",
+                     "the","a","an","of","to","in","is","it","and","for","on","with","that"}
+        def tokenize(t):
+            return [w for w in re.findall(r"[a-z\u00c0-\u024f]{3,}", t.lower()) if w not in stopwords]
+        tokenized = [tokenize(d) for d in docs]
+        vocab = {w for toks in tokenized for w in toks}
+        vocab = sorted(vocab)
+        vidx  = {w:i for i,w in enumerate(vocab)}
+        N     = len(docs)
+        # IDF
+        df = {}
+        for toks in tokenized:
+            for w in set(toks):
+                df[w] = df.get(w,0)+1
+        idf = {w: math.log((N+1)/(df.get(w,0)+1))+1 for w in vocab}
+        # TF-IDF matrix (sparse as list of dicts)
+        vecs = []
+        for toks in tokenized:
+            tf = {}
+            for w in toks: tf[w] = tf.get(w,0)+1
+            n = len(toks) or 1
+            vec = {vidx[w]: (tf[w]/n)*idf[w] for w in tf if w in vidx}
+            norm = math.sqrt(sum(v*v for v in vec.values())) or 1
+            vecs.append({k: v/norm for k,v in vec.items()})
+        return vecs
+
+    def _cosine(self, a, b):
+        return sum(a.get(k,0)*v for k,v in b.items())
+
+    def suggest_links(self, query_content: str, current_note_id: str = "", top_n: int = 12) -> list:
+        """Slim link-suggestie systeem — combineert 3 signalen:
+        1. Gedeelde tags (snel, voorspelbaar)
+        2. Titel-woord overlap (precies)
+        3. TF-IDF cosine similariteit (semantisch)
+
+        Geeft terug: [{id, title, tags, score, reasons:[str]}]
+        Reasons leggen uit WAAROM de link relevant is.
+        """
+        import re as _re, math
+
+        notes = self.load_notes()
+        if not query_content.strip() or len(notes) < 2:
+            return []
+
+        q_lower = query_content.lower()
+
+        # ── Entiteiten uit query: hoofdletterwoorden + getallen ──────────────
+        entities = set(_re.findall(r'\b[A-Z][a-zA-Z]{2,}\b', query_content))
+        entities |= set(_re.findall(r'\b\d{4}\b', query_content))  # jaren bijv.
+
+        # ── TF-IDF vectoren ──────────────────────────────────────────────────
+        all_texts = [n.get("title","") + " " + n.get("content","") for n in notes]
+        all_texts_with_query = [query_content] + all_texts
+        vecs = self._tfidf_vectors(all_texts_with_query)
+        q_vec = vecs[0]
+        note_vecs = vecs[1:]
+
+        # ── Query tags (haal titels op als proxy) ────────────────────────────
+        q_words = set(_re.findall(r'[a-z\u00c0-\u024f]{3,}', q_lower))
+
+        scored = []
+        for i, note in enumerate(notes):
+            nid    = note.get("id","")
+            title  = note.get("title","") or ""
+            tags   = note.get("tags",[]) or []
+            ncont  = note.get("content","") or ""
+
+            if nid == current_note_id:
+                continue
+
+            score   = 0.0
+            reasons = []
+
+            # ── Signaal 1: TF-IDF cosine ─────────────────────────────────────
+            tfidf_score = self._cosine(q_vec, note_vecs[i])
+            if tfidf_score > 0.05:
+                score += tfidf_score * 60
+                if tfidf_score > 0.25:
+                    reasons.append(f"sterk semantisch verwant ({round(tfidf_score*100)}%)")
+                elif tfidf_score > 0.12:
+                    reasons.append(f"semantisch verwant ({round(tfidf_score*100)}%)")
+
+            # ── Signaal 2: Titel-woord overlap ───────────────────────────────
+            title_words = set(_re.findall(r'[a-z\u00c0-\u024f]{3,}', title.lower()))
+            overlap = q_words & title_words
+            # Filter stopwoorden
+            sw = {"de","het","een","van","in","is","op","en","te","dat","die","zijn","met",
+                  "the","a","an","of","to","and","for","with","that","this","are"}
+            meaningful = overlap - sw
+            if meaningful:
+                score += len(meaningful) * 15
+                reasons.append(f"titel deelt: {', '.join(list(meaningful)[:3])}")
+
+            # ── Signaal 3: Entiteit-overlap ───────────────────────────────────
+            note_text = title + " " + ncont
+            matched_entities = [e for e in entities if e in note_text]
+            if matched_entities:
+                score += len(matched_entities) * 20
+                reasons.append(f"zelfde begrippen: {', '.join(matched_entities[:3])}")
+
+            # ── Signaal 4: Content bevat exacte zinsdelen ────────────────────
+            # Neem zinnen van 4+ woorden uit query, check of ze in notitie voorkomen
+            phrases = _re.findall(r'[a-z][a-z\s]{15,40}[a-z]', q_lower)
+            phrase_hits = sum(1 for p in phrases[:20] if p in ncont.lower())
+            if phrase_hits:
+                score += phrase_hits * 25
+                reasons.append(f"deelt {phrase_hits} tekstfragment{'en' if phrase_hits>1 else ''}")
+
+            if score > 2:
+                scored.append({
+                    "id":      nid,
+                    "title":   title or "(geen titel)",
+                    "tags":    tags,
+                    "score":   round(score, 2),
+                    "tfidf":   round(tfidf_score, 3),
+                    "reasons": reasons[:3],  # max 3 redenen
+                })
+
+        scored.sort(key=lambda x: -x["score"])
+        return scored[:top_n]
+
+
     def fuzzy_search(self, query: str, max_results=80) -> list:
         """FZF-stijl fuzzy zoeken over notities én vault-PDFs.
 
@@ -964,6 +1105,67 @@ class VaultManager:
     # ── Spell engine (singleton, lazy-loaded per taal) ──────────────────────────
     _spell_cache: dict = {}     # {"en": set(...), "nl": set(...)}
     _spell_lock = None
+
+    def fulltext_search(self, query: str, max_results=50) -> list:
+        """Full-text zoeken: alle overeenkomende regels per notitie,
+        met geselecteerde context en gemarkeerde hits."""
+        import re as _re
+
+        q = query.strip()
+        if not q:
+            return []
+
+        # Bouw regex — escape special chars, case-insensitive
+        try:
+            pattern = _re.compile(_re.escape(q), _re.IGNORECASE)
+        except Exception:
+            return []
+
+        results = []
+
+        for note in self.load_notes():
+            title   = note.get("title", "") or ""
+            content = note.get("content", "") or ""
+            tags    = note.get("tags", []) or []
+            lines   = content.splitlines()
+
+            matches = []  # [{line_no, line, context}]
+
+            for ln_idx, line in enumerate(lines):
+                if pattern.search(line):
+                    # Context: 1 regel voor en na
+                    ctx_start = max(0, ln_idx - 1)
+                    ctx_end   = min(len(lines), ln_idx + 2)
+                    context   = "\n".join(
+                        l for l in lines[ctx_start:ctx_end] if l.strip()
+                    )
+                    matches.append({
+                        "line_no":  ln_idx + 1,
+                        "line":     line.strip()[:200],
+                        "context":  context[:400],
+                    })
+
+            # Titel match telt ook
+            title_match = bool(pattern.search(title))
+
+            if matches or title_match:
+                # Score: titel-match hoog, dan op aantal matches
+                score = (500 if title_match else 0) + len(matches) * 10
+                results.append({
+                    "type":       "note",
+                    "id":         note.get("id"),
+                    "title":      title or "(geen titel)",
+                    "tags":       tags,
+                    "score":      score,
+                    "matches":    matches[:20],  # max 20 hits per notitie
+                    "match_count": len(matches) + (1 if title_match else 0),
+                    "title_match": title_match,
+                    "content":    content,
+                })
+
+        results.sort(key=lambda r: r["score"], reverse=True)
+        return results[:max_results]
+
 
     @classmethod
     def _get_lock(cls):
@@ -1355,7 +1557,27 @@ communiceren samenwerken overleggen afstemmen rapporteren
         return errors
 
     def _write_json(self, path, data):
-        path.write_text(json.dumps(data,ensure_ascii=False,indent=2),encoding="utf-8")
+        """Schrijf JSON atomisch via temp-bestand + rename.
+        Voorkomt corruptie bij cloud-sync (OneDrive/Google Drive) die
+        het bestand tijdens schrijven kan inlezen."""
+        import tempfile as _tf, os as _os
+        text = json.dumps(data, ensure_ascii=False, indent=2)
+        # Schrijf naar temp-bestand in dezelfde map (zelfde filesystem = atomische rename)
+        dir_ = path.parent
+        try:
+            fd, tmp = _tf.mkstemp(dir=str(dir_), suffix=".tmp")
+            try:
+                with _os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(text)
+                # Atomische rename — vervangt bestaand bestand in één operatie
+                _os.replace(tmp, str(path))
+            except Exception:
+                try: _os.unlink(tmp)
+                except: pass
+                raise
+        except OSError:
+            # Fallback: directe schrijf (bijv. als temp-map op ander FS zit)
+            path.write_text(text, encoding="utf-8")
     @property
     def path_str(self): return str(self.vault)
 
@@ -1481,6 +1703,38 @@ class ZKHandler(BaseHTTPRequestHandler):
                 return self._send(200, {"results": results, "query": q})
             except Exception as e:
                 return self._send(500, {"error": str(e), "results": []})
+        if p=="/api/llm/link-reasons":
+            # LLM beoordeelt top-kandidaten en geeft reden per link
+            body       = self._body()
+            content_q  = body.get("content","").strip()
+            candidates = body.get("candidates",[])   # [{id, title, tags}]
+            model      = body.get("model","")
+            if not content_q or not candidates or not model:
+                return self._send(400, {"error": "content, candidates en model vereist"})
+            try:
+                reasons = self._llm_link_reasons(content_q, candidates, model)
+                return self._send(200, {"reasons": reasons})
+            except Exception as e:
+                return self._send(500, {"error": str(e), "reasons": []})
+        if p=="/api/suggest-links":
+            body    = self._body()
+            content = body.get("content","").strip()
+            note_id = body.get("note_id","")      # huidig notitie-ID (om zichzelf te skippen)
+            top_n   = int(body.get("top_n", 12))
+            try:
+                results = self.vault.suggest_links(content, note_id, top_n)
+                return self._send(200, {"suggestions": results})
+            except Exception as e:
+                return self._send(500, {"error": str(e), "suggestions": []})
+        if p=="/api/fulltext":
+            body = self._body()
+            q    = body.get("query","").strip()
+            if not q: return self._send(200, {"results":[],"query":q})
+            try:
+                results = self.vault.fulltext_search(q, max_results=50)
+                return self._send(200, {"results": results, "query": q})
+            except Exception as e:
+                return self._send(500, {"error": str(e), "results": []})
         if p=="/api/spellcheck":
             # Accepteert {words:[str], lines:[str], lang:"en"|"nl"|"auto"}
             # Geeft terug: {spell:{word:{spell,grammar}}, grammar:[{row,col,len,msg,type}]}
@@ -1540,6 +1794,7 @@ class ZKHandler(BaseHTTPRequestHandler):
         if p=="/api/llm/graphrag":       return self._llm_graphrag()
         if p=="/api/llm/summarize-pdf":  return self._llm_summarize_pdf()
         if p=="/api/llm/describe-image": return self._llm_describe_image()
+        if p=="/api/llm/summarize-note": return self._llm_summarize_note()
         if p=="/api/llm/mindmap":        return self._llm_mindmap()
         if p=="/api/import-url":         return self._import_url()
         if p=="/api/import-docx":        return self._import_docx()
@@ -1562,10 +1817,50 @@ class ZKHandler(BaseHTTPRequestHandler):
             return self._send(200,{"vault_path":ZKHandler.vault.path_str})
         if p=="/api/config":
             body=self._body()
-            allowed={"pdf_personal_use","pdf_personal_email"}
+            allowed={"pdf_personal_use","pdf_personal_email","review_data"}
             update={k:v for k,v in body.items() if k in allowed}
             self.vault.save_config(update)
             return self._send(200,{"ok":True})
+        if p=="/api/cleanup-vault":
+            # Verwijder CSS-rommel uit alle opgeslagen notities (batch-fix)
+            try:
+                import re as _re
+                notes_dir = self.vault.notes_dir
+                css_pat = _re.compile(
+                    r'#?[0-9a-fA-F]{0,8};?(?:[\w-]+:[^;">\
+]{1,60};?){1,10}"?>'
+                )
+                cleaned = 0; skipped = 0; errors = []
+                for md_file in notes_dir.glob("*.md"):
+                    try:
+                        raw = md_file.read_text(encoding="utf-8")
+                        if raw.startswith("---"):
+                            parts = raw.split("---", 2)
+                            if len(parts) >= 3:
+                                new_body = css_pat.sub("", parts[2])
+                                import re as _re2
+                                new_body = _re2.sub(r'^#+\s*$', '', new_body, flags=_re2.MULTILINE)
+                                new_body = _re2.sub(r'\n{3,}', '\n\n', new_body)
+                                if new_body != parts[2]:
+                                    md_file.write_text("---" + parts[1] + "---" + new_body, encoding="utf-8")
+                                    cleaned += 1
+                                else:
+                                    skipped += 1
+                            else:
+                                skipped += 1
+                        else:
+                            new_raw = css_pat.sub("", raw)
+                            if new_raw != raw:
+                                md_file.write_text(new_raw, encoding="utf-8")
+                                cleaned += 1
+                            else:
+                                skipped += 1
+                    except Exception as e:
+                        errors.append({"file": md_file.name, "error": str(e)})
+                self.vault._cache = None
+                return self._send(200, {"ok": True, "cleaned": cleaned, "skipped": skipped, "errors": errors})
+            except Exception as e:
+                return self._send(500, {"ok": False, "error": str(e)})
         return self._send(404,{"error":"Niet gevonden"})
 
     def do_PUT(self):
@@ -1805,8 +2100,10 @@ class ZKHandler(BaseHTTPRequestHandler):
                     d = json.loads(r.read())
                 text = d.get("choices", [{}])[0].get("message", {}).get("content", "")
 
-            elif "/" in model:  # OpenRouter
-                api_key = self.vault.get_api_key("openrouter")
+            elif model.startswith("mistral") or "/" in model:  # Mistral direct of OpenRouter
+                key_provider2 = "mistral" if model.startswith("mistral") else "openrouter"
+                base_url2 = "https://api.mistral.ai/v1/chat/completions" if key_provider2=="mistral" else "https://openrouter.ai/api/v1/chat/completions"
+                api_key = self.vault.get_api_key(key_provider2)
                 if not api_key:
                     return self._send(401, {"error": "OpenRouter API-sleutel niet ingesteld"})
                 payload = json.dumps({
@@ -2412,6 +2709,82 @@ class ZKHandler(BaseHTTPRequestHandler):
             try: self.wfile.write(("data: "+json.dumps({"error":str(e)})+"\n\n").encode()); self.wfile.flush()
             except: pass
 
+    def _call_llm_simple(self, model, prompt, max_tokens=600):
+        """Roep een LLM aan met een simpele prompt, geef de response-tekst terug."""
+        import urllib.request as _req2
+        import urllib.error as _uerr
+        response_text = ""
+
+        if model.startswith("claude"):
+            api_key = self.vault.get_api_key("anthropic")
+            if api_key:
+                payload = json.dumps({"model": model, "max_tokens": max_tokens,
+                    "messages": [{"role":"user","content":prompt}]}).encode()
+                req2 = _req2.Request("https://api.anthropic.com/v1/messages", data=payload,
+                    headers={"Content-Type":"application/json","x-api-key":api_key,
+                             "anthropic-version":"2023-06-01"}, method="POST")
+                try:
+                    with _req2.urlopen(req2, timeout=60) as r2:
+                        d2 = json.loads(r2.read())
+                    response_text = d2.get("content",[{}])[0].get("text","")
+                except _uerr.HTTPError as e:
+                    raise Exception(f"Anthropic API fout {e.code}: {e.read().decode()[:200]}")
+
+        elif model.startswith("gpt") or model.startswith("o1") or model.startswith("o3") or model.startswith("o4"):
+            api_key = self.vault.get_api_key("openai")
+            if api_key:
+                payload = json.dumps({"model": model, "max_tokens": max_tokens,
+                    "messages": [{"role":"user","content":prompt}]}).encode()
+                req2 = _req2.Request("https://api.openai.com/v1/chat/completions", data=payload,
+                    headers={"Content-Type":"application/json","Authorization":"Bearer "+api_key},
+                    method="POST")
+                try:
+                    with _req2.urlopen(req2, timeout=60) as r2:
+                        d2 = json.loads(r2.read())
+                    response_text = d2.get("choices",[{}])[0].get("message",{}).get("content","")
+                except _uerr.HTTPError as e:
+                    raise Exception(f"OpenAI API fout {e.code}: {e.read().decode()[:200]}")
+
+        elif model.startswith("gemini"):
+            api_key = self.vault.get_api_key("google")
+            if api_key:
+                payload = json.dumps({"contents":[{"role":"user","parts":[{"text":prompt}]}],
+                    "generationConfig":{"maxOutputTokens":max_tokens}}).encode()
+                url2 = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+                req2 = _req2.Request(url2, data=payload,
+                    headers={"Content-Type":"application/json"}, method="POST")
+                try:
+                    with _req2.urlopen(req2, timeout=60) as r2:
+                        d2 = json.loads(r2.read())
+                    response_text = d2.get("candidates",[{}])[0].get("content",{}).get("parts",[{}])[0].get("text","")
+                except _uerr.HTTPError as e:
+                    raise Exception(f"Gemini API fout {e.code}: {e.read().decode()[:200]}")
+
+        elif model.startswith("mistral") or "/" in model:  # Mistral direct of OpenRouter
+            key_provider = "mistral" if model.startswith("mistral") else "openrouter"
+            api_key = self.vault.get_api_key(key_provider)
+            base_url = "https://api.mistral.ai/v1/chat/completions" if key_provider=="mistral" else "https://openrouter.ai/api/v1/chat/completions"
+            if api_key:
+                payload = json.dumps({"model": model, "max_tokens": max_tokens,
+                    "messages": [{"role":"user","content":prompt}]}).encode()
+                req2 = _req2.Request(base_url, data=payload,
+                    headers={"Content-Type":"application/json","Authorization":"Bearer "+api_key},
+                    method="POST")
+                try:
+                    with _req2.urlopen(req2, timeout=60) as r2:
+                        d2 = json.loads(r2.read())
+                    response_text = d2.get("choices",[{}])[0].get("message",{}).get("content","")
+                except _uerr.HTTPError as e:
+                    raise Exception(f"API fout {e.code}: {e.read().decode()[:200]}")
+
+        # Fallback: Ollama lokaal
+        if not response_text:
+            r_ol = self._ollama_post("/api/generate",
+                {"model": self._best_local_model(model), "prompt": prompt, "stream": False}, 120)
+            response_text = r_ol.get("response","").strip()
+
+        return response_text.strip()
+
     def _best_local_model(self, preferred=None):
         """Geeft het beste beschikbare Ollama-model terug.
         Negeert cloud-modellen (claude, gpt, gemini).
@@ -2781,6 +3154,122 @@ class ZKHandler(BaseHTTPRequestHandler):
         imgs = self._pdf_pages_as_images(filename, max_pages=1)
         return imgs[0] if imgs else None
 
+    def _llm_summarize_note(self):
+        """Genereer een AI-samenvatting van een notitie en geef die terug."""
+        body  = self._body()
+        nid   = body.get("note_id","")
+        model = self._best_local_model(body.get("model",""))
+
+        # Haal notitie op
+        note = next((n for n in self.vault.load_notes() if n["id"]==nid), None)
+        if not note:
+            return self._send(404, {"error":"Notitie niet gevonden"})
+
+        content = note.get("content","").strip()
+        title   = note.get("title","")
+        if len(content) < 50:
+            return self._send(400, {"error":"Notitie te kort voor samenvatting"})
+
+        prompt = (
+            f"Schrijf een beknopte samenvatting van 4-6 zinnen van de onderstaande notitie.\n"
+            f"Gebruik dezelfde taal als de notitie (NL of EN).\n"
+            f"Beschrijf: het hoofdonderwerp, de kernpunten en de conclusie.\n"
+            f"Begin de samenvatting NIET met 'Dit artikel' of 'Deze notitie' — begin direct met de inhoud.\n"
+            f"Geef ALLEEN de samenvatting terug, geen extra tekst of uitleg.\n\n"
+            f"Titel: {title}\n\n"
+            f"Tekst:\n{content[:6000]}"
+        )
+
+        response_text = ""
+        try:
+            response_text = self._call_llm_simple(model, prompt, max_tokens=400)
+        except Exception as e:
+            return self._send(500, {"error": str(e)})
+
+        summary = response_text.strip()
+        if not summary:
+            return self._send(500, {"error":"Model gaf geen samenvatting"})
+
+        # ── Robuuste HTML/CSS sanitering ─────────────────────────────────────────
+        import re as _re_s
+
+        # Stap 1: volledige HTML-tags verwijderen (inclusief attributen)
+        summary = _re_s.sub(r'<[^>]*>', '', summary)
+
+        # Stap 2: CSS inline stijlen die overblijven na tag-verwijdering
+        # bijv. "#8ac6f2;font-weight:bold;font-size:13px;margin-bottom:6px"
+        summary = _re_s.sub(r'#?[0-9a-fA-F]{3,8};[\w-]+:[^;\n]{1,60}(?:;[\w-]+:[^;\n]{1,60})*', '', summary)
+        summary = _re_s.sub(r'[\w-]+:[\w\s#.,%()]+;(?:[\w-]+:[\w\s#.,%()]+;?)*', '', summary)
+
+        # Stap 3: HTML-entiteiten decoderen
+        for enc, dec in [('&amp;','&'),('&lt;','<'),('&gt;','>'),('&nbsp;',' '),('&#39;',"'"),('&quot;','"')]:
+            summary = summary.replace(enc, dec)
+
+        # Stap 4: losse > of < tekens opruimen
+        summary = _re_s.sub(r'(?<![\w\s])[<>](?![\w\s])', '', summary)
+
+        # Stap 5: samenvatting-labels verwijderen die het model toevoegt
+        summary = _re_s.sub(r'\*{0,2}(?:SAMENVATTING|Samenvatting|SUMMARY|Summary)\*{0,2}\s*[:\n]', '', summary)
+        summary = _re_s.sub(r'={2,}\w+={2,}\s*', '', summary)
+
+        # Stap 6: witruimte normaliseren
+        summary = _re_s.sub(r'[ \t]{2,}', ' ', summary)
+        summary = _re_s.sub(r'\n{3,}', '\n\n', summary)
+        summary = summary.strip()
+        return self._send(200, {"ok": True, "summary": summary})
+
+    def _llm_link_reasons(self, query_content, candidates, model):
+        """LLM beoordeelt kandidaat-notities en geeft reden per link."""
+        cand_lines = []
+        for i, c in enumerate(candidates[:8]):
+            tags_str = ', '.join(c.get('tags', []) or [])
+            title = c.get('title', '?')
+            cand_lines.append(f'{i+1}. "{title}" (tags: {tags_str})')
+        cand_text = "\n".join(cand_lines)
+        preview = query_content[:1500]
+
+        prompt = (
+            "Je bent een Zettelkasten-assistent. Beoordeel of de onderstaande notities "
+            "zinvol gelinkt kunnen worden aan de tekst.\n\n"
+            "TEKST:\n" + preview + "\n\n"
+            "KANDIDATEN:\n" + cand_text + "\n\n"
+            "Geef per kandidaat een korte reden (max 8 woorden) waarom de link zinvol is, "
+            "of \"nee\" als de link niet zinvol is.\n"
+            "Antwoord ALLEEN als JSON-array in dezelfde volgorde, bijv:\n"
+            '["bouwt voort op hetzelfde concept", "nee", "gedeelde methode"]'
+        )
+
+        response_text = self._call_llm_simple(model, prompt, max_tokens=400)
+        if not response_text:
+            return []
+
+        import re as _re, json as _json
+        clean = _re.sub(r'```json?|```', '', response_text).strip()
+        try:
+            raw = _json.loads(clean)
+        except Exception:
+            m = _re.search(r'\[.*?\]', clean, _re.DOTALL)
+            if not m:
+                return []
+            try:
+                raw = _json.loads(m.group())
+            except Exception:
+                return []
+
+        result = []
+        for i, cand in enumerate(candidates[:len(raw)]):
+            reason = raw[i] if i < len(raw) else ""
+            relevant = bool(reason and str(reason).strip().lower() not in
+                           ("nee","no","geen","false",""))
+            result.append({
+                "id":       cand.get("id",""),
+                "title":    cand.get("title",""),
+                "reason":   reason if relevant else "",
+                "relevant": relevant,
+            })
+        return result
+
+
     def _llm_describe_image(self):
         body=self._body()
         fname=body.get("filename",""); model=self._best_local_model(body.get("model",""))
@@ -3148,8 +3637,10 @@ class ZKHandler(BaseHTTPRequestHandler):
                     with _r2.urlopen(req, timeout=30) as r:
                         summary = json.loads(r.read()).get("choices",[{}])[0].get("message",{}).get("content","")
 
-            elif "/" in model:  # OpenRouter
-                api_key = self.vault.get_api_key("openrouter")
+            elif model.startswith("mistral") or "/" in model:  # Mistral direct of OpenRouter
+                key_provider2 = "mistral" if model.startswith("mistral") else "openrouter"
+                base_url2 = "https://api.mistral.ai/v1/chat/completions" if key_provider2=="mistral" else "https://openrouter.ai/api/v1/chat/completions"
+                api_key = self.vault.get_api_key(key_provider2)
                 if api_key:
                     import urllib.request as _r2
                     payload = json.dumps({"model":model,"max_tokens":400,
@@ -3355,6 +3846,10 @@ class ZKHandler(BaseHTTPRequestHandler):
         raw_text = "\n".join(parser.chunks)
         raw_text = re.sub(r'\n{3,}', '\n\n', raw_text)   # max 2 opeenvolgende lege regels
         raw_text = re.sub(r'[ \t]+\n', '\n', raw_text)    # spaties voor newline
+        # Zorg dat markdown-koppen altijd op een eigen regel staan
+        raw_text = re.sub(r'([^\n])(#{1,4} )', r'\1\n\n\2', raw_text)
+        # Lege regel na elke kop
+        raw_text = re.sub(r'(#{1,4} [^\n]+)\n([^\n#\-])', r'\1\n\n\2', raw_text)
         raw_text = raw_text.strip()[:14000]
 
         if len(raw_text) < 100:
@@ -3432,10 +3927,14 @@ class ZKHandler(BaseHTTPRequestHandler):
             # Cookie/privacy standaard
             "Lees meer in ons Cookiebeleid", "Lees meer in ons cookiebeleid",
             "meer in ons Cookiebeleid",
+            "Lees meer in ons\nCookiebeleid", "Cookiebeleid . U kunt uw keuzen op elk gewenst moment bijwerken in uw instellingen",
+            "Naar hoofdcontent gaan", "Naar hoofdinhoud gaan", "Ga naar hoofdinhoud",
             # LinkedIn UI-elementen
             "LinkedIn respecteert uw",
             "Selecteer Accepteren of Afwijzen om niet-essentiële",
             "U kunt uw keuzen op elk gewenst moment bijwerken in uw instellingen",
+            "U kunt uw keuzen op elk gewenst moment bijwerken in uw\ninstellingen",
+            "keuzen op elk gewenst moment bijwerken in uw instellingen",
             "Meld u aan om meer content weer te geven",
             "Maak uw gratis account of meld u aan om door te gaan met uw zoekopdracht",
             "Nog geen lid van LinkedIn? Word nu lid",
@@ -3463,6 +3962,11 @@ class ZKHandler(BaseHTTPRequestHandler):
         ]
 
         REGEX_JUNK = [
+            r'(?i)lees meer in ons\s*\ncookiebeleid[^.]{0,300}[.\n]',
+            r'(?i)cookiebeleid\s*\.\s*u kunt[^.]{0,200}[.\n]',
+            r'(?i)u kunt uw keuzen[^.\n]{0,150}instellingen[^.\n]{0,50}[.\n]?',
+            r'(?i)keuzen op elk gewenst moment[^.\n]{0,200}[.\n]?',
+            r'(?i)naar hoofd(content|inhoud) gaan[^.]{0,100}[.\n]?',
             r'(?i)we (use|gebruiken) cookies?[^.]{0,250}[.\n]',
             r'(?i)cookie(s| settings| instellingen| beleid)[^.]{0,250}[.\n]',
             r'(?i)(accept|accepteer|decline|afwijzen|manage|beheer)\s+(all\s+)?(cookies?|preferences?)[^.]{0,200}[.\n]',
@@ -3508,24 +4012,25 @@ class ZKHandler(BaseHTTPRequestHandler):
         ) if is_linkedin else ""
 
         combined_prompt = (
-            "De onderstaande tekst is al gedeeltelijk opgemaakt als Markdown "
-            "(koppen met ##, lijstitems met -).\n\n"
-            "Stap 1: schrijf een samenvatting van 3-5 zinnen in de taal van de tekst (NL of EN). "
-            "Geen koppen, geen bullets.\n\n"
-            "Stap 2: maak de Markdown af tot een goed leesbaar artikel.\n"
-            "- Bewaar bestaande ## koppen en lijstitems\n"
-            "- Voeg ontbrekende ## sectiekoppen toe waar logisch\n"
-            "- **vet** voor kernbegrippen, *cursief* voor termen\n"
-            "- Gebruik > voor citaten\n"
-            "- Zorg voor een lege regel tussen elke alinea\n"
-            "- Verwijder: navigatie, cookies, login-verzoeken, reclame, "
-            "social-knoppen, reacties, profielinfo"
-            + linkedin_hint + "\n\n"
-            "Geef je antwoord PRECIES in dit format (geen extra tekst):\n"
+            "Verwerk de onderstaande webpagina-tekst tot een nette notitie.\n\n"
+            "STAP 1 — SAMENVATTING (verplicht, altijd):\n"
+            "Schrijf 5-6 zinnen die het artikel samenvatten. Gebruik de taal van de tekst (NL of EN). "
+            "Noem: het onderwerp, de kernboodschap en de conclusie. Geen koppen, geen bullets.\n\n"
+            "STAP 2 — OPGESCHOONDE MARKDOWN:\n"
+            "Zet de tekst om naar goed leesbare Markdown. Regels:\n"
+            "- Gebruik ## voor hoofdsecties, ### voor subsecties\n"
+            "- Gebruik **vet** voor kernbegrippen, *cursief* voor termen\n"
+            "- Gebruik > voor citaten en quotes\n"
+            "- Lege regel tussen elke alinea\n"
+            "- Verwijder STRIKT: cookie-meldingen, navigatiemenu, login-verzoeken, \n"
+            "  reclame, social-knoppen, reacties/comments, profielinfo, \n"
+            "  'U kunt uw keuzen bijwerken', 'Lees meer in ons cookiebeleid'\n\n"
+            "Geef je antwoord EXACT in dit format — geen extra tekst, geen uitleg:\n"
             "===SAMENVATTING===\n"
-            "<samenvatting hier>\n"
+            "<5-6 zinnen samenvatting>\n"
             "===ARTIKEL===\n"
-            "<markdown hier>\n\n"
+            "<opgeschoonde markdown>"
+            + linkedin_hint + "\n\n"
             f"Titel: {page_title}\n\n"
             f"Tekst:\n{clean_text[:8000]}"
         )
@@ -3542,7 +4047,7 @@ class ZKHandler(BaseHTTPRequestHandler):
                 if api_key:
                     import urllib.request as _req2
                     payload = json.dumps({
-                        "model": model, "max_tokens": 2000,
+                        "model": model, "max_tokens": 3000,
                         "messages": [{"role":"user","content":combined_prompt}]
                     }).encode()
                     req2 = _req2.Request("https://api.anthropic.com/v1/messages",
@@ -3560,7 +4065,7 @@ class ZKHandler(BaseHTTPRequestHandler):
                 if api_key:
                     import urllib.request as _req2
                     payload = json.dumps({
-                        "model": model, "max_tokens": 2000,
+                        "model": model, "max_tokens": 3000,
                         "messages": [{"role":"user","content":combined_prompt}]
                     }).encode()
                     req2 = _req2.Request("https://api.openai.com/v1/chat/completions",
@@ -3587,19 +4092,20 @@ class ZKHandler(BaseHTTPRequestHandler):
                         d2 = json.loads(r2.read())
                     response_text = d2.get("candidates",[{}])[0].get("content",{}).get("parts",[{}])[0].get("text","")
 
-            elif "/" in model:  # OpenRouter
-                api_key = self.vault.get_api_key("openrouter")
+            elif model.startswith("mistral") or "/" in model:  # Mistral direct of OpenRouter
+                key_provider2 = "mistral" if model.startswith("mistral") else "openrouter"
+                base_url2 = "https://api.mistral.ai/v1/chat/completions" if key_provider2=="mistral" else "https://openrouter.ai/api/v1/chat/completions"
+                api_key = self.vault.get_api_key(key_provider2)
                 if api_key:
                     import urllib.request as _req2
                     payload = json.dumps({
-                        "model": model, "max_tokens": 2000,
+                        "model": model, "max_tokens": 3000,
                         "messages": [{"role":"user","content":combined_prompt}]
                     }).encode()
-                    req2 = _req2.Request("https://openrouter.ai/api/v1/chat/completions",
+                    req2 = _req2.Request(base_url2,
                         data=payload,
                         headers={"Content-Type":"application/json",
-                                 "Authorization":"Bearer "+api_key,
-                                 "HTTP-Referer":"http://localhost:7842"},
+                                 "Authorization":"Bearer "+api_key},
                         method="POST")
                     with _req2.urlopen(req2, timeout=60) as r2:
                         d2 = json.loads(r2.read())
@@ -3617,32 +4123,84 @@ class ZKHandler(BaseHTTPRequestHandler):
             # Verwijder evt. markdown-fences
             response_text = _re.sub(r'^```\w*\n?', '', response_text).rstrip('`').strip()
 
-            # Probeer ===SAMENVATTING=== / ===ARTIKEL=== (nieuw format)
-            m_sam = _re.search(r'===SAMENVATTING===\s*(.*?)(?====ARTIKEL===)', response_text, _re.S)
-            m_art = _re.search(r'===ARTIKEL===\s*(.*?)$', response_text, _re.S)
-            if m_sam and m_art:
-                summary = m_sam.group(1).strip()
-                md      = m_art.group(1).strip()
-            else:
-                # Fallback: SAMENVATTING: / ARTIKEL: (oud format)
-                m_sam2 = _re.search(r'SAMENVATTING:\s*(.*?)(?=ARTIKEL:|$)', response_text, _re.S | _re.I)
-                m_art2 = _re.search(r'ARTIKEL:\s*(.*?)$', response_text, _re.S | _re.I)
-                if m_sam2 and m_art2:
-                    summary = m_sam2.group(1).strip()
-                    md      = m_art2.group(1).strip()
-                elif m_art2:
-                    md = m_art2.group(1).strip()
-                else:
-                    # Geen markers — probeer eerste alinea als samenvatting, rest als artikel
-                    parts = response_text.split('\n\n', 2)
-                    if len(parts) >= 2 and len(parts[0]) < 600 and not parts[0].startswith('#'):
-                        summary = parts[0].strip()
-                        md      = '\n\n'.join(parts[1:]).strip()
-                    else:
-                        md = response_text
+            # Parseer markers — meerdere varianten ondersteunen
+            def _extract(text):
+                """Extraheer samenvatting + markdown uit model-response.
+                Probeert 5 varianten zodat ook afwijkende model-outputs werken."""
+                t = text.strip()
+
+                # Stap 0: strip markdown code fences die sommige modellen toevoegen
+                t = _re.sub(r'```(?:markdown|md|text)?\n?', '', t).strip()
+                t = _re.sub(r'```\s*$', '', t, flags=_re.M).strip()
+
+                # Variant 1: ===SAMENVATTING=== ... ===ARTIKEL===  (gewenst format)
+                m1s = _re.search(r'={2,}\s*SAMENVATTING\s*={2,}\s*(.*?)\s*(?=={2,}\s*ARTIKEL)', t, _re.S|_re.I)
+                m1a = _re.search(r'={2,}\s*ARTIKEL\s*={2,}\s*(.*?)(?:\s*={2,}|$)', t, _re.S|_re.I)
+                if m1s and m1a:
+                    s = m1s.group(1).strip()
+                    a = m1a.group(1).strip()
+                    if s and a: return s, a
+
+                # Variant 2: **SAMENVATTING** / ## SAMENVATTING / SAMENVATTING:
+                m2s = _re.search(
+                    r'(?:\*{1,2}|#{1,4})?\s*(?:SAMENVATTING|SUMMARY)\s*(?:\*{1,2})?\s*[:=\-]*\s*\n+(.*?)'
+                    r'(?=(?:\*{1,2}|#{1,4})?\s*(?:ARTIKEL|ARTICLE|INHOUD|CONTENT)\s*(?:\*{1,2})?\s*[:=\-]*)',
+                    t, _re.S|_re.I)
+                m2a = _re.search(
+                    r'(?:\*{1,2}|#{1,4})?\s*(?:ARTIKEL|ARTICLE|INHOUD|CONTENT)\s*(?:\*{1,2})?\s*[:=\-]*\s*\n+(.*?)$',
+                    t, _re.S|_re.I)
+                if m2s:
+                    s = m2s.group(1).strip()
+                    a = m2a.group(1).strip() if m2a else ""
+                    if s: return s, a
+
+                # Variant 3: "Samenvatting:" gevolgd door tekst (zonder section break)
+                m3 = _re.search(r'(?:Samenvatting|Summary):\s*([^\n]{40,}(?:\n(?![A-Z]{4,})[^\n]+){0,8})', t, _re.I)
+                if m3:
+                    s = m3.group(1).strip()
+                    # Artikel is de rest
+                    a = t[m3.end():].strip()
+                    if s: return s, a or t
+
+                # Variant 4: eerste alinea als samenvatting (als >=60 tekens, geen kop)
+                paras = [p.strip() for p in t.split('\n\n') if p.strip()]
+                if len(paras) >= 2:
+                    first = paras[0]
+                    # Sla over als het een kop of lijst is
+                    if not _re.match(r'^#{1,4}\s|^-\s|^\*\s|^\d+\.\s', first) and len(first) > 60:
+                        return first, '\n\n'.join(paras[1:])
+
+                # Variant 5: geen scheiding gevonden - heel de tekst als artikel
+                return "", t
+            summary, md = _extract(response_text)
 
             if not md:
                 md = clean_text[:6000]
+
+            # ── Post-processing: markdown opschonen ──────────────────────────
+            if md:
+                # Zorg dat ## koppen altijd op een eigen regel staan
+                md = _re.sub(r'([^\n])(#{1,4} )', r'\1\n\n\2', md)
+                # Zorg dat een kop altijd een lege regel erna heeft
+                md = _re.sub(r'(#{1,4} [^\n]+)\n([^\n#])', r'\1\n\n\2', md)
+                # Verwijder dubbele lege regels (max 2)
+                md = _re.sub(r'\n{3,}', '\n\n', md)
+                # Verwijder CSS-rommel die modellen soms toevoegen
+                md = _re.sub(r'#?[0-9a-fA-F]{0,8};?(?:[\w-]+:[^;">\n]{1,60};?){1,10}"?>', '', md)
+                # Verwijder lege koppen (# alleen op een regel, overblijfsel van CSS-stripping)
+                md = _re.sub(r'^#+\s*$', '', md, flags=_re.MULTILINE)
+                # Opruimen: max 2 lege regels na stripping
+                md = _re.sub(r'\n{3,}', '\n\n', md)
+                md = md.strip()
+
+            # ── Summary post-processing ──────────────────────────────────────
+            if summary:
+                # Strip markdown opmaak uit de samenvatting
+                summary = _re.sub(r'#{1,4}\s+', '', summary)
+                summary = _re.sub(r'\*{1,2}([^*]+)\*{1,2}', r'\1', summary)
+                # CSS-rommel
+                summary = _re.sub(r'#?[0-9a-fA-F]{0,8};?(?:[\w-]+:[^;">\n]{1,60};?){1,10}"?>', '', summary)
+                summary = summary.strip()
 
         except Exception as e:
             md = clean_text[:6000]
@@ -3688,6 +4246,61 @@ def main():
             sys.exit(1)
 
     vault_path=Path(args.vault).expanduser().resolve()
+
+    # ── Cloud-opslag detectie & waarschuwingen ─────────────────────────────
+    vault_str = str(vault_path)
+    cloud_type = None
+    cloud_tips = []
+
+    # OneDrive — macOS, Windows, Linux
+    if any(x in vault_str for x in [
+        "OneDrive", "onedrive",
+        "Library/CloudStorage/OneDrive",
+    ]):
+        cloud_type = "OneDrive"
+        cloud_tips = [
+            "✓ Atomisch schrijven actief (veilig voor OneDrive-sync)",
+            "✓ Bestanden zijn standaard Markdown — volledig compatibel",
+            "⚠ Start de server NIET als OneDrive een grote sync uitvoert",
+            "⚠ Stel OneDrive in op 'Always keep on this device' voor de vault-map",
+        ]
+
+    # Google Drive — macOS (Drive for Desktop), Windows (Drive letter G:/H:)
+    elif any(x in vault_str for x in [
+        "GoogleDrive", "Google Drive", "google-drive",
+        "Library/CloudStorage/Google",
+        "My Drive",
+    ]) or (len(vault_str) == 3 and vault_str[1] == ":" and
+           vault_str[0].upper() in "GHIJKLMNOPQRSTUVWXYZ"):
+        cloud_type = "Google Drive"
+        cloud_tips = [
+            "✓ Atomisch schrijven actief (veilig voor Drive-sync)",
+            "✓ Bestanden zijn standaard Markdown — volledig compatibel",
+            "⚠ Schakel 'Mirror files' in (niet 'Stream files') voor betrouwbare toegang",
+            "⚠ Op Windows: gebruik de stationsletter (bijv. G:\\Zettelkasten)",
+        ]
+
+    # iCloud Drive — macOS
+    elif any(x in vault_str for x in [
+        "iCloud Drive", "iCloudDrive",
+        "Library/Mobile Documents/com~apple~CloudDocs",
+    ]):
+        cloud_type = "iCloud Drive"
+        cloud_tips = [
+            "✓ Atomisch schrijven actief",
+            "⚠ iCloud kan bestanden 'verdampen' (evict) — zet optimalisatie UIT",
+            "⚠ Ga naar Systeeminstellingen → iCloud → iCloud Drive → Optimaliseer Mac-opslag: UIT",
+        ]
+
+    # Dropbox
+    elif any(x in vault_str for x in ["Dropbox", "dropbox"]):
+        cloud_type = "Dropbox"
+        cloud_tips = [
+            "✓ Atomisch schrijven actief (veilig voor Dropbox-sync)",
+            "✓ Dropbox ondersteunt .md bestanden zonder beperkingen",
+            "⚠ Schakel 'Smart Sync' UIT voor de vault-map (anders offline niet beschikbaar)",
+        ]
+
     ZKHandler.vault=VaultManager(vault_path)
     ZKHandler.verbose=args.verbose
     ZKHandler.offline=args.offline
@@ -3702,6 +4315,11 @@ def main():
     server=ThreadingHTTPServer((args.host,args.port),ZKHandler)
     local_ip=get_local_ip()
     offline_label = "JA (vendor/)" if args.offline else "nee (CDN)"
+    cloud_block = ""
+    if cloud_type:
+        lines = "\n".join(f"  {t}" for t in cloud_tips)
+        cloud_block = f"\n  Cloud   : {cloud_type}\n{lines}"
+
     print(f"""
 ╔══════════════════════════════════════════════════════╗
 ║        ZETTELKASTEN VIM  —  Python Server v4         ║
@@ -3709,7 +4327,7 @@ def main():
   Vault   : {vault_path}
   Lokaal  : http://localhost:{args.port}
   Netwerk : http://{local_ip}:{args.port}
-  Logging : {"aan" if args.verbose else "uit  (--verbose)"}
+  Logging : {"aan" if args.verbose else "uit  (--verbose)"}{cloud_block}
   Offline : {offline_label}
   LLM     : ollama serve  +  ollama pull llama3.2-vision
   Stop    : Ctrl+C

@@ -50,6 +50,26 @@ const NotesTab = ({
 
   // ── Lokale UI-state (behoort alleen tot NotesTab) ─────────────────────────
   const [vimMode,       setVimMode]       = useState(false);
+  const [reviewData,    setReviewData]    = useState({});
+  // Laad review-data bij mount
+  React.useEffect(() => {
+    fetch("/api/config").then(r=>r.json())
+      .then(d => setReviewData(d.config?.review_data || {}))
+      .catch(()=>{});
+  }, []);
+  const handleToggleReview = React.useCallback(async (noteId) => {
+    const today = new Date().toISOString().slice(0,10);
+    const d = new Date(); d.setDate(d.getDate()+1);
+    const updated = { ...reviewData };
+    if (updated[noteId]) { delete updated[noteId]; }
+    else { updated[noteId] = { lastReview: today, interval: 1, due: d.toISOString().slice(0,10) }; }
+    setReviewData(updated);
+    try {
+      await fetch("/api/config", { method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ review_data: updated }) });
+    } catch(e) { console.error(e); }
+  }, [reviewData]);
   const [search,        setSearch]        = useState("");
   const [tagFilter,     setTagFilter]     = useState(null);
   const [renderMode,    setRenderMode]    = useState("plain");
@@ -90,6 +110,42 @@ const NotesTab = ({
     return `${dag} ${String(d.getDate()).padStart(2,"0")}-${String(d.getMonth()+1).padStart(2,"0")}-${d.getFullYear()}`;
   };
 
+  // Vandaag-datum als notitie-ID prefix (YYYY-MM-DD)
+  const todayId = () => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+  };
+
+  const handleDailyNote = useCallback(async () => {
+    const today   = todayId();
+    const title   = todayHeader();
+    // Zoek bestaande dagnotitie
+    const existing = NoteStore.getAll().find(n =>
+      n.tags?.includes("dagnotitie") && n.title === title
+    );
+    if (existing) {
+      // Open bestaande
+      onSelectNote(existing.id);
+      setVimMode(false);
+      return;
+    }
+    // Maak nieuwe dagnotitie
+    const id = today + "000000";  // herkenbaar ID
+    const content = `# ${title}\n\n## 📥 Inbox\n\n\n\n## 💡 Ideeën\n\n\n\n## ✓ Taken\n\n- [ ] \n`;
+    const note = {
+      id, title,
+      content,
+      tags: ["dagnotitie"],
+      created:  new Date().toISOString(),
+      modified: new Date().toISOString(),
+    };
+    const saved = await NoteStore.save(note);
+    onNotesChange(NoteStore.getAll());
+    onSelectNote(saved.id);
+    setVimMode(true);
+    if (!isDesktop && !isTablet) onSidebarToggle?.(false);
+  }, [isDesktop, isTablet]);
+
   const handleNew = useCallback(async () => {
     const id      = genId();
     const content = `*${todayHeader()}*\n\n`;
@@ -126,6 +182,18 @@ const NotesTab = ({
     const updated = { ...selNote, content: (selNote.content || "") + linkText };
     await handleSave(updated);
   }, [selNote, handleSave]);
+
+  // Voeg meerdere slimme links tegelijk toe aan de notitie
+  const handleAddSmartLinks = useCallback(async (note, linkTexts) => {
+    if (!note || !linkTexts?.length) return;
+    const addition = linkTexts.join("\n");
+    const updated  = {
+      ...note,
+      content:  (note.content || "") + "\n\n" + addition,
+      modified: new Date().toISOString(),
+    };
+    await handleSave(updated);
+  }, [handleSave]);
 
   const handleDelete = useCallback(async () => {
     if (!selNote || !window.confirm("Verwijder dit zettel?")) return;
@@ -314,6 +382,7 @@ const NotesTab = ({
     tagFilter,
     onSelect:          handleSelect,
     onNew:             handleNew,
+    onDailyNote:       handleDailyNote,
     onSearchChange:    setSearch,
     onTagFilterChange: setTagFilter,
     isMobile,
@@ -339,30 +408,77 @@ const NotesTab = ({
         linkMenuContent:  showLinkMenu ? buildLinkDropdown() : null,
         onSplitCmd,
       })
-    : React.createElement("div", { style: { flex: 1, position: "relative", minHeight: 0, overflow: "hidden" } },
-        React.createElement(NotePreview, {
-          note:               selNote,
-          notes,
-          renderMode,
-          isMobile,
-          onEdit:             () => {
-            if (selNote) { setVimMode(true); if (!isDesktop && !isTablet) onSidebarToggle?.(false); }
-            else handleNew();
-          },
-          onDelete:           handleDelete,
-          onRenderModeChange: setRenderMode,
-          onTagRemove:        handleTagRemove,
-          onLinkClick:        handleLinkClick,
-          onEditMermaid:      code => setMermaidEdit({ noteId: selectedId, code }),
-          backlinks,
-          onBacklinkSelect:   id => { onSelectNote(id); setVimMode(false); },
-          onAddLink:          handleAddLink,
-          onToggleRead:       async (note) => {
-            const updated = { ...note, isRead: !note.isRead, modified: new Date().toISOString() };
-            await NoteStore.save(updated);
-            onNotesChange(NoteStore.getAll());
+    : React.createElement(React.Fragment, null,
+        // NotePreview — flex:1 vult beschikbare breedte
+        React.createElement("div", { style: { flex: 1, position: "relative", minHeight: 0, overflow: "hidden" } },
+          React.createElement(NotePreview, {
+            note:               selNote,
+            notes,
+            renderMode,
+            isMobile,
+            llmModel,
+            onEdit:             () => {
+              if (selNote) { setVimMode(true); if (!isDesktop && !isTablet) onSidebarToggle?.(false); }
+              else handleNew();
+            },
+            onDelete:           handleDelete,
+            onRenderModeChange: setRenderMode,
+            onTagRemove:        handleTagRemove,
+            onLinkClick:        handleLinkClick,
+            onEditMermaid:      code => setMermaidEdit({ noteId: selectedId, code }),
+            backlinks,
+            onBacklinkSelect:   id => { onSelectNote(id); setVimMode(false); },
+            onAddLink:          handleAddLink,
+          onAddSmartLinks:    handleAddSmartLinks,
+          allNotes:           notes,
+            onToggleRead:       async (note) => {
+              const updated = { ...note, isRead: !note.isRead, modified: new Date().toISOString() };
+              await NoteStore.save(updated);
+              onNotesChange(NoteStore.getAll());
+            },
+            onToggleReview: handleToggleReview,
+          reviewData,
+          onSummarize: async (note, summary) => {
+              const clean = summary
+                .replace(/<[^>]*>/g, '')
+                .replace(/#?[0-9a-fA-F]{3,8};[\w-]+:[^;\n]{1,80}(?:;[\w-]+:[^;\n]{1,80})*/g, '')
+                .replace(/[\w-]+:[\w\s#.,%()]+;(?:[\w-]+:[\w\s#.,%()]+;?)*/g, '')
+                .replace(/\*{0,2}(?:SAMENVATTING|Samenvatting|SUMMARY|Summary)\*{0,2}\s*[:\n]/g, '')
+                .replace(/={2,}\w+={2,}\s*/g, '')
+                .replace(/^>\s*\[!.*?\]\s*/gm, '')
+                .replace(/^>\s*/gm, '')
+                .replace(/[ \t]{2,}/g, ' ')
+                .replace(/\n{3,}/g, '\n\n')
+                .trim();
+              const block = `> [!samenvatting]\n> 📋 **Samenvatting**\n> ${clean.replace(/\n/g, "\n> ")}\n\n`;
+              const updated = {
+                ...note,
+                content: block + note.content,
+                modified: new Date().toISOString(),
+              };
+              await NoteStore.save(updated);
+              onNotesChange(NoteStore.getAll());
+            },
+          })
+        ),
+        // ── Links-zijbalk rechts — sibling van NotePreview in flex-row ────────
+        !isMobile && !goyoMode && selNote && React.createElement(LinksSidebar, {
+          note:        selNote,
+          allNotes:    notes,
+          serverPdfs,
+          serverImages,
+          isTablet,
+          onSelect:    id => { onSelectNote(id); setVimMode(false); },
+          onInsertLink: async (linkText) => {
+            const updated = {
+              ...selNote,
+              content: (selNote.content || "") + "\n\n" + linkText,
+              modified: new Date().toISOString(),
+            };
+            await handleSave(updated);
           },
         }),
+        // ── NotesMeta — ook sibling in flex-row ──────────────────────────────
         isDesktop && !goyoMode && React.createElement(NotesMeta, {
           note:          selNote,
           notes,
@@ -400,8 +516,10 @@ const NotesTab = ({
       background: "none", border: "none",
       borderRight: `1px solid ${W.splitBg}`,
       color: tabletSidebarOpen ? W.blue : W.fgMuted,
-      padding: "0 10px", height: "100%",
-      fontSize: "16px", cursor: "pointer", flexShrink: 0,
+      padding: "0 14px", height: "34px", minWidth: "44px",
+      fontSize: "18px", cursor: "pointer", flexShrink: 0,
+      touchAction: "manipulation",  // geen 300ms tap-vertraging op iOS
+      display: "flex", alignItems: "center", justifyContent: "center",
     }
   }, tabletSidebarOpen ? "◀" : "▶");
 
@@ -422,25 +540,32 @@ const NotesTab = ({
       }
     }, sidebar),
 
-    // Hoofd area
+    // Hoofd area — row zodat LinksSidebar naast NotePreview staat
     React.createElement("div", {
       style: { flex: 1, display: "flex", flexDirection: "column",
                overflow: "hidden", minWidth: 0, minHeight: 0 }
     },
-      // Tablet toggle-knop bovenaan de editor-balk injecteren
+      // Tablet toggle-knop bovenaan
       isTablet && React.createElement("div", {
         style: {
           display: "flex", alignItems: "center",
           background: W.bg2, borderBottom: `1px solid ${W.splitBg}`,
           flexShrink: 0, height: "34px",
+          position: "relative", zIndex: 10,
         }
       },
         tabletToggleBtn,
         React.createElement("span", {
-          style: { fontSize: "12px", color: W.fgMuted, paddingLeft: "8px" }
+          onClick: () => setTabletSidebarOpen(p => !p),
+          style: { fontSize: "12px", color: W.fgMuted, paddingLeft: "8px",
+                   cursor: "pointer", touchAction: "manipulation" }
         }, tabletSidebarOpen ? "Lijst" : "▶ Lijst tonen")
       ),
-      mainContent
+      // Flex-row wrapper zodat NotePreview, LinksSidebar en NotesMeta naast elkaar staan
+      React.createElement("div", {
+        style: { flex: 1, display: "flex", flexDirection: "row",
+                 overflow: "hidden", minHeight: 0 }
+      }, mainContent)
     )
   );
 };

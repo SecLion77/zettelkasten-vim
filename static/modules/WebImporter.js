@@ -13,7 +13,7 @@
 //   importPreview     object | null   (vanuit jobs-panel)
 //   setImportPreview  fn
 
-const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, addJob, updateJob,
+const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, onDescribeImages, addJob, updateJob,
                       importPreview, setImportPreview, notes=[]}) => {
   const { useState, useRef, useCallback, useEffect } = React;
 
@@ -89,6 +89,18 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, addJob, upd
   }, [notes]);
 
 
+  // ── Saniteer tekst: verwijder CSS-rommel die modellen soms toevoegen ────────
+  const sanitizeText = (text) => {
+    if (!text) return "";
+    return text
+      .replace(/#?[0-9a-fA-F]{0,8};?(?:[\w-]+:[^;">\n]{1,60};?){1,10}"?>/g, "")
+      .replace(/<[^>]{0,300}>/g, "")
+      .replace(/={2,}\s*(?:SAMENVATTING|ARTIKEL|SUMMARY|ARTICLE)\s*={2,}/gi, "")
+      .replace(/^#+\s*$/gm, "")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+  };
+
   // ── initFromPreview helper ─────────────────────────────────────────────────
   const initFromPreview = (p) => {
     if (!p) return { md: "", title: "", summary: "", tags: [] };
@@ -108,7 +120,7 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, addJob, upd
     prevPreview.current = importPreview;
     if (!importPreview) return;
     const {md, title, summary, tags: newTags} = initFromPreview(importPreview);
-    setEditMd(md); setEditTitle(title); setEditSummary(summary); setTags(newTags);
+    setEditMd(sanitizeText(md)); setEditTitle(title); setEditSummary(sanitizeText(summary)); setTags(newTags);
     setSaved(false); setImporting(false);
 
     // Automatische tag-suggestie direct na import
@@ -164,7 +176,10 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, addJob, upd
           updateJob && updateJob(jid,{status:"done", result:"Al aanwezig"});
         } else if (res?.ok) {
           setImportPreview(res);
-          if (res.images?.length && onRefreshImages) onRefreshImages();
+          if (res.images?.length && onRefreshImages) {
+            onRefreshImages();
+            // Beschrijving pas na opslaan — niet automatisch hier
+          }
           // Sla alleen veilige scalaire velden op in job (geen circulaire refs)
           const safeResult = {
             title: res.title||"", url: res.url||"",
@@ -186,10 +201,12 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, addJob, upd
 
   const saveNote = useCallback(async () => {
     if (!importPreview) return;
-    // Bouw content op: samenvatting bovenaan, dan originele tekst
+    // Bouw content op: samenvatting bovenaan als callout, dan originele tekst
     let content = "";
     if (editSummary.trim()) {
-      content += `> **Samenvatting:** ${editSummary.trim()}\n\n---\n\n`;
+      const cleanSummary = sanitizeText(editSummary);
+      const summaryLines = cleanSummary.replace(/\n/g, "\n> ");
+      content += `> [!samenvatting]\n> 📋 **Samenvatting**\n> ${summaryLines}\n\n---\n\n`;
     }
     content += editMd;
     if (selectedImages.size > 0 && importPreview.images?.length) {
@@ -211,6 +228,10 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, addJob, upd
       importedAt: new Date().toISOString(),
       created: new Date().toISOString(), modified: new Date().toISOString(),
     });
+    // Beschrijf alleen de geselecteerde afbeeldingen, pas na opslaan
+    if (selectedImages.size > 0 && onDescribeImages) {
+      onDescribeImages([...selectedImages]);
+    }
     setSaved(true);
     // Na 1.5s automatisch terug naar het invoerscherm
     setTimeout(() => reset(), 1500);
@@ -422,6 +443,29 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, addJob, upd
             })
           ),
 
+          // ── Slimme links ─────────────────────────────────────────────────
+          !saved && React.createElement("div", {style:{
+            background:W.bg2, border:`1px solid ${W.splitBg}`,
+            borderRadius:"7px", padding:"10px 14px",
+          }},
+            React.createElement("div", {style:{
+              fontSize:"11px",color:"rgba(159,202,86,0.7)",
+              letterSpacing:"1.2px",marginBottom:"8px",fontWeight:"600",
+            }}, "🔗 SLIMME LINKS"),
+            React.createElement(SmartLinkSuggester, {
+              content:      (editSummary + "\n\n" + editMd).slice(0, 6000),
+              noteId:       "",   // nieuw — geen bestaande notitie
+              allNotes:     notes || [],
+              llmModel,
+              onInsertLink: (linkText) => {
+                // Voeg link toe aan het einde van editMd
+                setEditMd(prev => prev + "\n\n" + linkText);
+              },
+              compact:  false,
+              autoLoad: true,   // laad direct bij tonen
+            })
+          ),
+
           // ── Samenvatting ────────────────────────────────────────────────────
           React.createElement("div", {style:{
             background:"rgba(138,198,242,0.06)",
@@ -434,19 +478,25 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, addJob, upd
               fontWeight:"600",marginBottom:"8px",
               display:"flex",alignItems:"center",gap:"6px",
             }},
-              "✦ SAMENVATTING"
+              "📋 SAMENVATTING",
+              React.createElement("span",{style:{
+                fontSize:"10px",color:W.fgMuted,fontWeight:"400",
+                letterSpacing:"0",marginLeft:"4px"
+              }},"— wordt als callout bovenaan de notitie geplaatst")
             ),
-            React.createElement("textarea", {
+            React.createElement("textarea",{
               value: editSummary,
               onChange: e => setEditSummary(e.target.value),
-              placeholder: editSummary ? "" : "Geen samenvatting gegenereerd — voeg zelf toe…",
-              rows: 3,
+              placeholder: "Geen samenvatting gegenereerd — typ hier zelf een samenvatting, of controleer of het AI-model is ingesteld.",
+              rows: Math.max(3, (editSummary||"").split("\n").length + 1),
               style:{
                 width:"100%", background:"transparent",
                 border:"none", outline:"none",
-                color:W.fg, fontSize:"14px", lineHeight:"1.7",
+                color: editSummary ? W.fg : W.fgMuted,
+                fontSize:"14px", lineHeight:"1.75",
                 resize:"vertical", fontFamily:"inherit",
                 boxSizing:"border-box",
+                fontStyle: editSummary ? "normal" : "italic",
               }
             })
           ),

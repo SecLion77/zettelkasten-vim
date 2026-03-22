@@ -114,7 +114,16 @@ const SmartTagEditor=({tags=[],onChange,allTags=[],content="",llmModel=""})=>{
     if(!t||tags.includes(t)){setInput("");setOpen(false);return;}
     const sim=_similarTags(t,uniqueAll.filter(x=>!tags.includes(x)&&x!==t),2);
     if(sim.length)setTypoWarn({added:t,similar:sim});
-    onChange([...tags,t]);
+    if(typeof onChange !== "function"){
+      console.error("[SmartTagEditor] onChange is not a function:", typeof onChange, onChange);
+      setInput("");setOpen(false);return;
+    }
+    const newTags=[...tags,t];
+    try {
+      onChange(newTags);
+    } catch(e) {
+      console.error("[SmartTagEditor] onChange threw:", e, "tags:", newTags);
+    }
     setInput("");setOpen(false);
     setAiSuggested(p=>p.filter(s=>s!==t));
   },[tags,uniqueAll,onChange]);

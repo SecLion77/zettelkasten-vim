@@ -1,6 +1,6 @@
 # 🗃️ Zettelkasten VIM
 
-> Zelfstandige Python desktop-app voor kennisbeheer. Notities als Markdown op schijf, PDF-bibliotheek met annotaties, afbeeldingenbeheer, Obsidian-stijl kennisgraaf, canvas VIM-editor, split-screen modus, interactieve mindmap, web-importer, Markdown- en Word-import, **PDF persoonlijk gebruik met DRM-bypass**, **leeslijst met leestijd**, semantische kennisverrijking (TF-IDF + GraphRAG), **SmartTagEditor met automatische AI-suggesties**, en een lokale AI-notebook via Ollama én cloud-modellen — optioneel volledig offline.
+> Zelfstandige Python desktop-app voor kennisbeheer. Notities als Markdown op schijf, PDF-bibliotheek met annotaties, afbeeldingenbeheer, Obsidian-stijl kennisgraaf, canvas VIM-editor, split-screen modus, interactieve mindmap, web-importer, Markdown- en Word-import, **bidirectionele links met rechter linkszijbalk**, **dagelijkse notitie**, **full-text én fuzzy zoeken**, **leeslijst met leestijd**, semantische kennisverrijking (TF-IDF + GraphRAG), **SmartTagEditor met automatische AI-suggesties**, en een lokale AI-notebook via Ollama én cloud-modellen — optioneel volledig offline.
 
 ---
 
@@ -33,6 +33,7 @@
     ├── index.html
     ├── app.js
     └── modules/
+        ├── LinksSidebar.js    ← links-zijbalk
         ├── NoteEditor.js
         ├── NotePreview.js
         ├── NotesTab.js
@@ -123,7 +124,7 @@ python3 server.py --offline
 ├── pdfs/
 ├── annotations/
 │   ├── rapport.json            ← PDF-annotaties per bestand
-│   └── _image_annotations.json
+│   └── _image_annotations.json ← afbeelding-beschrijvingen
 ├── images/
 └── config.json                 ← instellingen, API-sleutels, PDF-opties
 ```
@@ -151,8 +152,8 @@ isRead: false                      ← leeslijst status
 | Notities | 📝 | Schrijven, bekijken, doorzoeken |
 | Graaf | 🕸 | Kennisgraaf van alle verbindingen |
 | PDF | 📄 | PDF-bibliotheek met annotaties |
-| Plaatjes | 🖼 | Afbeeldingen met AI-beschrijving en pin-annotaties |
-| Zoeken | 🔍 | FZF-stijl zoeken over notities én PDF-pagina's |
+| Plaatjes | 🖼 | Afbeeldingen met AI-beschrijving |
+| Zoeken | 🔍 | Fuzzy én full-text zoeken over notities én PDFs |
 | Import | 🌐 | URL-, Markdown- en Word-import |
 | Leeslijst | 📚 | Overzicht van alle geïmporteerde notities |
 | Mindmap | 🗺 | Visuele mindmap, AI-mindmap of Mermaid-editor |
@@ -161,38 +162,97 @@ isRead: false                      ← leeslijst status
 
 ---
 
+## 🔗 Links-systeem
+
+### Bidirectionele links
+
+```markdown
+[[Andere Notitie]]       ← bidirectionele notitie-link (pill-stijl)
+[[pdf:rapport.pdf]]      ← klikbare PDF-link
+![[img:foto.png]]        ← ingesloten afbeelding
+```
+
+Links worden weergegeven als **pills** met `[[` en `]]` aanduiding. Kapotte links krijgen een rood `✗`-icoon.
+
+### Links-zijbalk (rechts)
+
+Aan de rechterkant van elke notitie staat een inklapbare **🔗 Links** zijbalk:
+
+| Tab | Inhoud |
+|-----|--------|
+| **← In** | Backlinks — alle notities die naar deze notitie linken |
+| **→ Uit** | Outlinks — alle `[[links]]` in deze notitie |
+| **+ Link** | Handmatig linken met slimme zoekfunctie |
+
+**+ Link tab:**
+- Toont automatisch suggesties op basis van gedeelde tags (zonder te typen)
+- Zoekfunctie scoort op titelmatch, gedeelde tags, recentheid en contentovereenkomst
+- Toont een snippet als de zoekterm in de content gevonden wordt
+- Werkt voor notities, PDF's en afbeeldingen
+- Al gelinkte items worden grijs gemarkeerd met `✓`
+
+**Op iPad:** de zijbalk start ingeklapt (24px strook met 🔗). Tik om uit te klappen, `◀` om in te klappen.
+
+---
+
+## 📅 Dagelijkse notitie
+
+De **📅** knop naast "＋ nieuw zettel" opent de dagnotitie van vandaag.
+
+```markdown
+# maandag 22-03-2026
+
+## 📥 Inbox
+
+## 💡 Ideeën
+
+## ✓ Taken
+
+- [ ]
+```
+
+- Dagnotities krijgen automatisch de tag `dagnotitie`
+- Opnieuw klikken op 📅 opent altijd de bestaande notitie (geen duplicaten)
+- Herkenbaar ID: `2026-03-22000000`
+
+---
+
+## 🔍 Zoeken
+
+De Zoeken-tab heeft twee modi, wisselbaar via de toggle bovenaan:
+
+### ⚡ Fuzzy zoeken
+FZF-stijl zoeken over notities én vault-PDFs. Tolereert typefouten en volgorde.
+- Spatie = AND (meerdere woorden)
+- ↑↓ navigeert resultaten · Enter opent
+- PDF-hits tonen pagina + regelnummer
+- Resultaten inline bewerkbaar en opslaan als notitie
+
+### 🔎 Full-text zoeken
+Exacte zoekopdracht door alle notitie-content.
+- Toont **alle** treffers per notitie met regelnummer en context-snippet
+- `N×` teller toont het aantal treffers per notitie
+- Titelmatches apart gemarkeerd
+- Klikken opent de notitie direct
+
+---
+
 ## 📚 Leeslijst
 
-Toont alle geïmporteerde notities (URL, Word, PDF-samenvattingen) in tabelvorm, standaard gefilterd op **ongelezen**.
+Toont alle geïmporteerde notities in tabelvorm, standaard gefilterd op **ongelezen**.
 
-### Kolommen
+| Kolom | Beschrijving |
+|-------|-------------|
+| ✓ | Vinkje — klik om als gelezen/ongelezen te markeren |
+| Datum | Importdatum (nieuwste bovenaan) |
+| Titel | Naam van de notitie |
+| Leestijd | Geschatte leestijd (200 woorden/min) |
 
-| # | Kolom | Beschrijving |
-|---|-------|--------------|
-| 1 | ✓ | Vinkje — klik om als gelezen/ongelezen te markeren |
-| 2 | Datum | Importdatum (nieuwste bovenaan) |
-| 3 | Titel | Naam van de notitie |
-| 4 | Leestijd | Geschatte leestijd (200 woorden/min) |
-
-### Sorteren
-
-- Knoppen **📅 Datum** en **⏱ Leestijd ↓/↑** in de header
-- Of klik de kolomkoppen **DATUM** / **LEESTIJD** — opnieuw klikken draait de volgorde om
-
-### Filteren en zoeken
-
-Pills: **Alles** · **📖 Ongelezen** · **✓ Gelezen** + zoekbalk rechts
-
-### Gelezen-indicator in de notitie
-
-Bij geïmporteerde notities toont de notitie-toolbar een klikbare badge naast de leestijd:
-
+Bij geïmporteerde notities toont de toolbar een klikbare badge:
 ```
-○ ongelezen  |  ⏱ 17 min        ← niet gelezen
-● gelezen    |  ⏱ 17 min        ← gelezen (groen)
+○ ongelezen  |  ⏱ 17 min
+● gelezen    |  ⏱ 17 min   ← groen
 ```
-
-Één klik togglet de status. Wordt permanent opgeslagen in de frontmatter — overleeft een serverherstart.
 
 ---
 
@@ -202,25 +262,29 @@ Bij geïmporteerde notities toont de notitie-toolbar een klikbare badge naast de
 
 1. **Import** → tab **🌐 URL** → plak URL → **→ Importeren**
 2. AI verwijdert navigatie en rommel (Instapaper-stijl)
-3. Tags worden **automatisch gesuggereerd** op basis van inhoud én bestaande vault-tags
-4. Bewerk titel, tags en samenvatting → **✓ Opslaan**
+3. Tags worden **automatisch gesuggereerd**
+4. Selecteer afbeeldingen die je wilt meenemen
+5. Bewerk titel, tags en samenvatting → **✓ Opslaan**
 
-Dubbele URL's worden herkend met een waarschuwing en "Toch importeren" optie.
+Geselecteerde afbeeldingen krijgen **na opslaan** automatisch een AI-beschrijving.
 
 ### Markdown-import
 
-1. **Import** → tab **📝 Markdown** → kies `.md` / `.markdown` / `.txt`
-2. Stel tags in via SmartTagEditor → **✓ Opslaan als notitie**
+**Import** → tab **📝 Markdown** → kies `.md` / `.markdown` / `.txt` → **✓ Opslaan als notitie**
 
 ### Word-import (.docx)
 
-1. **Import** → tab **📄 Word** → kies `.docx`
-2. Conversie naar Markdown gebeurt volledig lokaal
-3. Koppen, bullets en tabellen worden correct omgezet
-4. AI genereert samenvatting en suggereert tags automatisch
-5. Bewerk → **✓ Opslaan als notitie**
+**Import** → tab **📄 Word** → kies `.docx` → AI genereert samenvatting en tags → **✓ Opslaan als notitie**
 
-> Gebruikt `python-docx` als dat beschikbaar is, anders ingebouwde XML-fallback.
+---
+
+## 🖼 Afbeeldingen
+
+- Upload via drag & drop of **+ upload**
+- **🧠 Beschrijven** — AI genereert een beschrijving
+- **📝 → notitie** — maakt een notitie met afbeelding én beschrijving, of navigeert naar bestaande
+- Beschrijving-badge: groen `✓ beschrijving` / grijs `geen beschrijving`
+- Zoek op naam én beschrijving via de zoekbalk
 
 ---
 
@@ -228,47 +292,28 @@ Dubbele URL's worden herkend met een waarschuwing en "Toch importeren" optie.
 
 ### Persoonlijk gebruik (DRM-bypass)
 
-Voor eigen beveiligde PDF's (rapporten, e-books waarvoor je een licentie hebt):
-
-1. ⚙ **Instellingen → PDF**
-2. Schakel **Persoonlijk gebruik** in
-3. Voer je e-mailadres in
-
-De server probeert DRM te omzeilen via `pikepdf` en `qpdf`. Watermerken en persoonlijk-gebruik disclaimers worden automatisch gefilterd uit samenvattingen.
+1. ⚙ **Instellingen → PDF** → schakel **Persoonlijk gebruik** in → voer e-mailadres in
 
 ### Samenvatting genereren
 
-Open een PDF → **🧠 Samenvatten** in de toolbar. Werkt met alle AI-modellen (lokaal én cloud). De samenvatting verschijnt als losse notitie met tags `samenvatting` en `pdf`.
+Open een PDF → **🧠 Samenvatten**. Samenvatting verschijnt als losse notitie met tags `samenvatting` en `pdf`.
 
 ### Annotaties
 
-Selecteer tekst in een PDF → annotatiepopup → voeg notitie en kleur toe.
-Op iOS: tik **✏ Annoteren** onder de tekstselectie.
+Selecteer tekst → annotatiepopup → voeg notitie en kleur toe. Op iOS: tik **✏ Annoteren**.
 
 ---
 
 ## 🏷️ Tag-systeem
 
-### SmartTagEditor
+**SmartTagEditor** — aanwezig in editor, import-preview en Word/Markdown-import.
 
-Aanwezig in notitie-editor, import-preview en Word/Markdown-import.
-
-**Automatisch bij import** — na elke URL- of Word-import worden tags direct gesuggereerd. Je ziet "✦ tags worden gesuggereerd…" tijdens het laden.
-
-**Slimme suggesties** — de AI gebruikt:
-- Alle vault-tags gesorteerd op gebruiksfrequentie (meest hergebruikt = meest relevant)
-- Directe tekstovereenkomsten: tags die letterlijk in de tekst voorkomen krijgen prioriteit
-- Max. 2 nieuwe tags — de rest hergebruikt bestaande tags voor betere onderlinge verbinding
-
-**Handmatig:**
-- Typ → autocomplete-dropdown op frequentie
-- `Enter` / `Tab` / `,` bevestigt · `Backspace` verwijdert laatste tag
+- Max. 2 nieuwe tags per import — de rest hergebruikt bestaande vault-tags
 - Typo-detectie met vervang-optie
+- `Enter` / `Tab` / `,` bevestigt · `Backspace` verwijdert
 
-**VIM-commando's:**
-
-| Commando | Actie |
-|----------|-------|
+| VIM-commando | Actie |
+|-------------|-------|
 | `:tag rust async` | Tags vervangen |
 | `:tag+ nieuw` | Tag toevoegen |
 | `:tag- oud` | Tag verwijderen |
@@ -279,8 +324,6 @@ Aanwezig in notitie-editor, import-preview en Word/Markdown-import.
 
 ## 🧠 Notebook LLM
 
-### Lokale modellen
-
 | Model | Pull-commando | Grootte |
 |-------|--------------|---------|
 | **Llama 3.2 Vision** | `ollama pull llama3.2-vision` | ~8 GB |
@@ -289,116 +332,38 @@ Aanwezig in notitie-editor, import-preview en Word/Markdown-import.
 | Phi-3 Medium | `ollama pull phi3:medium` | ~9 GB |
 | Gemma 2 9B | `ollama pull gemma2` | ~6 GB |
 
-Model kiezen: klik de **modelnaam in de statusbalk** onderin de app.
+Model kiezen: klik de **modelnaam in de statusbalk** onderin.
 
-### Kennisverrijking
-
-- **🕸 GraphRAG** — verrijkt vragen met semantisch relevante notities + graafburen + community-samenvatting
-- **🔍 Hiaten** — analyseert kennishiaten, zwakke bruggen en ontbrekende verbindingen
-- **Semantische graaf** — gestippelde lijnen tonen verwantschap zonder expliciete `[[link]]`
-- **Verwante notities** — TF-IDF gerelateerde notities onderaan elke notitie, direct te koppelen
-
-### Antwoorden plakken (split-modus)
-
-- **Heel bericht:** zweef over AI-antwoord → **↙ plak in notitie**
-- **Selectie:** selecteer tekst → popup → **↙ plak selectie**
-
-Ingeplakt als callout:
-```markdown
-> [!ai]
-> 🧠 **AI** · llama3.2-vision
-> [antwoordtekst]
-```
+- **🕸 GraphRAG** — verrijkt vragen met semantisch relevante notities + graafburen
+- **🔍 Hiaten** — analyseert kennishiaten en ontbrekende verbindingen
+- **Verwante notities** — TF-IDF panel onderaan elke notitie
 
 ---
 
 ## ⌨️ VIM Editor
 
-Canvas-gebaseerde editor — Escape werkt altijd, geen browser-interferentie.
+| Mode | Activeer |
+|------|----------|
+| INSERT | `i` / `a` |
+| NORMAL | `Esc` |
+| COMMAND | `:` |
+| SEARCH | `/` |
 
-### Modes
-
-| Mode | Activeer | Beschrijving |
-|------|----------|--------------|
-| INSERT | `i` / `a` | Tekst schrijven |
-| NORMAL | `Esc` | Navigatie & commando's |
-| COMMAND | `:` | Ex-commando's |
-| SEARCH | `/` | Zoeken in document |
-
-### Navigatie (NORMAL)
-
-| Toets | Actie |
-|-------|-------|
-| `h j k l` | Karakter / regel |
-| `w` / `b` | Woord vooruit / achteruit |
-| `0` / `$` | Begin / einde regel |
-| `gg` / `G` | Begin / einde document |
-
-### Bewerken (NORMAL)
-
-| Toets | Actie |
-|-------|-------|
-| `i` / `a` | INSERT voor / na cursor |
-| `o` / `O` | Nieuwe regel onder / boven |
-| `dd` | Verwijder regel |
-| `yy` / `p` | Kopieer / plak regel |
-| `u` / `Ctrl+r` | Undo / Redo |
-
-### Ex-commando's (`:`)
-
-| Commando | Actie |
-|----------|-------|
+| Ex-commando | Actie |
+|-------------|-------|
 | `:w` / `:wq` | Opslaan / opslaan+sluiten |
 | `:q!` | Sluiten zonder opslaan |
-| `:vs` | Split-screen openen |
-| `:only` | Split-screen sluiten |
-| `:goyo` | Toggle focusmodus |
+| `:vs` | Split-screen |
+| `:goyo` | Focusmodus |
 | `:spell` | Spellcheck: nl → en → uit |
 
-### Snippets (`Ctrl+J` of `Tab` in INSERT)
-
-| Trigger | Expandeert naar |
+| Snippet | Expandeert naar |
 |---------|-----------------|
-| `h1` | `# Titel` |
-| `h2` | `## Sectie` |
 | `link` | `[[notitie]]` |
-| `code` | Codeblok |
-| `table` | Markdowntabel |
 | `todo` | `- [ ] taak` |
 | `date` | Huidige datum |
-| `bold` | `**vetgedrukt**` |
-
----
-
-## ↔️ Split-screen
-
-Activeren: split-knop in toolbar of `:vs`.
-
-| Toets | Actie |
-|-------|-------|
-| `Ctrl+H` of `Ctrl+K` | Focus → linker paneel |
-| `Ctrl+L` of `Ctrl+J` | Focus → rechter paneel |
-
----
-
-## 🔗 Notitie-links & media
-
-```markdown
-[[Andere Notitie]]       ← bidirectionele notitie-link
-[[pdf:rapport.pdf]]      ← klikbare PDF-link
-![[img:foto.png]]        ← ingesloten afbeelding
-```
-
----
-
-## ✏️ Spellcheck
-
-Live spellcheck met gekleurde onderstrepingen. Taal wisselen: `:spell` in COMMAND mode (nl → en → uit).
-
-```bash
-# Optioneel: betere Hunspell-woordenboeken
-cd static/vendor/dict && bash download-dictionaries.sh
-```
+| `h1` `h2` | Heading |
+| `code` `table` `bold` | Opmaak |
 
 ---
 
@@ -406,20 +371,21 @@ cd static/vendor/dict && bash download-dictionaries.sh
 
 ```
 zettelkasten-python-app/
-├── server.py                  ← Python backend
+├── server.py                  ← Python backend (puur stdlib)
 ├── README.md
 └── static/
     ├── index.html
-    ├── app.js                 ← React frontend + hoofdcomponenten
+    ├── app.js                 ← React frontend + renderMd + hoofdcomponenten
     └── modules/
+        ├── LinksSidebar.js    ← 🔗 links-zijbalk (backlinks, outlinks, handmatig linken)
         ├── NoteEditor.js      ← VIM canvas editor
-        ├── NotePreview.js     ← preview + backlinks + leestijd/gelezen badge
-        ├── NotesTab.js        ← orkestratielaag notities-tab
-        ├── NoteList.js        ← notitie-lijst met filter
+        ├── NotePreview.js     ← preview + semantisch verwant paneel
+        ├── NotesTab.js        ← orkestratielaag + dagnotitie
+        ├── NoteList.js        ← notitie-lijst + 📅 dagnotitie knop
         ├── NotesMeta.js       ← metadata-zijpaneel
         ├── TagManager.js      ← SmartTagEditor + TagManagerPanel
         ├── WebImporter.js     ← URL-, Markdown- en Word-import
-        ├── ReadingList.js     ← leeslijst met sortering en gelezen-status
+        ├── ReadingList.js     ← leeslijst
         ├── pdfService.js      ← PDF API-client
         ├── noteApi.js         ← notities API-client
         ├── noteStore.js       ← in-memory notities store
@@ -430,17 +396,17 @@ zettelkasten-python-app/
 
 ## 💡 Tips
 
-- **Leeslijst** — opent standaard op ongelezen, direct overzicht van wat nog gelezen moet worden
-- **Gelezen togglen** — klik de badge in de notitie-toolbar of het vinkje in de leeslijst
-- **Word-import** — koppen, bullets en tabellen worden correct omgezet naar Markdown
-- **DRM-PDF's** — schakel "Persoonlijk gebruik" in via Instellingen → PDF voor eigen documenten
-- **Automatische tags** — bij elke import worden tags direct gesuggereerd op basis van vault-context
-- **Mistral en Kimi** — stel API-sleutel in via Instellingen → API-sleutels, kies in statusbalk
+- **Dagnotitie** — klik 📅 naast "nieuw zettel" voor de notitie van vandaag
+- **Full-text zoeken** — schakel naar 🔎 Volledig in de Zoeken-tab voor exacte treffers met regelnummer
+- **Links-zijbalk** — + Link tab toont automatisch notities met gedeelde tags als suggesties
+- **Kapotte links** — `✗` icoon in pill-stijl geeft direct aan welke verbindingen verbroken zijn
+- **Afbeeldingen importeren** — beschrijving wordt pas gegenereerd ná opslaan, alleen voor geselecteerde afbeeldingen
+- **Leeslijst** — opent standaard op ongelezen
+- **DRM-PDF's** — schakel "Persoonlijk gebruik" in via Instellingen → PDF
 - **Meerdere vaults** — start meerdere servers op verschillende poorten
-- **Git backup** — de vault map is gewone tekst, perfect voor git
+- **Git backup** — vault map is gewone tekst, perfect voor git
 - **Obsidian-compatibel** — notities zijn standaard Markdown
 - **iPad** — start met `--host 0.0.0.0`, open het getoonde IP in Safari
 - **Volledig offline** — `bash static/vendor/download-vendors.sh` → `python3 server.py --offline`
 - **GraphRAG** — Notebook → 🕸 GraphRAG → stel vragen met graafcontext
-- **Kennishiaten** — Notebook → 🔍 hiaten → analyseert je volledige kennisbasis
 - **Split + plakken** — zweef over AI-antwoord → ↙ plak in notitie

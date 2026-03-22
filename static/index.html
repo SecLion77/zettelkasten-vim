@@ -86,9 +86,34 @@
     .mdv a:hover { color: #ffffd7; text-decoration-color: rgba(255,255,215,.4); }
     .mdv a:visited { color: #8ac6f2; }
     .mdv p:last-child:has(a[href^="http"]) { margin-top: 18px; padding-top: 12px; border-top: 1px solid #3a4046; font-size: .875rem; color: #857b6f; }
-    .zlink { color: #8ac6f2; cursor: pointer; text-decoration: underline; text-decoration-color: rgba(138,198,242,.35); font-size: .9375rem; transition: color .12s; }
-    .zlink:hover { color: #ffffd7; }
-    .taghl { color: #9fca56; font-size: .9375rem; }
+    .zlink {
+      color: #8ac6f2;
+      cursor: pointer;
+      text-decoration: none;
+      font-size: .9375rem;
+      background: rgba(138,198,242,0.08);
+      border: 1px solid rgba(138,198,242,0.2);
+      border-radius: 4px;
+      padding: 1px 6px;
+      white-space: nowrap;
+      transition: all .15s;
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+    }
+    .zlink::before { content: "[["; font-size: 10px; opacity: 0.5; }
+    .zlink::after  { content: "]]"; font-size: 10px; opacity: 0.5; }
+    .zlink:hover { background: rgba(138,198,242,0.16); border-color: rgba(138,198,242,0.45); color: #ffffd7; }
+    .zlink.broken { color: #e5786d; background: rgba(229,120,109,0.08); border-color: rgba(229,120,109,0.2); }
+    .zlink.broken::before { content: "✗ "; font-size: 10px; opacity: 0.7; }
+    .zlink.broken::after  { content: ""; }
+    .taghl {
+      color: #9fca56;
+      font-size: .875rem;
+      background: rgba(159,202,86,0.08);
+      border-radius: 3px;
+      padding: 0 4px;
+    }
     .spell-error { border-bottom: 2px solid #e5786d; cursor: help; }
 
     textarea::placeholder, input::placeholder { color: #5a524a; }
@@ -222,6 +247,8 @@
 <script src="app.js"></script>
 <!-- UI-modules: laden NA app.js zodat W, TagPill etc. beschikbaar zijn -->
 <script src="modules/NoteList.js"></script>
+<script src="modules/SmartLinkSuggester.js"></script>
+    <script src="modules/LinksSidebar.js"></script>
 <script src="modules/NoteEditor.js"></script>
 <script src="modules/NotePreview.js"></script>
 <script src="modules/NotesMeta.js"></script>
@@ -229,6 +256,8 @@
 <script src="modules/NotesTab.js"></script>
 <script src="modules/WebImporter.js"></script>
 <script src="modules/ReadingList.js"></script>
+<script src="modules/StatsPanel.js"></script>
+<script src="modules/ReviewPanel.js"></script>
 <!-- Bootstrap: mount React NADAT alle modules geladen zijn -->
 <script>
   const root = ReactDOM.createRoot(document.getElementById("root"));
