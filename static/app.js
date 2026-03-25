@@ -197,17 +197,26 @@ const renderMd = (text, notes=[]) => {
     return `%%MEDIA${i}%%`;
   });
 
-  // Pre-sanitering: CSS-rommel overal strippen VOOR html-escaping
-  // Lokale modellen stoppen soms inline CSS in samenvattingen:
-  // "#8ac6f2;font-weight:bold;font-size:13px;margin-bottom:6px">TEKST"
-  h = h.replace(/#?[0-9a-fA-F]{0,8};?(?:[\w-]+:[^;">\n]{1,60};?){1,10}"?>/g, '');
-  h = h.replace(/<[^>]{0,300}>/g, '');
+  // Pre-sanitering: strip alle HTML-tags die het LLM soms produceert
+  // Iteratief: ook geneste tags (<div style="color:<span>..."> worden volledig gestript
+  let _prev = '';
+  while (_prev !== h) { _prev = h; h = h.replace(/<[^<>]*>/g, ''); }
+  // CSS-rommel zonder tags: "#hex;prop:val"> en "prop:val">
+  h = h.replace(/(?:[\w-]+:)?#[0-9a-fA-F]{3,8};(?:[\w-]+:[^;\">\\n]{1,80};?){1,12}\"?>\s*/g, '');
+  h = h.replace(/(?:[\w-]+:[^;\">\n]{1,80};)*[\w-]+:[^;\">\n]{1,80}\"?>\s*/g, '');
   // Verwijder lege koppen (# alleen op een regel)
   h = h.replace(/^#+\s*$/gm, '');
   h = h.replace(/\n{3,}/g, '\n\n');
 
   // Nu HTML-escapen (raakt placeholders niet)
   h = h.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+
+  // Post-escape sanitering: CSS-rommel inclusief &gt; variant
+  // Dekt alle patronen: "#hex;prop:val;prop:val"&gt;" en "prop:val">"
+  h = h.replace(/(?:[\w-]+:)?#[0-9a-fA-F]{3,8};(?:[\w-]+:[^\n\"<>&]{1,80};?){1,12}\"?\s*(?:&gt;|>)\s*/g, '');
+  h = h.replace(/(?:[\w-]+:[^\n"<>&]{1,80};)*[\w-]+:[^\n"<>&]{1,80}"?\s*(?:&gt;|>)\s*/g, '');
+  // Strip ook losse label-regels "📋 SAMENVATTING" op eigen regel
+  h = h.replace(/^[📋🗒️✍️\s]*(?:SAMENVATTING|SUMMARY)\s*$/gim, '');
 
   // Code blocks first (prevent interference) — mermaid mindmap apart behandelen
   const codeBlocks = [];
@@ -269,15 +278,26 @@ const renderMd = (text, notes=[]) => {
         // Meerdere lege regels
         .replace(/\n{3,}/g, "\n\n")
         .trim()
+        // Losse puntkomma's die overblijven na CSS-strip
+        .replace(/^;\s*/gm, "")
+        .replace(/<br>;\s*/g, "<br>")
         // Regels samenvoegen voor weergave
         .replace(/\n/g, "<br>");
-      return `<div style="border-left:3px solid ${meta.border};background:${meta.bg};border-radius:0 6px 6px 0;padding:10px 14px;margin:10px 0">` +
+      // Sla callout op als placeholder zodat taghl de #hex in style-attrs niet beschadigt
+      const calloutHtml =
+             `<div style="border-left:3px solid ${meta.border};background:${meta.bg};border-radius:0 6px 6px 0;padding:10px 14px;margin:10px 0">` +
              `<div style="color:${meta.color};font-weight:bold;font-size:13px;margin-bottom:${body?"6px":"0"}">${meta.icon} ${type.toUpperCase()}${title?" — "+title:""}</div>` +
              (body ? `<div style="color:#e3e0d7;font-size:14px;line-height:1.7">${body}</div>` : "") +
              `</div>`;
+      const ci = mediaBlocks.length;
+      mediaBlocks.push(calloutHtml);
+      return `%%MEDIA${ci}%%`;
     }
-    // Gewone blockquote
-    return `<blockquote>${cleaned.join("<br>")}</blockquote>`;
+    // Gewone blockquote ook als placeholder
+    const bqHtml = `<blockquote>${cleaned.join("<br>")}</blockquote>`;
+    const bi = mediaBlocks.length;
+    mediaBlocks.push(bqHtml);
+    return `%%MEDIA${bi}%%`;
   });
 
   // Headings
@@ -2474,6 +2494,7 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
   const [cleanupMsg,   setCleanupMsg]  = useState("");
   const [emptyMsg,     setEmptyMsg]    = useState("");
   const [orphanMsg,    setOrphanMsg]   = useState("");
+  const [cssCleanMsg,  setCssCleanMsg] = useState("");
 
   const cleanupBrokenLinks = useCallback(async () => {
     if (!onUpdateNote) return;
@@ -2559,6 +2580,23 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
     setOrphanMsg(`✓ ${deleted} wezen-notitie${deleted!==1?"s":""} verwijderd`);
     setTimeout(() => setOrphanMsg(""), 4000);
   }, [notes, orphanMsg, onDeleteNote]);
+  const cleanupCssGarbage = React.useCallback(async () => {
+    setCssCleanMsg("⏳ Bezig…");
+    try {
+      const res = await fetch("/api/cleanup-vault", { method: "POST" });
+      const data = await res.json();
+      if (data.ok) {
+        const n = data.cleaned || 0;
+        setCssCleanMsg(n > 0 ? `✓ ${n} notitie${n!==1?"s":""} opgeschoond` : "✓ Alles al schoon");
+        if (n > 0) NoteStore.load();
+      } else {
+        setCssCleanMsg("⚠ " + (data.error || "Mislukt"));
+      }
+    } catch(e) {
+      setCssCleanMsg("⚠ " + e.message);
+    }
+    setTimeout(() => setCssCleanMsg(""), 5000);
+  }, []);
   const fetchSemanticEdges = useCallback(async () => {
     if (!notes.length) return;
     setSemLoading(true);
@@ -3377,7 +3415,18 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
             borderRadius:"4px", padding:"4px 9px",
             fontSize:"11px", cursor:"pointer", textAlign:"left",
           }
-        }, orphanMsg || "🔗 Wezen-notities verwijderen")
+        }, orphanMsg || "🔗 Wezen-notities verwijderen"),
+        React.createElement("button",{
+          onClick: cleanupCssGarbage,
+          title:"Verwijder LLM-CSS-rommel (font-weight:bold;color:#hex) uit alle notities",
+          style:{
+            background: cssCleanMsg.startsWith("✓") ? "rgba(159,202,86,0.08)" : "rgba(138,198,242,0.08)",
+            border:`1px solid ${cssCleanMsg.startsWith("✓") ? "rgba(159,202,86,0.3)" : "rgba(138,198,242,0.2)"}`,
+            color: cssCleanMsg.startsWith("✓") ? W.comment : cssCleanMsg.startsWith("⚠") ? W.orange : W.blue,
+            borderRadius:"4px", padding:"4px 9px",
+            fontSize:"11px", cursor:"pointer", textAlign:"left",
+          }
+        }, cssCleanMsg || "✨ CSS-rommel opschonen")
       ),
 
       // Tip
@@ -5445,6 +5494,11 @@ const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote, setAiStatu
   const [lightbox,      setLightbox]     = useState(null);
   const [dragOver,      setDragOver]     = useState(false);
   const [descFilter,    setDescFilter]   = useState("");  // zoek in beschrijvingen
+  const [ageFilter,     setAgeFilter]    = useState("alle"); // "alle"|"week"|"maand"|"jaar"
+  const [orphanFilter,  setOrphanFilter] = useState(false);  // geen notitie-link
+  const [noDescFilter,  setNoDescFilter] = useState(false);  // geen beschrijving
+  const [cleanupMsg,    setCleanupMsg]   = useState("");
+  const [selected,      setSelected]     = useState(new Set()); // voor bulk-delete
   const galleryRef = React.useRef(null);
   const toolbarRef  = React.useRef(null);
 
@@ -5622,13 +5676,41 @@ const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote, setAiStatu
 
   const onDrop = (e) => { e.preventDefault(); setDragOver(false); upload(e.dataTransfer.files); };
 
-  // Filter op naam OF beschrijving
+  // Filter logica
   const imgs = (serverImages || []).filter(img => {
-    if (!descFilter.trim()) return true;
-    const q = descFilter.toLowerCase();
-    if (img.name.toLowerCase().includes(q)) return true;
-    const desc = descriptions[img.name] || "";
-    return desc.toLowerCase().includes(q);
+    // Tekstzoek op naam of beschrijving
+    if (descFilter.trim()) {
+      const q = descFilter.toLowerCase();
+      const desc = descriptions[img.name] || "";
+      if (!img.name.toLowerCase().includes(q) && !desc.toLowerCase().includes(q)) return false;
+    }
+    // Ouderdomsfilter — gebruik modified datum van serverImage of naam-timestamp
+    if (ageFilter !== "alle") {
+      const now = Date.now();
+      const limits = { week: 7, maand: 30, jaar: 365 };
+      const days = limits[ageFilter] || 9999;
+      const cutoff = now - days * 86400000;
+      // Probeer datum uit img.modified of uit naam (bijv. timestamp prefix)
+      const ts = img.modified ? new Date(img.modified).getTime()
+               : (parseInt(img.name) > 1e12 ? parseInt(img.name) : null);
+      if (ts && ts < cutoff) return false;
+    }
+    // Wees-filter: geen notitie die naar dit plaatje linkt of het bevat
+    if (orphanFilter) {
+      const allNotes = notes || [];
+      const linked = allNotes.some(n =>
+        (n.content || "").includes("img:" + img.name) ||
+        (n.content || "").includes(img.name)
+      );
+      if (linked) return false;
+    }
+    // Geen-beschrijving filter
+    if (noDescFilter) {
+      const desc = descriptions[img.name] || "";
+      const annotDesc = annotations.find(a => a.file === img.name)?.description || "";
+      if (desc || annotDesc) return false;
+    }
+    return true;
   });
 
   return React.createElement("div", {
@@ -5650,16 +5732,89 @@ const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote, setAiStatu
         React.createElement("span",{style:{background:W.blue,color:W.bg,
           borderRadius:"10px",padding:"0 7px",fontSize:"14px"}}, imgs.length),
         React.createElement("div",{style:{flex:1}}),
-        // Zoekbalk: naam + beschrijving
+        // Zoekbalk
         React.createElement("input",{
           value: descFilter,
           onChange: e => setDescFilter(e.target.value),
           placeholder: "zoek naam of beschrijving…",
           style:{background:W.bg3,border:`1px solid ${descFilter?W.blue:W.splitBg}`,
                  borderRadius:"5px",color:W.fg,padding:"4px 10px",fontSize:"13px",
-                 width:"200px",outline:"none"}
+                 width:"160px",outline:"none"}
         }),
 
+        // Ouderdomsfilter
+        React.createElement("select",{
+          value: ageFilter,
+          onChange: e => setAgeFilter(e.target.value),
+          title: "Filter op importdatum",
+          style:{background:W.bg3,border:`1px solid ${ageFilter!=="alle"?W.blue:W.splitBg}`,
+                 borderRadius:"5px",color:ageFilter!=="alle"?W.blue:W.fgMuted,
+                 padding:"4px 8px",fontSize:"12px",outline:"none",cursor:"pointer"}
+        },
+          React.createElement("option",{value:"alle"},"📅 alle"),
+          React.createElement("option",{value:"week"},"📅 < 1 week"),
+          React.createElement("option",{value:"maand"},"📅 < 1 maand"),
+          React.createElement("option",{value:"jaar"},"📅 < 1 jaar"),
+        ),
+
+        // Filter: geen notitie-link
+        React.createElement("button",{
+          onClick: () => { setOrphanFilter(p=>!p); setSelected(new Set()); },
+          title: "Toon alleen afbeeldingen zonder link naar een notitie",
+          style:{background:orphanFilter?"rgba(229,120,109,0.15)":"rgba(255,255,255,0.04)",
+                 color:orphanFilter?W.orange:W.fgMuted,
+                 border:`1px solid ${orphanFilter?"rgba(229,120,109,0.4)":W.splitBg}`,
+                 borderRadius:"5px",padding:"4px 10px",fontSize:"12px",cursor:"pointer",
+                 fontWeight:orphanFilter?"600":"400",whiteSpace:"nowrap"}
+        }, orphanFilter?"⚠ geen notitie ×":"geen notitie"),
+
+        // Filter: geen beschrijving
+        React.createElement("button",{
+          onClick: () => { setNoDescFilter(p=>!p); setSelected(new Set()); },
+          title: "Toon alleen afbeeldingen zonder AI-beschrijving",
+          style:{background:noDescFilter?"rgba(234,231,136,0.15)":"rgba(255,255,255,0.04)",
+                 color:noDescFilter?W.yellow:W.fgMuted,
+                 border:`1px solid ${noDescFilter?"rgba(234,231,136,0.4)":W.splitBg}`,
+                 borderRadius:"5px",padding:"4px 10px",fontSize:"12px",cursor:"pointer",
+                 fontWeight:noDescFilter?"600":"400",whiteSpace:"nowrap"}
+        }, noDescFilter?"⚠ geen beschrijving ×":"geen beschrijving"),
+
+        // Selecteer alle zichtbare afbeeldingen
+        imgs.length > 0 && React.createElement("button",{
+          onClick: () => {
+            if (selected.size === imgs.length) setSelected(new Set());
+            else setSelected(new Set(imgs.map(i=>i.name)));
+          },
+          style:{background:"rgba(255,255,255,0.04)",color:W.fgMuted,
+                 border:`1px solid ${W.splitBg}`,borderRadius:"5px",
+                 padding:"4px 10px",fontSize:"12px",cursor:"pointer",whiteSpace:"nowrap"}
+        }, selected.size===imgs.length && imgs.length>0 ? "☑ deselecteer":"☐ selecteer alle"),
+
+        // Bulk-delete
+        selected.size > 0 && React.createElement("button",{
+          onClick: async () => {
+            const n = selected.size;
+            if (!confirm(`${n} afbeelding${n>1?"en":""} permanent verwijderen?`)) return;
+            for (const fname of selected) {
+              try { await fetch("/api/images/"+encodeURIComponent(fname),{method:"DELETE"}); }
+              catch(e) {}
+            }
+            setSelected(new Set());
+            setCleanupMsg("✓ "+n+" verwijderd");
+            setTimeout(()=>setCleanupMsg(""),3000);
+            await onRefresh();
+          },
+          style:{background:"rgba(229,120,109,0.15)",color:W.orange,
+                 border:"1px solid rgba(229,120,109,0.4)",borderRadius:"5px",
+                 padding:"4px 10px",fontSize:"12px",cursor:"pointer",fontWeight:"600",
+                 whiteSpace:"nowrap"}
+        }, "🗑 "+selected.size+" verwijderen"),
+
+        cleanupMsg && React.createElement("span",{
+          style:{fontSize:"12px",color:W.comment,whiteSpace:"nowrap"}
+        }, cleanupMsg),
+
+        React.createElement("div",{style:{flex:1}}),
         React.createElement("button",{
           onClick:()=>fileRef.current?.click(),
           style:{background:W.blue,color:W.bg,border:"none",borderRadius:"6px",
@@ -5823,14 +5978,29 @@ const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote, setAiStatu
             const desc       = descriptions[img.name];
             const isBusy     = busy===img.name;
             const annotCount = annotations.filter(a=>a.file===img.name).length;
+            const isSel = selected.has(img.name);
             return React.createElement("div",{
               key:img.name,
-              style:{background:W.bg2,border:`1px solid ${W.splitBg}`,
+              style:{background:W.bg2,
+                     border:`2px solid ${isSel?W.orange:isBusy?"rgba(138,198,242,0.4)":W.splitBg}`,
                      borderRadius:"8px",overflow:"hidden",
                      display:"flex",flexDirection:"column",
-                     boxShadow:isBusy?"0 0 0 2px rgba(138,198,242,0.4)":"none",
-                     transition:"box-shadow 0.2s"}
+                     position:"relative",
+                     transition:"border-color 0.15s",
+                     opacity: isSel ? 0.85 : 1}
             },
+              // Selectie-checkbox overlay
+              React.createElement("div",{
+                onClick: e=>{ e.stopPropagation();
+                  setSelected(p=>{ const n=new Set(p);
+                    isSel?n.delete(img.name):n.add(img.name); return n; }); },
+                style:{position:"absolute",top:"6px",right:"6px",zIndex:10,
+                       width:"20px",height:"20px",borderRadius:"4px",cursor:"pointer",
+                       background:isSel?W.orange:"rgba(0,0,0,0.5)",
+                       border:`2px solid ${isSel?W.orange:"rgba(255,255,255,0.3)"}`,
+                       display:"flex",alignItems:"center",justifyContent:"center",
+                       fontSize:"12px",color:W.bg,fontWeight:"bold",flexShrink:0}
+              }, isSel?"✓":""),
               // Thumbnail
               React.createElement("div",{
                 style:{position:"relative",paddingTop:"65%",background:W.bg,cursor:"pointer"},
@@ -11210,12 +11380,42 @@ const App = () => {
                 return (async()=>{
                   const res=await PDFService.summarizePdf(fname,llmModel);
                   if(res?.ok && res.summary){
-                    const note={id:genId(),title:"Samenvatting — "+stem,
-                      content:"*Automatisch gegenereerd door Notebook LLM*\n\n"+res.summary+"\n\n---\n📄 **Bron:** [[pdf:"+fname+"]]",
-                      tags:["samenvatting","pdf"],created:new Date().toISOString(),modified:new Date().toISOString(),importedAt:new Date().toISOString()};
+                    // Zoek notities die deze PDF al citeren via [[pdf:fname]]
+                    const citingNotes = NoteStore.getAll().filter(n =>
+                      (n.content||"").includes("[[pdf:"+fname+"]]")
+                    );
+                    // Bouw linksectie naar citerende notities
+                    const linkedSection = citingNotes.length > 0
+                      ? "\n\n---\n🔗 **Gelinkte notities:**\n" +
+                        citingNotes.map(n => "- [["+n.id+"]]").join("\n")
+                      : "";
+
+                    const noteId = genId();
+                    const note={id:noteId, title:"Samenvatting — "+stem,
+                      content:"*Automatisch gegenereerd door Notebook LLM*\n\n"+res.summary
+                        +"\n\n---\n📄 **Bron:** [[pdf:"+fname+"]]"
+                        +linkedSection,
+                      tags:["samenvatting","pdf"],created:new Date().toISOString(),
+                      modified:new Date().toISOString(),importedAt:new Date().toISOString()};
                     const saved=await NoteStore.save(note);
+
+                    // Voeg teruglink toe aan elke citerende notitie
+                    for (const cn of citingNotes) {
+                      const alreadyLinked = (cn.content||"").includes("[["+noteId+"]]");
+                      if (!alreadyLinked) {
+                        const updated = {...cn,
+                          content: cn.content + "\n\n📎 **Samenvatting:** [["+noteId+"]]",
+                          modified: new Date().toISOString()
+                        };
+                        await NoteStore.save(updated);
+                      }
+                    }
+
                     setNotes([...NoteStore.getAll()]);
-                    updateJob(jid,{status:"done",result:"Opgeslagen als: Samenvatting — "+stem.slice(0,28)});
+                    const linkMsg = citingNotes.length > 0
+                      ? " ("+citingNotes.length+" notitie"+(citingNotes.length>1?"s":"")+" gelinkt)"
+                      : "";
+                    updateJob(jid,{status:"done",result:"Opgeslagen als: Samenvatting — "+stem.slice(0,22)+linkMsg});
                   } else {
                     const msg = res?.error || "Samenvatten mislukt";
                     updateJob(jid,{status:"error",error:msg});
@@ -11256,29 +11456,65 @@ const App = () => {
             React.createElement(WebImporter,{llmModel,allTags,
               notes,
               onRefreshImages: refreshImages,
-              onDescribeImages: (fnames) => {
-                // Beschrijf elke geïmporteerde afbeelding automatisch
-                fnames.forEach(fname => {
+              onDescribeImages: (fnames, importNoteId, importNoteTitle) => {
+                // Beschrijf elke afbeelding, sla op als annotatie + notitie,
+                // en voeg een [[link]] toe aan de import-notitie
+                fnames.forEach(async fname => {
                   const jid = genId();
                   const stem = fname.replace(/\.[^.]+$/,"");
                   addJob({id:jid, type:"describe", label:"🖼 Beschrijven: "+stem.slice(0,26)+"…"});
-                  fetch("/api/llm/describe-image", {
-                    method:"POST",
-                    headers:{"Content-Type":"application/json"},
-                    body: JSON.stringify({filename:fname, model:llmModel})
-                  })
-                  .then(r=>r.json())
-                  .then(d=>{
-                    if (d.ok && d.description) {
-                      const annots = AnnotationStore.getAll().filter(a=>a.file!==fname);
-                      annots.push({file:fname, description:d.description, pins:[]});
+                  try {
+                    const res = await fetch("/api/llm/describe-image", {
+                      method:"POST",
+                      headers:{"Content-Type":"application/json"},
+                      body: JSON.stringify({filename:fname, model:llmModel})
+                    }).then(r=>r.json());
+
+                    if (res.ok && res.description) {
+                      // 1. Sla op als annotatie (voor plaatjes-tab)
+                      const annots = AnnotationStore.getAll().filter(a=>!(a.file===fname && !a.x));
+                      annots.push({file:fname, description:res.description, pins:[]});
                       AnnotationStore.setAll(annots);
-                      updateJob(jid,{status:"done", result:stem.slice(0,30)});
+                      await fetch("/api/image-annotations", {
+                        method:"POST",
+                        headers:{"Content-Type":"application/json"},
+                        body: JSON.stringify(annots)
+                      });
+
+                      // 2. Maak een afbeelding-notitie aan
+                      const imgNoteId = genId();
+                      const imgNote = {
+                        id: imgNoteId,
+                        title: "Afbeelding — " + stem,
+                        content: "![[img:"+fname+"]]\n\n## Beschrijving\n\n"+res.description
+                          + (importNoteId ? "\n\n---\n🔗 Geïmporteerd via [["+importNoteId+"]]" : ""),
+                        tags: ["afbeelding","media"],
+                        created: new Date().toISOString(),
+                        modified: new Date().toISOString(),
+                      };
+                      await NoteStore.save(imgNote);
+
+                      // 3. Voeg link naar afbeelding-notitie toe aan import-notitie
+                      if (importNoteId) {
+                        const importNote = NoteStore.getById(importNoteId);
+                        if (importNote) {
+                          const linkLine = "\n\n📎 **Afbeelding:** [["+imgNoteId+"]] — ![[img:"+fname+"]]";
+                          const updated = {...importNote,
+                            content: importNote.content + linkLine,
+                            modified: new Date().toISOString()
+                          };
+                          await NoteStore.save(updated);
+                        }
+                      }
+
+                      setNotes([...NoteStore.getAll()]);
+                      updateJob(jid,{status:"done", result:"Gelinkt aan import-notitie"});
                     } else {
-                      updateJob(jid,{status:"error", error:"Geen beschrijving"});
+                      updateJob(jid,{status:"error", error:"Geen beschrijving ontvangen"});
                     }
-                  })
-                  .catch(e=>updateJob(jid,{status:"error", error:e.message}));
+                  } catch(e) {
+                    updateJob(jid,{status:"error", error:e.message});
+                  }
                 });
               },
               addJob, updateJob,
@@ -11288,6 +11524,7 @@ const App = () => {
                 const withImport = {...note, importedAt: new Date().toISOString()};
                 const saved=await NoteStore.save(withImport);
                 setNotes([...NoteStore.getAll()]); setSelId(saved.id); setTab("notes");
+                return saved;  // zodat onDescribeImages de id heeft
               }}));
           if(t==="reading") return React.createElement("div",{style:{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",minHeight:0}},
             React.createElement(ReadingList,{

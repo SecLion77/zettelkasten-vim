@@ -1827,8 +1827,8 @@ class ZKHandler(BaseHTTPRequestHandler):
                 import re as _re
                 notes_dir = self.vault.notes_dir
                 css_pat = _re.compile(
-                    r'#?[0-9a-fA-F]{0,8};?(?:[\w-]+:[^;">\
-]{1,60};?){1,10}"?>'
+                    r'(?:[\w-]+:)?#[0-9a-fA-F]{3,8};(?:[\w-]+:[^;">\
+]{1,80};?){1,12}"?>\s*'
                 )
                 cleaned = 0; skipped = 0; errors = []
                 for md_file in notes_dir.glob("*.md"):
@@ -1837,11 +1837,9 @@ class ZKHandler(BaseHTTPRequestHandler):
                         if raw.startswith("---"):
                             parts = raw.split("---", 2)
                             if len(parts) >= 3:
-                                new_body = css_pat.sub("", parts[2])
+                                new_body = _sanitize_llm_text(parts[2])
                                 import re as _re2
-                                new_body = _re2.sub(r'^#+\s*$', '', new_body, flags=_re2.MULTILINE)
-                                new_body = _re2.sub(r'\n{3,}', '\n\n', new_body)
-                                if new_body != parts[2]:
+                                if new_body != parts[2].strip():
                                     md_file.write_text("---" + parts[1] + "---" + new_body, encoding="utf-8")
                                     cleaned += 1
                                 else:
@@ -1849,8 +1847,8 @@ class ZKHandler(BaseHTTPRequestHandler):
                             else:
                                 skipped += 1
                         else:
-                            new_raw = css_pat.sub("", raw)
-                            if new_raw != raw:
+                            new_raw = _sanitize_llm_text(raw)
+                            if new_raw != raw.strip():
                                 md_file.write_text(new_raw, encoding="utf-8")
                                 cleaned += 1
                             else:
@@ -3190,31 +3188,14 @@ class ZKHandler(BaseHTTPRequestHandler):
         if not summary:
             return self._send(500, {"error":"Model gaf geen samenvatting"})
 
-        # ── Robuuste HTML/CSS sanitering ─────────────────────────────────────────
+        # ── HTML/CSS sanitering via centrale helper ────────────────────────────
+        summary = _sanitize_llm_text(summary)
+
+        # Samenvatting-labels verwijderen die het model toevoegt
         import re as _re_s
-
-        # Stap 1: volledige HTML-tags verwijderen (inclusief attributen)
-        summary = _re_s.sub(r'<[^>]*>', '', summary)
-
-        # Stap 2: CSS inline stijlen die overblijven na tag-verwijdering
-        # bijv. "#8ac6f2;font-weight:bold;font-size:13px;margin-bottom:6px"
-        summary = _re_s.sub(r'#?[0-9a-fA-F]{3,8};[\w-]+:[^;\n]{1,60}(?:;[\w-]+:[^;\n]{1,60})*', '', summary)
-        summary = _re_s.sub(r'[\w-]+:[\w\s#.,%()]+;(?:[\w-]+:[\w\s#.,%()]+;?)*', '', summary)
-
-        # Stap 3: HTML-entiteiten decoderen
-        for enc, dec in [('&amp;','&'),('&lt;','<'),('&gt;','>'),('&nbsp;',' '),('&#39;',"'"),('&quot;','"')]:
-            summary = summary.replace(enc, dec)
-
-        # Stap 4: losse > of < tekens opruimen
-        summary = _re_s.sub(r'(?<![\w\s])[<>](?![\w\s])', '', summary)
-
-        # Stap 5: samenvatting-labels verwijderen die het model toevoegt
         summary = _re_s.sub(r'\*{0,2}(?:SAMENVATTING|Samenvatting|SUMMARY|Summary)\*{0,2}\s*[:\n]', '', summary)
         summary = _re_s.sub(r'={2,}\w+={2,}\s*', '', summary)
-
-        # Stap 6: witruimte normaliseren
         summary = _re_s.sub(r'[ \t]{2,}', ' ', summary)
-        summary = _re_s.sub(r'\n{3,}', '\n\n', summary)
         summary = summary.strip()
         return self._send(200, {"ok": True, "summary": summary})
 
@@ -4123,6 +4104,18 @@ class ZKHandler(BaseHTTPRequestHandler):
             # Verwijder evt. markdown-fences
             response_text = _re.sub(r'^```\w*\n?', '', response_text).rstrip('`').strip()
 
+            # ── Schoon de volledige response op VOOR parsen ─────────────────────
+            # Stap 1+2: CSS-rommel + HTML tags via centrale helper
+            response_text = _sanitize_llm_text(response_text)
+            # Stap 3: losse label-regels zoals "📋 SAMENVATTING" of "ARTIKEL" op eigen regel
+            response_text = _re.sub(
+                r'^[\U0001F4CB\U0001F5D2\U0000270D\s]*(?:SAMENVATTING|SUMMARY|ARTIKEL|ARTICLE)\s*$',
+                '', response_text, flags=_re.MULTILINE|_re.IGNORECASE
+            )
+            # Stap 4: lege koppen + overtollige lege regels
+            response_text = _re.sub(r'^#+\s*$', '', response_text, flags=_re.MULTILINE)
+            response_text = _re.sub(r'\n{3,}', '\n\n', response_text).strip()
+
             # Parseer markers — meerdere varianten ondersteunen
             def _extract(text):
                 """Extraheer samenvatting + markdown uit model-response.
@@ -4179,28 +4172,40 @@ class ZKHandler(BaseHTTPRequestHandler):
 
             # ── Post-processing: markdown opschonen ──────────────────────────
             if md:
+                # Vangnet CSS-rommel + HTML via centrale helper
+                md = _sanitize_llm_text(md)
+                # Losse label-regels (SAMENVATTING / ARTIKEL op eigen regel)
+                md = _re.sub(
+                    r'^[📋🗒️✍️\s]*(?:SAMENVATTING|SUMMARY|ARTIKEL|ARTICLE)\s*$',
+                    '', md, flags=_re.MULTILINE|_re.IGNORECASE
+                )
                 # Zorg dat ## koppen altijd op een eigen regel staan
                 md = _re.sub(r'([^\n])(#{1,4} )', r'\1\n\n\2', md)
                 # Zorg dat een kop altijd een lege regel erna heeft
                 md = _re.sub(r'(#{1,4} [^\n]+)\n([^\n#])', r'\1\n\n\2', md)
-                # Verwijder dubbele lege regels (max 2)
-                md = _re.sub(r'\n{3,}', '\n\n', md)
-                # Verwijder CSS-rommel die modellen soms toevoegen
-                md = _re.sub(r'#?[0-9a-fA-F]{0,8};?(?:[\w-]+:[^;">\n]{1,60};?){1,10}"?>', '', md)
-                # Verwijder lege koppen (# alleen op een regel, overblijfsel van CSS-stripping)
+                # Verwijder lege koppen
                 md = _re.sub(r'^#+\s*$', '', md, flags=_re.MULTILINE)
-                # Opruimen: max 2 lege regels na stripping
+                # Max 2 lege regels
                 md = _re.sub(r'\n{3,}', '\n\n', md)
                 md = md.strip()
 
             # ── Summary post-processing ──────────────────────────────────────
             if summary:
-                # Strip markdown opmaak uit de samenvatting
-                summary = _re.sub(r'#{1,4}\s+', '', summary)
-                summary = _re.sub(r'\*{1,2}([^*]+)\*{1,2}', r'\1', summary)
-                # CSS-rommel
-                summary = _re.sub(r'#?[0-9a-fA-F]{0,8};?(?:[\w-]+:[^;">\n]{1,60};?){1,10}"?>', '', summary)
-                summary = summary.strip()
+                # Strip CSS-rommel + HTML via centrale helper
+                summary = _sanitize_llm_text(summary)
+                # Strip markdown koppen en bold/italic opmaak
+                summary = _re.sub(r'^#{1,4}\s+', '', summary, flags=_re.MULTILINE)
+                summary = _re.sub(r'\*{1,3}([^*\n]+)\*{1,3}', r'\1', summary)
+                summary = _re.sub(r'_{1,2}([^_\n]+)_{1,2}', r'\1', summary)
+                # Strip losse label-regels
+                summary = _re.sub(
+                    r'^[📋🗒️✍️\s]*(?:SAMENVATTING|SUMMARY)\s*$',
+                    '', summary, flags=_re.MULTILINE|_re.IGNORECASE
+                )
+                # Strip overtollige emoji aan het begin (bijv. "📋 Het artikel...")
+                summary = _re.sub(r'^[📋🗒️✍️]\s*', '', summary)
+                # Normaliseer witruimte
+                summary = _re.sub(r'\n{3,}', '\n\n', summary).strip()
 
         except Exception as e:
             md = clean_text[:6000]
@@ -4214,6 +4219,58 @@ class ZKHandler(BaseHTTPRequestHandler):
             "markdown": md,
             "images":   saved_images,
         }
+
+def _sanitize_llm_text(text):
+    """Verwijder HTML/CSS-rommel die lokale LLMs soms produceren.
+    Werkt op raw tekst en op content met HTML-entities.
+    Iteratief zodat ook geneste constructies verdwijnen.
+    """
+    if not text:
+        return text
+    import re as _re
+
+    _NL = chr(10)
+
+    def _strip_tags(s):
+        prev = None
+        while prev != s:
+            prev = s
+            s = _re.sub(r'<[^<>]*>', '', s)
+        return s
+
+    def _strip_css(s):
+        # Met optioneel prop: prefix voor #hex  (bijv. color:#8ac6f2;...)
+        s = _re.sub(
+            r'(?:[\w-]+:)?#[0-9a-fA-F]{3,8};(?:[\w-]+:[^;">' + _NL + r']{1,80};?){1,12}"?>\s*',
+            '', s)
+        # Zonder #hex: meerdere prop:val paren  (bijv. font-weight:bold;font-size:13px">)
+        s = _re.sub(
+            r'(?:[\w-]+:[^;">' + _NL + r']{1,80};)*[\w-]+:[^;">' + _NL + r']{1,80}"?>\s*',
+            '', s)
+        return s
+
+    # Ronde 1: raw HTML + CSS
+    text = _strip_tags(text)
+    text = _strip_css(text)
+
+    # Ronde 2: entities decoderen en opnieuw strippen
+    decoded = (text
+               .replace('&lt;', '<').replace('&gt;', '>')
+               .replace('&quot;', '"').replace('&amp;', '&'))
+    if decoded != text:
+        decoded = _strip_tags(decoded)
+        decoded = _strip_css(decoded)
+        text = decoded
+
+    # Losse label-regels
+    text = _re.sub(
+        r'^[\U0001F4CB\U0001F5D2\U0000270D\s]*(?:SAMENVATTING|SUMMARY|ARTIKEL|ARTICLE)\s*$',
+        '', text, flags=_re.MULTILINE | _re.IGNORECASE
+    )
+    text = _re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip()
+
+
 
 def get_local_ip():
     import socket

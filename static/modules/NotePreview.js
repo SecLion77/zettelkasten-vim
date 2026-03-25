@@ -255,16 +255,41 @@ const NotePreview = ({
     (note.tags||[]).includes("samenvatting");
 
   // ── Toolbar ────────────────────────────────────────────────────────────────
+  // Gedeelde stijl helpers
+  const btnBase = (active, activeColor, activeBg) => ({
+    display: "flex", alignItems: "center", gap: "4px",
+    padding: "4px 10px", borderRadius: "6px", cursor: "pointer",
+    fontSize: "11px", fontWeight: active ? "600" : "400",
+    border: `1px solid ${active ? activeColor+"55" : W.splitBg}`,
+    background: active ? activeBg : "rgba(255,255,255,0.03)",
+    color: active ? activeColor : W.fgMuted,
+    transition: "all 0.15s", whiteSpace: "nowrap",
+    WebkitTapHighlightColor: "transparent",
+  });
+  // Rij 1: note ID + tags
+  // Rij 2: acties (leestijd, render, samenvatten, links, review, bewerken, del)
   const toolbar = React.createElement("div", {
-    style: { display: "flex", gap: "6px", marginBottom: "16px",
-             paddingBottom: "10px", borderBottom: `1px solid ${W.splitBg}`,
-             alignItems: "center", flexWrap: "wrap" }
+    style: { marginBottom: "16px", paddingBottom: "12px",
+             borderBottom: `1px solid ${W.splitBg}` }
   },
-    React.createElement("span", { style: { fontSize: "14px", color: W.fgMuted } }, note.id),
-    ...(note.tags || []).map(t => React.createElement(TagPill, {
-      key: t, tag: t,
-      onRemove: () => onTagRemove?.(t),
-    })),
+    // ── Rij 1: ID + tags ──────────────────────────────────────────────────
+    React.createElement("div", {
+      style: { display: "flex", alignItems: "center", flexWrap: "wrap",
+               gap: "6px", marginBottom: "10px" }
+    },
+      React.createElement("span", {
+        style: { fontSize: "10px", color: W.fgMuted, fontFamily: "monospace",
+                 letterSpacing: "0.5px", opacity: 0.6, flexShrink: 0 }
+      }, note.id),
+      ...(note.tags || []).map(t => React.createElement(TagPill, {
+        key: t, tag: t,
+        onRemove: () => onTagRemove?.(t),
+      }))
+    ),
+    // ── Rij 2: acties ─────────────────────────────────────────────────────
+    React.createElement("div", {
+      style: { display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }
+    },
     React.createElement("div", { style: { flex: 1 } }),
 
     // ── Leestijd + gelezen — gecombineerde klikbare balk (alleen bij imports) ──
@@ -312,13 +337,7 @@ const NotePreview = ({
     React.createElement("button", {
       onClick: () => onRenderModeChange?.(renderMode === "rich" ? "plain" : "rich"),
       title: "Wisselen tussen plain en rijke markdown weergave",
-      style: { background: renderMode === "rich" ? "rgba(138,198,242,0.12)" : "none",
-               color:      renderMode === "rich" ? W.blue : W.fgMuted,
-               border: `1px solid ${renderMode === "rich" ? "rgba(138,198,242,0.35)" : W.splitBg}`,
-               borderRadius: "6px",
-               padding: isMobile ? "8px 14px" : "5px 10px",
-               fontSize: isMobile ? "13px" : "11px",
-               cursor: "pointer", WebkitTapHighlightColor: "transparent" }
+      style: btnBase(renderMode === "rich", W.blue, "rgba(138,198,242,0.12)"),
     }, renderMode === "rich" ? "📄 plain" : "🎨 render"),
 
     // ── Samenvatten knop ─────────────────────────────────────────────────────
@@ -326,18 +345,10 @@ const NotePreview = ({
       onClick: doSummarize,
       disabled: summarizing,
       title: summarizing ? "Samenvatting genereren…" : "Voeg AI-samenvatting toe bovenaan de notitie",
-      style: {
-        background: summarizing ? "rgba(159,202,86,0.08)" : "none",
-        color: summarizing ? W.comment : W.fgMuted,
-        border: `1px solid ${summarizing ? "rgba(159,202,86,0.35)" : W.splitBg}`,
-        borderRadius: "6px",
-        padding: isMobile ? "8px 14px" : "5px 10px",
-        fontSize: isMobile ? "13px" : "11px",
-        cursor: summarizing ? "not-allowed" : "pointer",
-        opacity: summarizing ? 0.7 : 1,
-        WebkitTapHighlightColor: "transparent",
-        animation: summarizing ? "ai-pulse 1.4s ease-in-out infinite" : "none",
-      }
+      style: { ...btnBase(summarizing, W.comment, "rgba(159,202,86,0.08)"),
+               opacity: summarizing ? 0.7 : 1,
+               cursor: summarizing ? "not-allowed" : "pointer",
+               animation: summarizing ? "ai-pulse 1.4s ease-in-out infinite" : "none" },
     }, summarizing ? "⏳ samenvatten…" : "🧠 samenvatten"),
     sumError && React.createElement("span", {
       title: sumError,
@@ -347,58 +358,31 @@ const NotePreview = ({
     // Slimme links knop
     llmModel && note && React.createElement("button", {
       onClick: () => setShowLinkPanel(p => !p),
-      style: {
-        background: showLinkPanel ? "rgba(159,202,86,0.12)" : "none",
-        color: showLinkPanel ? W.comment : W.fgMuted,
-        border: `1px solid ${showLinkPanel ? "rgba(159,202,86,0.35)" : W.splitBg}`,
-        borderRadius: "6px",
-        padding: isMobile ? "8px 14px" : "5px 10px",
-        fontSize: isMobile ? "13px" : "11px",
-        cursor: "pointer",
-        WebkitTapHighlightColor: "transparent",
-      }
+      style: btnBase(showLinkPanel, W.comment, "rgba(159,202,86,0.12)"),
     }, "🔗 links"),
     // Review-knop — altijd zichtbaar als onToggleReview beschikbaar is
     note && React.createElement("button", {
       onClick: () => onToggleReview?.(note.id),
-      title: reviewData[note?.id]
-        ? "Staat in review-lijst — klik om te verwijderen"
-        : "Markeer voor review",
-      style: {
-        background: reviewData[note?.id]
-          ? "rgba(234,231,136,0.15)" : "rgba(255,255,255,0.03)",
-        color: reviewData[note?.id] ? W.yellow : W.fgMuted,
-        border: `1px solid ${reviewData[note?.id]
-          ? "rgba(234,231,136,0.35)" : W.splitBg}`,
-        borderRadius: "5px",
-        padding: isMobile ? "8px 12px" : "5px 9px",
-        fontSize: isMobile ? "13px" : "11px",
-        cursor: "pointer", touchAction: "manipulation",
-        display: "flex", alignItems: "center", gap: "4px",
-        transition: "all 0.15s",
-      }
+      title: reviewData[note?.id] ? "Uit review verwijderen" : "Markeer voor review",
+      style: btnBase(!!reviewData[note?.id], W.yellow, "rgba(234,231,136,0.12)"),
     },
       "🔁",
       !isMobile && React.createElement("span", null,
-        reviewData[note?.id] ? "in review" : "review"
+        reviewData[note?.id] ? " in review" : " review"
       )
     ),
     React.createElement("button", {
       onClick: onEdit,
-      style: { background: "none", color: W.blue,
-               border: "1px solid rgba(138,198,242,0.3)",
-               borderRadius: "6px",
-               padding: isMobile ? "8px 16px" : "5px 12px",
-               fontSize: isMobile ? "14px" : "11px",
-               cursor: "pointer", WebkitTapHighlightColor: "transparent" }
+      style: { ...btnBase(false, W.blue, "none"),
+               color: W.blue, border: "1px solid rgba(138,198,242,0.35)",
+               fontWeight: "600" },
     }, "✏ bewerken"),
     !isMobile && React.createElement("button", {
       onClick: onDelete,
-      style: { background: "none", color: W.orange,
-               border: "1px solid rgba(229,120,109,0.2)",
-               borderRadius: "6px", padding: "5px 10px",
-               fontSize: "14px", cursor: "pointer" }
+      style: { ...btnBase(false, W.orange, "none"),
+               color: W.orange, border: "1px solid rgba(229,120,109,0.2)" },
     }, "🗑 del")
+    )  // sluit acties-div
   );
 
   // ── Backlinks + Outlinks + Graaf-statistieken ─────────────────────────────

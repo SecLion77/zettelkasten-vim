@@ -254,6 +254,41 @@ const StatsPanel = ({ notes = [], serverPdfs = [], serverImages = [] }) => {
             )
           )
         ])
+        ,
+
+        // ── Vault opschonen ─────────────────────────────────────────────────
+        React.createElement("div", {
+          style: { background: W.bg2, borderRadius: "8px", padding: "16px",
+                   border: `1px solid ${W.splitBg}` }
+        },
+          React.createElement("div", {
+            style: { fontSize: "11px", color: W.fgMuted, letterSpacing: "1px",
+                     marginBottom: "10px", fontWeight: "600" }
+          }, "🧹 VAULT OPSCHONEN"),
+          React.createElement("div", {
+            style: { fontSize: "12px", color: W.fgMuted, marginBottom: "12px", lineHeight: "1.6" }
+          }, "Verwijdert CSS-opmaakrommel uit bestaande notities."),
+          cleanupMsg ? React.createElement("div", {
+            style: { fontSize: "13px", marginBottom: "8px",
+                     color: cleanupMsg.startsWith("✓") ? W.comment : W.orange }
+          }, cleanupMsg) : null,
+          React.createElement("button", {
+            onClick: async () => {
+              setCleanupMsg("⏳ Bezig…");
+              try {
+                const res = await fetch("/api/cleanup-vault", {
+                  method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+                const d = await res.json();
+                if (d.ok) setCleanupMsg("✓ " + d.cleaned + " opgeschoond, " + d.skipped + " al schoon");
+                else setCleanupMsg("✗ " + (d.error || "onbekend"));
+              } catch(e) { setCleanupMsg("✗ Verbindingsfout"); }
+            },
+            disabled: cleanupMsg === "⏳ Bezig…",
+            style: { padding: "8px 18px", borderRadius: "6px", border: "none",
+                     background: "rgba(229,120,109,0.15)", color: W.orange,
+                     cursor: "pointer", fontSize: "13px", fontWeight: "600" }
+          }, "🧹 Vault opschonen")
+        )
       ),
 
       // ── Groei tab ────────────────────────────────────────────────────────

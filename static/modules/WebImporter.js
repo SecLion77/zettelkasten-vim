@@ -93,10 +93,21 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, onDescribeI
   const sanitizeText = (text) => {
     if (!text) return "";
     return text
-      .replace(/#?[0-9a-fA-F]{0,8};?(?:[\w-]+:[^;">\n]{1,60};?){1,10}"?>/g, "")
+      // CSS-rommel variant 1: "#hexkleur;prop:val;prop:val"> (lokale modellen)
+      .replace(/#[0-9a-fA-F]{3,8};(?:[\w-]+:[^;">\n]{1,80};?){1,12}"?>\s*/g, "")
+      // CSS-rommel variant 2: "prop:val;prop:val"> (zonder leading #hex)
+      .replace(/(?:[\w-]+:[^;">\n]{1,80};)*[\w-]+:[^;">\n]{1,80}"?>\s*/g, "")
+      // HTML tags die overblijven na CSS-strip
       .replace(/<[^>]{0,300}>/g, "")
+      // ===SAMENVATTING=== / ===ARTIKEL=== markers
       .replace(/={2,}\s*(?:SAMENVATTING|ARTIKEL|SUMMARY|ARTICLE)\s*={2,}/gi, "")
+      // Losse label-regels: "📋 SAMENVATTING" of "ARTIKEL" op eigen regel
+      .replace(/^[📋🗒️✍️\s]*(?:SAMENVATTING|SUMMARY|ARTIKEL|ARTICLE)\s*$/gim, "")
+      // Overtollige emoji aan het begin van de tekst
+      .replace(/^[📋🗒️✍️]\s*/m, "")
+      // Lege koppen (# alleen op een regel)
       .replace(/^#+\s*$/gm, "")
+      // Max 2 lege regels
       .replace(/\n{3,}/g, "\n\n")
       .trim();
   };
@@ -208,7 +219,7 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, onDescribeI
       const summaryLines = cleanSummary.replace(/\n/g, "\n> ");
       content += `> [!samenvatting]\n> 📋 **Samenvatting**\n> ${summaryLines}\n\n---\n\n`;
     }
-    content += editMd;
+    content += sanitizeText(editMd);
     if (selectedImages.size > 0 && importPreview.images?.length) {
       const pickedLinks = importPreview.images
         .filter(img => selectedImages.has(img.name))
@@ -222,15 +233,16 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, onDescribeI
       bronLabel = u.hostname.replace("www.","") + (u.pathname.length > 1 ? u.pathname.slice(0,40) + (u.pathname.length > 40 ? "…" : "") : "");
     } catch {}
     content += `\n\n---\n🌐 **Bron:** [${bronLabel}](${importPreview.url})`;
-    await onAddNote({
+    const savedNote = await onAddNote({
       id: genId(), title: editTitle, content, tags,
       sourceUrl: importPreview.url,
       importedAt: new Date().toISOString(),
       created: new Date().toISOString(), modified: new Date().toISOString(),
     });
     // Beschrijf alleen de geselecteerde afbeeldingen, pas na opslaan
+    // Geef ook het id van de import-notitie mee zodat de link terug kan worden toegevoegd
     if (selectedImages.size > 0 && onDescribeImages) {
-      onDescribeImages([...selectedImages]);
+      onDescribeImages([...selectedImages], savedNote?.id, editTitle);
     }
     setSaved(true);
     // Na 1.5s automatisch terug naar het invoerscherm
@@ -759,9 +771,9 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, onDescribeI
               const data = await resp.json();
               if (!data.ok) throw new Error(data.error || "Conversie mislukt");
 
-              setDocxMd(data.md || "");
+              setDocxMd(sanitizeText(data.md || ""));
               setDocxTitle(data.title || file.name.replace(/\.docx?$/i,""));
-              setDocxSummary(data.summary || "");
+              setDocxSummary(sanitizeText(data.summary || ""));
               setDocxPreview({ filename: file.name });
               setDocxStatus("");
 
@@ -865,8 +877,8 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, onDescribeI
                       id: "note_"+Date.now()+"_"+Math.random().toString(36).slice(2,7),
                       title: docxTitle.trim(),
                       content: (docxSummary
-                        ? `*Samenvatting:* ${docxSummary}\n\n---\n\n` : "")
-                        + docxMd,
+                        ? `*Samenvatting:* ${sanitizeText(docxSummary)}\n\n---\n\n` : "")
+                        + sanitizeText(docxMd),
                       tags: docxTags,
                       created: new Date().toISOString(),
                       modified: new Date().toISOString(),
