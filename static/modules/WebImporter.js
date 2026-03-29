@@ -13,7 +13,7 @@
 //   importPreview     object | null   (vanuit jobs-panel)
 //   setImportPreview  fn
 
-const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, onDescribeImages, addJob, updateJob,
+const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, onRefreshPdfs, onDescribeImages, addJob, updateJob,
                       importPreview, setImportPreview, notes=[]}) => {
   const { useState, useRef, useCallback, useEffect } = React;
 
@@ -32,6 +32,8 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, onDescribeI
   const [saved,          setSaved]          = useState(false);
   const [selectedImages, setSelectedImages] = useState(new Set());
   const [aiTagsLoading,  setAiTagsLoading]  = useState(false);
+  const [suggestedType,  setSuggestedType]  = useState(null);  // AI-suggestie voor notitietype
+  const [selectedType,   setSelectedType]   = useState("");    // gekozen notitietype
   const [dupNote,        setDupNote]        = useState(null);
   const urlRef      = useRef(null);
   const prevPreview = useRef(importPreview);
@@ -56,6 +58,28 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, onDescribeI
   const [docxSaved,      setDocxSaved]      = useState(false);
   const [docxStatus,     setDocxStatus]     = useState(""); // voortgangsmelding
   const docxInputRef = useRef(null);
+
+  // ── PPTX state ────────────────────────────────────────────────────────────
+  const [pptxBusy,       setPptxBusy]       = useState(false);
+  const [pptxError,      setPptxError]      = useState(null);
+  const [pptxData,       setPptxData]       = useState(null);
+  const [pptxSlides,     setPptxSlides]     = useState([]);
+  const [pptxImportMode, setPptxImportMode] = useState("hybrid");
+  const [pptxSaved,      setPptxSaved]      = useState(false);
+  const [pptxTags,       setPptxTags]       = useState([]);
+  const [pptxType,       setPptxType]       = useState("literature");
+  const [pptxTagsLoading, setPptxTagsLoading] = useState(false);
+  const [pptxTypeLoading, setPptxTypeLoading] = useState(false);
+  const [pptxSuggestedType, setPptxSuggestedType] = useState(null);
+  const [pptxIncludeImages, setPptxIncludeImages] = useState(true);
+  const pptxInputRef = useRef(null);
+
+  const resetPptx = () => {
+    setPptxBusy(false); setPptxError(null); setPptxData(null);
+    setPptxSlides([]); setPptxSaved(false); setPptxTags([]); setPptxType("literature");
+    setPptxTagsLoading(false); setPptxTypeLoading(false);
+    setPptxSuggestedType(null); setPptxIncludeImages(true);
+  };
 
   const resetDocx = () => {
     setDocxPreview(null); setDocxTitle(""); setDocxSummary("");
@@ -93,10 +117,8 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, onDescribeI
   const sanitizeText = (text) => {
     if (!text) return "";
     return text
-      // CSS-rommel variant 1: "#hexkleur;prop:val;prop:val"> (lokale modellen)
-      .replace(/#[0-9a-fA-F]{3,8};(?:[\w-]+:[^;">\n]{1,80};?){1,12}"?>\s*/g, "")
-      // CSS-rommel variant 2: "prop:val;prop:val"> (zonder leading #hex)
-      .replace(/(?:[\w-]+:[^;">\n]{1,80};)*[\w-]+:[^;">\n]{1,80}"?>\s*/g, "")
+      // CSS-rommel (inline stijlen van lokale modellen)
+      .replace(/#?[0-9a-fA-F]{0,8};?(?:[\w-]+:[^;">\n]{1,60};?){1,10}"?>/g, "")
       // HTML tags die overblijven na CSS-strip
       .replace(/<[^>]{0,300}>/g, "")
       // ===SAMENVATTING=== / ===ARTIKEL=== markers
@@ -137,16 +159,43 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, onDescribeI
     // Automatische tag-suggestie direct na import
     if (llmModel && (md || summary)) {
       setAiTagsLoading(true);
+      setSuggestedType(null); setSelectedType("");
       const textForTags = (summary + " " + md).slice(0, 4000);
+
+      // Tag-suggestie
       _aiTagSuggest(textForTags, newTags, allTags, llmModel)
         .then(suggested => {
-          if (suggested.length > 0) setTags(prev => {
-            const combined = [...new Set([...prev, ...suggested])];
-            return combined;
-          });
+          if (suggested.length > 0) setTags(prev => [...new Set([...prev, ...suggested])]);
         })
         .catch(() => {})
         .finally(() => setAiTagsLoading(false));
+
+      // Notitietype-suggestie (parallel)
+      fetch("/api/llm/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: llmModel,
+          messages: [{ role: "user", content:
+            `Analyseer deze tekst en bepaal het beste notitietype voor een Zettelkasten.\n\n` +
+            `Kies precies één van de volgende opties en geef ALLEEN dat woord terug:\n` +
+            `- fleeting  (vluchtige gedachte, idee, nog te verwerken)\n` +
+            `- literature  (brongebonden, samenvatting van artikel/boek/video)\n` +
+            `- permanent  (eigen inzicht, atomair, zelfstandig begrijpelijk)\n` +
+            `- index  (structuurnotitie, overzicht van andere notities)\n\n` +
+            `Tekst (eerste 800 tekens):\n${textForTags.slice(0, 800)}`
+          }],
+          system: "Geef ALLEEN één woord terug: fleeting, literature, permanent, of index. Geen uitleg."
+        }),
+      })
+        .then(r => r.json())
+        .then(d => {
+          const raw = (d.content || d.response || "").trim().toLowerCase();
+          const valid = ["fleeting", "literature", "permanent", "index"];
+          const match = valid.find(v => raw.includes(v));
+          if (match) { setSuggestedType(match); setSelectedType(match); }
+        })
+        .catch(() => {});
     }
   }, [importPreview]);
 
@@ -235,6 +284,7 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, onDescribeI
     content += `\n\n---\n🌐 **Bron:** [${bronLabel}](${importPreview.url})`;
     const savedNote = await onAddNote({
       id: genId(), title: editTitle, content, tags,
+      noteType: selectedType || "",
       sourceUrl: importPreview.url,
       importedAt: new Date().toISOString(),
       created: new Date().toISOString(), modified: new Date().toISOString(),
@@ -254,9 +304,24 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, onDescribeI
     setEditMd(""); setEditTitle(""); setEditSummary("");
     setTags([]); setError(null); setSaved(false); setImporting(false);
     setSelectedImages(new Set()); setDupNote(null);
+    setSuggestedType(null); setSelectedType("");
     setTimeout(()=>urlRef.current?.focus(), 50);
   };
 
+  // ── Notitietype metadata ────────────────────────────────────────────────────
+  const TYPE_META = {
+    fleeting:   { label: "Vluchtig",    color: "#e8a44a", desc: "Snelle capture — verwerk binnen 1-2 dagen" },
+    literature: { label: "Literatuur",  color: W.blue,    desc: "Brongebonden — samenvatting van bron" },
+    permanent:  { label: "Permanent",   color: W.comment, desc: "Eigen inzicht — atomair, zelfstandig" },
+    index:      { label: "Index",       color: W.purple,  desc: "Structuurnotitie — navigatie" },
+  };
+
+  const PPTX_TYPE_META = {
+    fleeting:   { label: "Vluchtig",   color: "#e8a44a", desc: "Snelle capture" },
+    literature: { label: "Literatuur", color: W.blue,    desc: "Brongebonden" },
+    permanent:  { label: "Permanent",  color: W.comment, desc: "Eigen inzicht" },
+    index:      { label: "Index",      color: W.purple,  desc: "Structuurnotitie" },
+  };
   // ── Tab-knop helper ────────────────────────────────────────────────────────
   const tabBtn = (id, icon, label) => React.createElement("button", {
     key: id, onClick: () => setImportMode(id),
@@ -284,6 +349,7 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, onDescribeI
       tabBtn("url",  "🌐", "URL"),
       tabBtn("md",   "📝", "Markdown"),
       tabBtn("docx", "📄", "Word"),
+      tabBtn("pptx", "📊", "PowerPoint"),
       React.createElement("div", {style:{flex:1}}),
       importMode==="url" && importPreview && !saved && React.createElement("button", {
         onClick: reset,
@@ -429,6 +495,67 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, onDescribeI
         React.createElement("div", {style:{
           flex:1, overflowY:"auto", padding:"16px 20px",
           display:"flex", flexDirection:"column", gap:"14px", minHeight:0, WebkitOverflowScrolling:"touch",}},
+
+          // ── Notitietype ─────────────────────────────────────────────────────
+          !saved && React.createElement("div", {style:{
+            background:W.bg2, border:`1px solid ${W.splitBg}`,
+            borderRadius:"7px", padding:"10px 14px",
+          }},
+            React.createElement("div", {style:{
+              fontSize:"11px", color:"rgba(138,198,242,0.6)",
+              letterSpacing:"1.2px", marginBottom:"8px", fontWeight:"600",
+              display:"flex", alignItems:"center", gap:"8px",
+            }},
+              "NOTITIETYPE",
+              suggestedType && React.createElement("span", {style:{
+                fontSize:"10px", color:W.yellow, fontWeight:"400",
+                letterSpacing:0, animation:"none",
+                background:"rgba(234,231,136,0.1)", borderRadius:"3px", padding:"1px 6px"
+              }}, `✦ AI suggereert: ${TYPE_META[suggestedType]?.label}`)
+            ),
+            React.createElement("div", {style:{ display:"flex", gap:"5px", flexWrap:"wrap" }},
+              // Geen type optie
+              React.createElement("button", {
+                onClick: () => setSelectedType(""),
+                style: {
+                  padding:"5px 10px", fontSize:"11px", borderRadius:"5px",
+                  cursor:"pointer", transition:"all .1s",
+                  background: selectedType === "" ? "rgba(152,144,135,0.2)" : "transparent",
+                  border: `1px solid ${selectedType === "" ? "#857b6f" : W.splitBg}`,
+                  color: selectedType === "" ? W.fgMuted : W.fgMuted,
+                }
+              }, "—  geen"),
+              // Type knoppen
+              Object.entries(TYPE_META).map(([id, {label, color, desc}]) => {
+                const isSelected = selectedType === id;
+                const isSuggested = suggestedType === id;
+                return React.createElement("button", {
+                  key: id,
+                  onClick: () => setSelectedType(isSelected ? "" : id),
+                  title: desc,
+                  style: {
+                    padding:"5px 10px", fontSize:"11px", borderRadius:"5px",
+                    cursor:"pointer", transition:"all .1s",
+                    background: isSelected ? `${color}20` : "transparent",
+                    border: `1px solid ${isSelected ? color : isSuggested ? color + "80" : W.splitBg}`,
+                    color: isSelected ? color : isSuggested ? color : W.fgMuted,
+                    fontWeight: isSelected ? "600" : "400",
+                    display:"flex", alignItems:"center", gap:"5px",
+                    position:"relative",
+                  }
+                },
+                  React.createElement("div", {style:{
+                    width:"7px", height:"7px", borderRadius:"50%",
+                    background: color, flexShrink:0, opacity: isSelected ? 1 : 0.5,
+                  }}),
+                  label,
+                  isSuggested && !isSelected && React.createElement("span", {
+                    style:{ fontSize:"8px", color:W.yellow, marginLeft:"1px" }
+                  }, "✦")
+                );
+              })
+            )
+          ),
 
           // ── Tags (SmartTagEditor) ───────────────────────────────────────────
           !saved && React.createElement("div", {style:{
@@ -771,9 +898,9 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, onDescribeI
               const data = await resp.json();
               if (!data.ok) throw new Error(data.error || "Conversie mislukt");
 
-              setDocxMd(sanitizeText(data.md || ""));
+              setDocxMd(data.md || "");
               setDocxTitle(data.title || file.name.replace(/\.docx?$/i,""));
-              setDocxSummary(sanitizeText(data.summary || ""));
+              setDocxSummary(data.summary || "");
               setDocxPreview({ filename: file.name });
               setDocxStatus("");
 
@@ -877,8 +1004,8 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, onDescribeI
                       id: "note_"+Date.now()+"_"+Math.random().toString(36).slice(2,7),
                       title: docxTitle.trim(),
                       content: (docxSummary
-                        ? `*Samenvatting:* ${sanitizeText(docxSummary)}\n\n---\n\n` : "")
-                        + sanitizeText(docxMd),
+                        ? `*Samenvatting:* ${docxSummary}\n\n---\n\n` : "")
+                        + docxMd,
                       tags: docxTags,
                       created: new Date().toISOString(),
                       modified: new Date().toISOString(),
@@ -970,5 +1097,325 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, onDescribeI
         )
       )
     ),
+
+    // ── PowerPoint import tab ─────────────────────────────────────────────────
+    importMode === "pptx" && React.createElement("div", {
+      style: { flex: 1, display: "flex", flexDirection: "column",
+               overflow: "hidden", minHeight: 0 }
+    },
+
+      // ── Upload fase ────────────────────────────────────────────────────────
+      !pptxData && React.createElement("div", {
+        style: { flex: 1, display: "flex", flexDirection: "column",
+                 alignItems: "center", justifyContent: "center",
+                 gap: "14px", padding: "32px 20px" }
+      },
+        React.createElement("input", {
+          ref: pptxInputRef, type: "file", accept: ".pptx,.ppt",
+          style: { display: "none" },
+          onChange: async (e) => {
+            const file = e.target.files?.[0];
+            if (!file) return;
+            e.target.value = "";
+            setPptxBusy(true); setPptxError(null); setPptxData(null);
+            setPptxSaved(false); setPptxTagsLoading(true); setPptxTypeLoading(true);
+            const fd = new FormData();
+            fd.append("file", file, file.name);
+            try {
+              const resp = await fetch(
+                `/api/import-pptx?model=${encodeURIComponent(llmModel || "")}`,
+                { method: "POST", body: fd }
+              );
+              const data = await resp.json();
+              if (!data.ok) { setPptxError(data.error || "Fout"); setPptxBusy(false); return; }
+              setPptxData(data);
+
+              // Parallel: tags + type suggestie
+              if (llmModel && data.full_text) {
+                _aiTagSuggest(data.full_text.slice(0, 4000), [], allTags, llmModel)
+                  .then(t => { if (t.length) setPptxTags(t); })
+                  .catch(() => {})
+                  .finally(() => setPptxTagsLoading(false));
+
+                fetch("/api/llm/chat", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    model: llmModel,
+                    messages: [{ role: "user", content:
+                      "Analyseer en geef het Zettelkasten-notitietype. " +
+                      "Kies ALLEEN: fleeting, literature, permanent, index\n\n" +
+                      data.full_text.slice(0, 800)
+                    }],
+                    system: "Geef ALLEEN één woord: fleeting, literature, permanent of index.",
+                  }),
+                }).then(r => r.json()).then(d => {
+                  const raw = (d.content || d.response || "").trim().toLowerCase();
+                  const match = ["fleeting","literature","permanent","index"].find(v => raw.includes(v));
+                  if (match) { setPptxSuggestedType(match); setPptxType(match); }
+                }).catch(() => {}).finally(() => setPptxTypeLoading(false));
+              } else {
+                setPptxTagsLoading(false); setPptxTypeLoading(false);
+              }
+            } catch(e) { setPptxError(e.message); setPptxTagsLoading(false); setPptxTypeLoading(false); }
+            setPptxBusy(false);
+          }
+        }),
+
+        pptxBusy
+          ? React.createElement("div", {
+              style: { color: W.purple, fontSize: "14px",
+                       animation: "ai-pulse 1.4s ease-in-out infinite",
+                       display: "flex", flexDirection: "column",
+                       alignItems: "center", gap: "8px" }
+            },
+              React.createElement("div", { style: { fontSize: "32px" } }, "📊"),
+              "Presentatie verwerken + PDF aanmaken…"
+            )
+          : React.createElement("div", {
+              style: { display: "flex", flexDirection: "column",
+                       alignItems: "center", gap: "12px" }
+            },
+              React.createElement("div", { style: { fontSize: "48px", opacity: .6 } }, "📊"),
+              React.createElement("div", {
+                style: { fontSize: "14px", color: W.fg, fontWeight: "500" }
+              }, "PowerPoint importeren"),
+              React.createElement("div", {
+                style: { fontSize: "12px", color: W.fgMuted, textAlign: "center",
+                         maxWidth: "300px", lineHeight: "1.7" }
+              },
+                "De presentatie wordt opgeslagen als PDF (inclusief annotaties) ",
+                "en verwerkt tot één doorzoekbare samenvatting-notitie."
+              ),
+              React.createElement("button", {
+                onClick: () => pptxInputRef.current?.click(),
+                style: {
+                  background: "rgba(125,216,198,0.1)",
+                  border: `1px solid rgba(125,216,198,0.3)`,
+                  borderRadius: "6px", color: W.blue,
+                  padding: "9px 22px", fontSize: "13px", cursor: "pointer",
+                }
+              }, "📂 Kies .pptx bestand"),
+              pptxError && React.createElement("div", {
+                style: { color: W.orange, fontSize: "12px", textAlign: "center",
+                         maxWidth: "280px" }
+              }, pptxError)
+            )
+      ),
+
+      // ── Preview fase ───────────────────────────────────────────────────────
+      pptxData && !pptxSaved && React.createElement("div", {
+        style: { flex: 1, display: "flex", flexDirection: "column",
+                 overflow: "hidden", minHeight: 0 }
+      },
+
+        // Header — overflow:visible zodat SmartTagEditor dropdown niet geclipped wordt
+        React.createElement("div", {
+          style: { padding: "12px 14px 10px", borderBottom: `1px solid ${W.splitBg}`,
+                   flexShrink: 0, overflow: "visible", position: "relative", zIndex: 10 }
+        },
+          // Titel
+          React.createElement("div", {
+            style: { fontSize: "14px", fontWeight: "600",
+                     color: W.statusFg, marginBottom: "4px" }
+          }, pptxData.title),
+
+          // PDF status
+          React.createElement("div", {
+            style: { fontSize: "11px", marginBottom: "8px",
+                     display: "flex", alignItems: "center", gap: "6px" }
+          },
+            pptxData.pdf_saved
+              ? React.createElement("span", { style: { color: W.comment } },
+                  `✓ PDF opgeslagen: ${pptxData.pdf_name}`)
+              : React.createElement("span", { style: { color: W.orange } },
+                  "⚠ PDF kon niet worden opgeslagen — alleen tekst-notitie")
+          ),
+
+          // Notitietype
+          React.createElement("div", {
+            style: { display: "flex", gap: "4px", alignItems: "center",
+                     marginBottom: "8px", flexWrap: "wrap" }
+          },
+            React.createElement("span", {
+              style: { fontSize: "9px", color: W.fgMuted, textTransform: "uppercase",
+                       letterSpacing: "0.5px", marginRight: "2px" }
+            }, pptxTypeLoading ? "✦ type…" : "Type:"),
+            ["fleeting","literature","permanent","index"].map(id => {
+              const m = PPTX_TYPE_META[id];
+              const isActive = pptxType === id;
+              const isSugg   = pptxSuggestedType === id;
+              return React.createElement("button", {
+                key: id, onClick: () => setPptxType(id), title: m.desc,
+                style: {
+                  padding: "2px 8px", fontSize: "10px", cursor: "pointer",
+                  background: isActive ? `${m.color}20` : "transparent",
+                  border: `1px solid ${isActive ? m.color : isSugg ? m.color+"60" : W.splitBg}`,
+                  borderRadius: "4px",
+                  color: isActive ? m.color : isSugg ? m.color : W.fgMuted,
+                  fontWeight: isActive ? "600" : "400",
+                  display: "flex", alignItems: "center", gap: "4px",
+                }
+              },
+                React.createElement("div", {
+                  style: { width: "6px", height: "6px", borderRadius: "50%",
+                           background: m.color, opacity: isActive ? 1 : 0.4 }
+                }),
+                m.label,
+                isSugg && !isActive && React.createElement("span", {
+                  style: { fontSize: "8px", color: W.yellow }
+                }, "✦")
+              );
+            })
+          ),
+
+          // Tags
+          React.createElement("div", {
+            style: { display: "flex", alignItems: "center", gap: "6px",
+                     marginBottom: "4px" }
+          },
+            React.createElement("span", {
+              style: { fontSize: "9px", color: W.fgMuted, textTransform: "uppercase",
+                       letterSpacing: "0.5px", flexShrink: 0 }
+            }, pptxTagsLoading ? "✦ tags…" : "Tags:"),
+          ),
+          React.createElement(SmartTagEditor, {
+            tags: pptxTags, onChange: setPptxTags,
+            allTags, content: pptxData.full_text?.slice(0, 4000) || "", llmModel,
+          })
+        ),
+
+        // AI samenvatting
+        pptxData.summary && React.createElement("div", {
+          style: { padding: "8px 14px", borderBottom: `1px solid ${W.splitBg}`,
+                   background: "rgba(125,216,198,0.03)", flexShrink: 0 }
+        },
+          React.createElement("div", {
+            style: { fontSize: "9px", color: W.blue, letterSpacing: "1px",
+                     textTransform: "uppercase", marginBottom: "4px" }
+          }, "✦ AI samenvatting"),
+          React.createElement("div", {
+            style: { fontSize: "11px", color: W.fgDim, lineHeight: "1.6" }
+          }, pptxData.summary)
+        ),
+
+        // Slide-overzicht (compact, read-only)
+        React.createElement("div", {
+          style: { flex: 1, overflowY: "auto", padding: "8px 0" }
+        },
+          React.createElement("div", {
+            style: { padding: "4px 14px 6px", fontSize: "9px", color: W.fgMuted,
+                     letterSpacing: "1px", textTransform: "uppercase" }
+          }, `${pptxData.slides.length} slides`),
+          pptxData.slides.map(s =>
+            React.createElement("div", {
+              key: s.index,
+              style: { padding: "6px 14px",
+                       borderBottom: `1px solid ${W.splitBg}` }
+            },
+              React.createElement("div", {
+                style: { fontSize: "12px", color: W.fg, fontWeight: "500",
+                         marginBottom: s.body ? "3px" : 0 }
+              }, `${s.index}. ${s.title}`),
+              s.body && React.createElement("div", {
+                style: { fontSize: "10px", color: W.fgMuted, lineHeight: "1.5",
+                         overflow: "hidden", maxHeight: "32px" }
+              }, s.body.slice(0, 100)),
+              s.notes && React.createElement("div", {
+                style: { fontSize: "9px", color: W.fgDim, fontStyle: "italic",
+                         marginTop: "2px" }
+              }, `🗣 ${s.notes.slice(0, 80)}`)
+            )
+          )
+        ),
+
+        // Import knop
+        React.createElement("div", {
+          style: { padding: "10px 14px", borderTop: `1px solid ${W.splitBg}`,
+                   flexShrink: 0, display: "flex", gap: "8px", alignItems: "center" }
+        },
+          React.createElement("div", { style: { flex: 1 } },
+            React.createElement("div", {
+              style: { fontSize: "10px", color: W.fgMuted }
+            },
+              pptxData.pdf_saved
+                ? `PDF in bibliotheek + samenvatting-notitie`
+                : `Samenvatting-notitie (geen PDF)`
+            )
+          ),
+          React.createElement("button", {
+            onClick: () => resetPptx(),
+            style: { background: "none", border: `1px solid ${W.splitBg}`,
+                     color: W.fgMuted, borderRadius: "5px",
+                     padding: "5px 10px", fontSize: "12px", cursor: "pointer" }
+          }, "Annuleer"),
+          React.createElement("button", {
+            onClick: async () => {
+              const now  = new Date().toISOString();
+              const tags = pptxTags;
+              const noteType = pptxType;
+
+              // Bouw de samenvatting-notitie
+              let content = "";
+
+              // AI samenvatting als callout
+              if (pptxData.summary) {
+                content += `> 📋 **Samenvatting**\n> ${pptxData.summary}\n\n---\n\n`;
+              }
+
+              // Link naar de PDF
+              if (pptxData.pdf_saved) {
+                content += `📎 **Presentatie:** [[pdf:${pptxData.pdf_name}]]\n\n---\n\n`;
+              }
+
+              // Slides sectie
+              content += `## Inhoud\n\n`;
+              for (const s of pptxData.slides) {
+                content += `### ${s.index}. ${s.title}\n`;
+                if (s.body)  content += s.body + "\n";
+                if (s.notes) content += `\n> 🗣 *${s.notes}*\n`;
+                content += "\n";
+              }
+
+              content += `---\n📊 *Geïmporteerd uit: ${pptxData.filename}*`;
+
+              await onAddNote({
+                id: genId(), title: pptxData.title,
+                content, tags, noteType,
+                importedAt: now, created: now, modified: now,
+              });
+
+              // Ververs PDF-bibliotheek zodat de nieuwe PDF zichtbaar is
+              if (pptxData.pdf_saved && onRefreshPdfs) onRefreshPdfs();
+
+              setPptxSaved(true);
+              setTimeout(() => resetPptx(), 1800);
+            },
+            style: {
+              background: "rgba(125,216,198,0.15)",
+              border: `1px solid rgba(125,216,198,0.4)`,
+              borderRadius: "5px", color: W.blue,
+              padding: "5px 16px", fontSize: "12px",
+              cursor: "pointer", fontWeight: "600",
+            }
+          }, "Importeer →")
+        )
+      ),
+
+      // Succes
+      pptxSaved && React.createElement("div", {
+        style: { flex: 1, display: "flex", alignItems: "center",
+                 justifyContent: "center", flexDirection: "column", gap: "10px" }
+      },
+        React.createElement("div", { style: { fontSize: "32px" } }, "✓"),
+        React.createElement("div", {
+          style: { fontSize: "14px", color: W.comment, fontWeight: "600" }
+        }, "Geïmporteerd!"),
+        React.createElement("div", {
+          style: { fontSize: "12px", color: W.fgMuted }
+        }, pptxData?.pdf_saved ? "PDF + notitie opgeslagen" : "Notitie opgeslagen")
+      )
+    ),
+
   );
 };

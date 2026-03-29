@@ -272,20 +272,21 @@ const NotePreview = ({
     style: { marginBottom: "16px", paddingBottom: "12px",
              borderBottom: `1px solid ${W.splitBg}` }
   },
-    // ── Rij 1: ID + tags ──────────────────────────────────────────────────
-    React.createElement("div", {
+    // ── Rij 1: Tags ───────────────────────────────────────────────────────
+    (note.tags || []).length > 0 && React.createElement("div", {
       style: { display: "flex", alignItems: "center", flexWrap: "wrap",
                gap: "6px", marginBottom: "10px" }
     },
-      React.createElement("span", {
-        style: { fontSize: "10px", color: W.fgMuted, fontFamily: "monospace",
-                 letterSpacing: "0.5px", opacity: 0.6, flexShrink: 0 }
-      }, note.id),
       ...(note.tags || []).map(t => React.createElement(TagPill, {
         key: t, tag: t,
         onRemove: () => onTagRemove?.(t),
       }))
     ),
+    // ── Scheidingslijn ────────────────────────────────────────────────────
+    React.createElement("div", {
+      style: { height: "1px", background: W.splitBg, marginBottom: "8px", opacity: 0.6 }
+    }),
+
     // ── Rij 2: acties ─────────────────────────────────────────────────────
     React.createElement("div", {
       style: { display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }
@@ -436,7 +437,13 @@ const NotePreview = ({
       ref: scrollRef,
       style: { flex: 1, overflowY: "auto",
                WebkitOverflowScrolling: "touch",
-               padding: isMobile ? "16px" : "24px 32px" }
+               padding: isMobile ? "16px" : "32px 48px" }
+    },
+    React.createElement("div", {
+      style: {
+        maxWidth: "720px",
+        margin: "0 auto",
+      }
     },
     React.createElement(MarkdownWithMermaid, {
       content:      note.content,
@@ -487,6 +494,7 @@ const NotePreview = ({
         })
       )
     )
+    )  // sluit maxWidth div
     )  // sluit scroll-container
   );   // sluit outer wrapper
 };

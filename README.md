@@ -1,6 +1,6 @@
 # 🗃️ Zettelkasten VIM
 
-> Zelfstandige Python desktop-app voor kennisbeheer. Notities als Markdown op schijf, PDF-bibliotheek met annotaties, afbeeldingenbeheer, Obsidian-stijl kennisgraaf, canvas VIM-editor, split-screen modus, interactieve mindmap, web-importer, Markdown- en Word-import, **bidirectionele links met rechter linkszijbalk**, **dagelijkse notitie**, **full-text én fuzzy zoeken**, **leeslijst met leestijd**, semantische kennisverrijking (TF-IDF + GraphRAG), **SmartTagEditor met automatische AI-suggesties**, en een lokale AI-notebook via Ollama én cloud-modellen — optioneel volledig offline.
+> Zelfstandige Python desktop-app voor kennisbeheer. Notities als Markdown op schijf, PDF-bibliotheek met annotaties, afbeeldingenbeheer, Obsidian-stijl kennisgraaf, canvas VIM-editor, split-screen modus, interactieve mindmap, web-importer, Markdown- en Word-import, **bidirectionele links met rechter linkszijbalk**, **dagelijkse notitie**, **full-text én fuzzy zoeken met canvas viewer**, **leeslijst met leestijd**, semantische kennisverrijking (TF-IDF + GraphRAG), **SmartTagEditor met automatische AI-suggesties**, en een lokale AI-notebook via Ollama én cloud-modellen — optioneel volledig offline.
 
 ---
 
@@ -31,21 +31,32 @@
 ├── README.md
 └── static/
     ├── index.html
-    ├── app.js
+    ├── app.js                  ← globals, constants, api, TagPill
     └── modules/
-        ├── LinksSidebar.js    ← links-zijbalk
-        ├── NoteEditor.js
-        ├── NotePreview.js
-        ├── NotesTab.js
-        ├── NoteList.js
-        ├── NotesMeta.js
-        ├── TagManager.js
-        ├── WebImporter.js
-        ├── ReadingList.js
-        ├── pdfService.js
-        ├── noteApi.js
-        ├── noteStore.js
-        └── annotationStore.js
+        ├── SpellEngine.js      ← spellcheck + completion engine
+        ├── VimEditor.js        ← canvas VIM editor
+        ├── TagFilterBar.js     ← tag-filter balk (graaf)
+        ├── Graph.js            ← kennisgraaf
+        ├── PDFViewer.js        ← PDF viewer + canvas mounters
+        ├── VaultSettings.js    ← instellingen modal
+        ├── ImagesGallery.js    ← afbeeldingen gallerij
+        ├── MermaidEditor.js    ← Mermaid, MindMap, LLMNotebook, FuzzySearch
+        ├── ModelPicker.js      ← model selector
+        ├── LinksSidebar.js     ← links-zijbalk (backlinks, outlinks, linken)
+        ├── NoteEditor.js       ← notitie editor wrapper
+        ├── NotePreview.js      ← preview + semantisch verwant paneel
+        ├── NotesTab.js         ← orkestratielaag + dagnotitie
+        ├── NoteList.js         ← notitie-lijst + 📅 dagnotitie knop
+        ├── NotesMeta.js        ← metadata-zijpaneel
+        ├── TagManager.js       ← SmartTagEditor + TagManagerPanel
+        ├── WebImporter.js      ← URL-, Markdown- en Word-import
+        ├── ReadingList.js      ← leeslijst
+        ├── StatsPanel.js       ← statistieken + schijfruimte
+        ├── ReviewPanel.js      ← spaced repetition review
+        ├── pdfService.js       ← PDF API-client
+        ├── noteApi.js          ← notities API-client
+        ├── noteStore.js        ← in-memory notities store
+        └── annotationStore.js  ← PDF-annotaties store
 ```
 
 ---
@@ -58,12 +69,14 @@ cd ~/Apps/zettelkasten-python-app
 python3 server.py                                        # standaard (~/Zettelkasten, poort 7842)
 python3 server.py --vault ~/Documenten/MijnNotities     # eigen vault map
 python3 server.py --port 8080                            # andere poort
-python3 server.py --host 0.0.0.0                        # bereikbaar op iPad / netwerk
+python3 server.py --host 0.0.0.0                         # bereikbaar op iPad / netwerk
 python3 server.py --vault ~/Notes --port 8080 --verbose  # combineren
 ```
 
 De browser opent automatisch op **http://localhost:7842**.
 Bij `--host 0.0.0.0` toont het opstartbericht ook het netwerk-IP, bijv. `http://192.168.1.42:7842`.
+
+De **server status indicator** in de topbar (groen ● online / rood ● offline) toont live of de server bereikbaar is.
 
 ---
 
@@ -96,7 +109,7 @@ Voeg sleutels toe via ⚙ **Instellingen → API-sleutels** (accordion — één
 | OpenAI | GPT-4.1, GPT-4.1 mini, o4-mini | platform.openai.com |
 | Google | Gemini 2.5 Pro, 2.0 Flash | aistudio.google.com |
 | Mistral AI | Mistral Medium 3, Small 3.1, Magistral Medium | console.mistral.ai |
-| OpenRouter | Llama 4, Kimi K2.5, Kimi K2, DeepSeek R1, Qwen3, Gemma 3 | openrouter.ai |
+| OpenRouter | Llama 4, Kimi K2.5, DeepSeek R1, Qwen3, Gemma 3 | openrouter.ai |
 
 ---
 
@@ -159,6 +172,19 @@ isRead: false                      ← leeslijst status
 | Mindmap | 🗺 | Visuele mindmap, AI-mindmap of Mermaid-editor |
 | Notebook | 🧠 | LLM-chat over notities, PDFs en afbeeldingen |
 | Tags | 🏷 | Tag-beheer, samenvoegen, statistieken |
+| Statistieken | 📊 | Vault-statistieken inclusief schijfruimte |
+
+---
+
+## 🔤 Weergave-instellingen
+
+Via ⚙ **Instellingen → 🔤 Weergave**:
+
+- **Tekstgrootte** — slider van 10 tot 14 px, ook via snelknoppen (10/11/12/13/14)
+- Live preview toont direct hoe de gekozen grootte eruitziet
+- Instelling wordt opgeslagen en hersteld bij herstart
+
+Het hoofdlettertype is **Hack** (monospace). Code-blokken in Markdown gebruiken ook Hack.
 
 ---
 
@@ -176,7 +202,7 @@ Links worden weergegeven als **pills** met `[[` en `]]` aanduiding. Kapotte link
 
 ### Links-zijbalk (rechts)
 
-Aan de rechterkant van elke notitie staat een inklapbare **🔗 Links** zijbalk:
+Aan de rechterkant van elke notitie staat een inklapbare **🔗 Links** zijbalk met een ▶ knop om in te klappen en een 🔗 strook om weer uit te klappen.
 
 | Tab | Inhoud |
 |-----|--------|
@@ -184,14 +210,7 @@ Aan de rechterkant van elke notitie staat een inklapbare **🔗 Links** zijbalk:
 | **→ Uit** | Outlinks — alle `[[links]]` in deze notitie |
 | **+ Link** | Handmatig linken met slimme zoekfunctie |
 
-**+ Link tab:**
-- Toont automatisch suggesties op basis van gedeelde tags (zonder te typen)
-- Zoekfunctie scoort op titelmatch, gedeelde tags, recentheid en contentovereenkomst
-- Toont een snippet als de zoekterm in de content gevonden wordt
-- Werkt voor notities, PDF's en afbeeldingen
-- Al gelinkte items worden grijs gemarkeerd met `✓`
-
-**Op iPad:** de zijbalk start ingeklapt (24px strook met 🔗). Tik om uit te klappen, `◀` om in te klappen.
+**Op iPad:** de zijbalk start ingeklapt (24px strook met 🔗). Tik om uit te klappen.
 
 ---
 
@@ -226,14 +245,95 @@ FZF-stijl zoeken over notities én vault-PDFs. Tolereert typefouten en volgorde.
 - Spatie = AND (meerdere woorden)
 - ↑↓ navigeert resultaten · Enter opent
 - PDF-hits tonen pagina + regelnummer
-- Resultaten inline bewerkbaar en opslaan als notitie
 
 ### 🔎 Full-text zoeken
 Exacte zoekopdracht door alle notitie-content.
 - Toont **alle** treffers per notitie met regelnummer en context-snippet
 - `N×` teller toont het aantal treffers per notitie
 - Titelmatches apart gemarkeerd
-- Klikken opent de notitie direct
+
+### Resultaat-viewer (beide modi)
+Klikken op een resultaat laadt de notitie in de **canvas SearchViewer** rechts:
+- **Vim-navigatie**: `j`/`k` scrollen, `n`/`N` naar volgende/vorige treffer, `g`/`G` begin/einde
+- **Zoekterm-highlighting**: alle treffers zijn geel gemarkeerd, viewer springt automatisch naar de eerste match
+- **Tekstselectie**: sleep met de muis om tekst te selecteren
+- **Kopiëren**: `y` of `Ctrl+C` kopieert selectie, `Y` kopieert huidige regel
+- **Regelnummers**: standaard relatief (rel#), klikbaar naar absoluut (abs#)
+- **Plakken**: in split modus toont de toolbar een **◀ Plak selectie links** knop
+- **"◀ Open links"** knop (split modus): opent notitie in linker editor zonder zoekinterface te verlaten
+
+---
+
+## ⊞ Split-screen modus
+
+Activeer via de **⊞ split** knop in de topbar of `:vs` in de editor.
+
+- Bij activeren: beide sidebars klappen automatisch in voor maximale ruimte
+- Rechter paneel opent standaard op **🧠 Notebook**
+- Rechter tabs: ✏️ Schrijven · 🔍 Zoeken · 🕸 Graaf · 🗺 Mindmap · 🧠 Notebook · 📄 PDF · 🖼 Plaatjes
+
+### Focus wisselen
+
+| Toets | Actie |
+|-------|-------|
+| `Ctrl+W Ctrl+W` | Toggle focus links ↔ rechts |
+| `Ctrl+H` | Focus naar links |
+| `Ctrl+L` | Focus naar rechts |
+
+### Inklapbare sidebars
+
+| Actie | Resultaat |
+|-------|-----------|
+| ◀/▶ knop op linkerrand | Linker notitieslijst in/uitklappen |
+| `Ctrl+B` | Linker notitieslijst in/uitklappen |
+| ▶ knop in Links-header | Rechter linkszijbalk inklappen |
+| 🔗 strook | Rechter linkszijbalk uitklappen |
+
+---
+
+## 🕸️ Kennisgraaf
+
+### Navigatie
+
+| Actie | Werking |
+|-------|---------|
+| Scrollen | Zoom in/uit |
+| Alt+slepen | Pannen |
+| Klikken | Notitie selecteren / pad-ankerpunt instellen |
+| Dubbelklikken | Notitie vastzetten (pin) |
+| Rechtsklikken | Contextmenu |
+
+### Knoppen
+
+| Knop | Werking |
+|------|---------|
+| ⊞ fit | Alle nodes in beeld |
+| 1:1 | Reset zoom |
+| 💥 uiteen | Spreid alle nodes uiteen (of geselecteerde bij lasso) |
+| ↺ herstart | Reset layout naar cirkel |
+
+### Lasso-selectie
+
+**Shift + sleep** op leeg canvas tekent een selectievak. Nodes in het vak worden geselecteerd en automatisch uiteen gespreid. De 💥 uiteen knop toont daarna `💥 spreid N`.
+
+### Weergavemodi
+
+| Modus | Beschrijving |
+|-------|-------------|
+| lokaal | Alleen omgeving van geselecteerde node |
+| orphans | Alleen niet-verbonden notities |
+| hubs 🔥 | Kleur op verbindingsdichtheid |
+| community | Automatisch gedetecteerde clusters |
+| pad 🔍 | Pad-finder tussen twee nodes |
+| ≈ sem. | Semantisch verwante verbindingen |
+
+### Pad-finder
+
+1. Zet **pad 🔍** aan
+2. Klik op een startnode (ook tag-nodes mogelijk)
+3. Klik op een eindnode → kortste pad wordt berekend
+4. **● alleen pad** — verberg alle andere nodes en edges
+5. **◎ toon alles** — terug naar volledig beeld
 
 ---
 
@@ -247,12 +347,6 @@ Toont alle geïmporteerde notities in tabelvorm, standaard gefilterd op **ongele
 | Datum | Importdatum (nieuwste bovenaan) |
 | Titel | Naam van de notitie |
 | Leestijd | Geschatte leestijd (200 woorden/min) |
-
-Bij geïmporteerde notities toont de toolbar een klikbare badge:
-```
-○ ongelezen  |  ⏱ 17 min
-● gelezen    |  ⏱ 17 min   ← groen
-```
 
 ---
 
@@ -304,6 +398,25 @@ Selecteer tekst → annotatiepopup → voeg notitie en kleur toe. Op iOS: tik **
 
 ---
 
+## 📊 Statistieken & Schijfruimte
+
+De **Statistieken**-tab toont vault-analyse in vier subtabs:
+
+| Tab | Inhoud |
+|-----|--------|
+| Overzicht | Notities, PDFs, afbeeldingen, woorden, verbindingen, kwaliteitsbalken |
+| Groei | Aanmaak per week (8 weken), dagnotities |
+| Tags | Top tags met relatieve balkjes |
+| Top notities | Meest gelinkte, langste, eilanden |
+| 💾 Opslag | Vault-gebruik per categorie + systeemschijfruimte |
+
+**💾 Opslag** toont:
+- Totale vault-grootte uitgesplitst naar 📝 Notities / 📄 PDFs / 🖼 Afbeeldingen / 📌 Annotaties
+- Systeemschijf: totaal / gebruikt / vrij + gebruiksbalk (oranje bij >70%, rood bij >90%)
+- ↻ Vernieuwen knop
+
+---
+
 ## 🏷️ Tag-systeem
 
 **SmartTagEditor** — aanwezig in editor, import-preview en Word/Markdown-import.
@@ -338,32 +451,125 @@ Model kiezen: klik de **modelnaam in de statusbalk** onderin.
 - **🔍 Hiaten** — analyseert kennishiaten en ontbrekende verbindingen
 - **Verwante notities** — TF-IDF panel onderaan elke notitie
 
+### Achtergrondtaken
+
+Lopende AI-taken (samenvatten, beschrijven, importeren) zijn zichtbaar via het klokicoontje in de topbar. Elke draaiende taak heeft een **✕ stop** knop om de taak te annuleren.
+
 ---
 
 ## ⌨️ VIM Editor
 
+### Modi
+
 | Mode | Activeer |
 |------|----------|
-| INSERT | `i` / `a` |
+| INSERT | `i` / `a` / `o` |
 | NORMAL | `Esc` |
+| VISUAL | `v` (char) / `V` (regel) |
 | COMMAND | `:` |
 | SEARCH | `/` |
 
-| Ex-commando | Actie |
-|-------------|-------|
+### Navigatie
+
+| Toets | Actie |
+|-------|-------|
+| `h j k l` | Cursor bewegen |
+| `w` / `b` | Woord voor/achteruit |
+| `0` / `$` | Begin/einde regel |
+| `gg` / `G` | Begin/einde bestand |
+| `%` | Spring naar matchende bracket `( [ {` |
+| `'a` | Spring naar mark `a` |
+| `Ctrl+D` / `Ctrl+U` | Halve pagina omlaag/omhoog |
+
+### Bewerken
+
+| Toets | Actie |
+|-------|-------|
+| `r{teken}` | Vervang karakter onder cursor |
+| `x` | Verwijder karakter |
+| `dd` / `yy` | Verwijder/kopieer regel |
+| `D` | Verwijder tot einde regel |
+| `p` / `P` | Plak na/voor cursor |
+| `u` / `Ctrl+R` | Undo/redo (persistent per notitie) |
+| `J` | Voeg regels samen |
+| `.` | Herhaal laatste actie |
+
+### Visual mode
+
+| Toets | Actie |
+|-------|-------|
+| `v` | Char-wise selectie |
+| `V` | Linewise selectie |
+| `d` / `y` / `c` | Verwijder / kopieer / vervang selectie |
+
+### Text objects
+
+| Toets | Actie |
+|-------|-------|
+| `ci"` / `ca(` | Verander inhoud/inclusief `"..."` / `(...)` |
+| `di{` / `da[` | Verwijder inhoud/inclusief `{...}` / `[...]` |
+| `yi'` / `ya\`` | Kopieer inhoud/inclusief `'...'` / `` `...` `` |
+| `b` / `B` / `r` | Aliassen voor `(` / `{` / `[` |
+
+### Folds (markdown headers)
+
+| Toets | Actie |
+|-------|-------|
+| `za` | Toggle fold op header |
+| `zo` / `zc` | Open / sluit fold |
+| `zR` / `zM` | Alle folds open / dicht |
+
+Gevouwen headers tonen een geel `▸ N regels` pill.
+
+### Marks & Macros
+
+| Toets | Actie |
+|-------|-------|
+| `m{a-z}` | Zet mark op huidige positie |
+| `'{a-z}` | Spring naar mark |
+| `q{a-z}` | Start/stop macro-opname |
+| `@{a-z}` | Speel macro af |
+
+### Ex-commando's
+
+| Commando | Actie |
+|----------|-------|
 | `:w` / `:wq` | Opslaan / opslaan+sluiten |
 | `:q!` | Sluiten zonder opslaan |
-| `:vs` | Split-screen |
+| `:vs` | Split-screen openen |
 | `:goyo` | Focusmodus |
-| `:spell` | Spellcheck: nl → en → uit |
+| `:spell` / `:sp` | Spellcheck: nl → en → uit |
+| `:rnu` / `:set rnu` | Toggle relatieve regelnummers |
+| `:tag+ #naam` | Tag toevoegen |
+| `:template naam` | Notitie-template laden |
+| `:?` of `:help` | Keyboard shortcuts overzicht |
+
+### Keyboard shortcuts overzicht
+
+Druk **`?`** in NORMAL mode of typ **`:help`** voor een volledig overzicht van alle sneltoetsen, gegroepeerd per categorie.
+
+### Notitie-templates
+
+| Template | Inhoud |
+|----------|--------|
+| `dagnotitie` | Datum, inbox, ideeën, taken |
+| `meeting` | Deelnemers, agenda, beslissingen, actiepunten |
+| `literatuur` | Auteur, bron, samenvatting, citaten, eigen gedachten |
+| `project` | Status, doel, taken, aantekeningen |
+| `vraag` | Context, hypothese, antwoord |
+
+Gebruik: `:template dagnotitie`
+
+### Snippets
 
 | Snippet | Expandeert naar |
 |---------|-----------------|
 | `link` | `[[notitie]]` |
 | `todo` | `- [ ] taak` |
 | `date` | Huidige datum |
-| `h1` `h2` | Heading |
-| `code` `table` `bold` | Opmaak |
+| `h1` `h2` `h3` | Heading |
+| `code` `table` `bold` `em` | Opmaak |
+| `hr` `quote` | Scheiding / citaat |
 
 ---
 
@@ -371,21 +577,32 @@ Model kiezen: klik de **modelnaam in de statusbalk** onderin.
 
 ```
 zettelkasten-python-app/
-├── server.py                  ← Python backend (puur stdlib)
+├── server.py                  ← Python backend (puur stdlib, routing via dict)
 ├── README.md
 └── static/
     ├── index.html
-    ├── app.js                 ← React frontend + renderMd + hoofdcomponenten
+    ├── app.js                 ← globals, constants, api, renderMd, TagPill
     └── modules/
-        ├── LinksSidebar.js    ← 🔗 links-zijbalk (backlinks, outlinks, handmatig linken)
-        ├── NoteEditor.js      ← VIM canvas editor
+        ├── SpellEngine.js     ← spellcheck (incrementeel) + completion
+        ├── VimEditor.js       ← canvas VIM editor
+        ├── TagFilterBar.js    ← tag-filter balk
+        ├── Graph.js           ← kennisgraaf (O(1) nodeMap lookup)
+        ├── PDFViewer.js       ← PDF viewer + canvas mounters
+        ├── VaultSettings.js   ← instellingen modal
+        ├── ImagesGallery.js   ← afbeeldingen gallerij
+        ├── MermaidEditor.js   ← Mermaid + MindMap + LLMNotebook + FuzzySearch + SearchViewer
+        ├── ModelPicker.js     ← model selector
+        ├── LinksSidebar.js    ← 🔗 links-zijbalk
+        ├── NoteEditor.js      ← notitie editor wrapper
         ├── NotePreview.js     ← preview + semantisch verwant paneel
-        ├── NotesTab.js        ← orkestratielaag + dagnotitie
-        ├── NoteList.js        ← notitie-lijst + 📅 dagnotitie knop
+        ├── NotesTab.js        ← orkestratielaag + dagnotitie + sidebar-logica
+        ├── NoteList.js        ← notitie-lijst
         ├── NotesMeta.js       ← metadata-zijpaneel
         ├── TagManager.js      ← SmartTagEditor + TagManagerPanel
         ├── WebImporter.js     ← URL-, Markdown- en Word-import
         ├── ReadingList.js     ← leeslijst
+        ├── StatsPanel.js      ← statistieken + 💾 schijfruimte
+        ├── ReviewPanel.js     ← spaced repetition review
         ├── pdfService.js      ← PDF API-client
         ├── noteApi.js         ← notities API-client
         ├── noteStore.js       ← in-memory notities store
@@ -397,10 +614,13 @@ zettelkasten-python-app/
 ## 💡 Tips
 
 - **Dagnotitie** — klik 📅 naast "nieuw zettel" voor de notitie van vandaag
-- **Full-text zoeken** — schakel naar 🔎 Volledig in de Zoeken-tab voor exacte treffers met regelnummer
+- **Full-text zoeken** — schakel naar 🔎 Volledig; gebruik `n`/`N` om door treffers te navigeren in de viewer
+- **Selecteren & plakken** — sleep in de zoekviewer om tekst te selecteren, gebruik "◀ Plak selectie links" in split modus
+- **Split modus** — sidebars klappen automatisch in; rechter paneel start op Notebook
+- **Lasso** — Shift+sleep in de graaf om een groep nodes te selecteren en uiteen te spreiden
 - **Links-zijbalk** — + Link tab toont automatisch notities met gedeelde tags als suggesties
 - **Kapotte links** — `✗` icoon in pill-stijl geeft direct aan welke verbindingen verbroken zijn
-- **Afbeeldingen importeren** — beschrijving wordt pas gegenereerd ná opslaan, alleen voor geselecteerde afbeeldingen
+- **Afbeeldingen importeren** — beschrijving wordt pas gegenereerd ná opslaan
 - **Leeslijst** — opent standaard op ongelezen
 - **DRM-PDF's** — schakel "Persoonlijk gebruik" in via Instellingen → PDF
 - **Meerdere vaults** — start meerdere servers op verschillende poorten
@@ -409,4 +629,6 @@ zettelkasten-python-app/
 - **iPad** — start met `--host 0.0.0.0`, open het getoonde IP in Safari
 - **Volledig offline** — `bash static/vendor/download-vendors.sh` → `python3 server.py --offline`
 - **GraphRAG** — Notebook → 🕸 GraphRAG → stel vragen met graafcontext
-- **Split + plakken** — zweef over AI-antwoord → ↙ plak in notitie
+- **Tekstgrootte** — aanpasbaar via ⚙ Instellingen → Weergave (10–14 px, opgeslagen)
+- **Undo history** — bewaard per notitie in localStorage, hersteld bij heropenen (max 40 stappen, 24u)
+- **Shortcuts overzicht** — druk `?` in de editor voor alle toetscombinaties

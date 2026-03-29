@@ -22,6 +22,7 @@ const NoteEditor = ({
   onToggleLinkMenu,
   linkMenuContent = null,
   onSplitCmd = null,  // doorgeven aan VimEditor
+  onNoteTypeChange = null,
 }) => {
   const { useState, useRef, useEffect } = React;
 
@@ -91,6 +92,54 @@ const NoteEditor = ({
                fontSize: isMobile ? "15px" : "16px",
                fontWeight: "bold", outline: "none", WebkitAppearance: "none" }
     }),
+
+    // Notitietype badge in toolbar
+    onNoteTypeChange && React.createElement("div", {
+      style: { position: "relative", flexShrink: 0 },
+    },
+      React.createElement("select", {
+        value: note?.noteType || "",
+        onChange: e => onNoteTypeChange(e.target.value),
+        title: "Notitietype instellen",
+        style: {
+          background: (() => {
+            const t = note?.noteType;
+            if (t === "fleeting")   return "rgba(229,120,109,0.12)";
+            if (t === "literature") return "rgba(138,198,242,0.12)";
+            if (t === "permanent")  return "rgba(159,202,86,0.12)";
+            if (t === "index")      return "rgba(215,135,255,0.12)";
+            return "none";
+          })(),
+          border: `1px solid ${(() => {
+            const t = note?.noteType;
+            if (t === "fleeting")   return "rgba(229,120,109,0.4)";
+            if (t === "literature") return "rgba(138,198,242,0.4)";
+            if (t === "permanent")  return "rgba(159,202,86,0.4)";
+            if (t === "index")      return "rgba(215,135,255,0.4)";
+            return W.splitBg;
+          })()}`,
+          color: (() => {
+            const t = note?.noteType;
+            if (t === "fleeting")   return W.orange;
+            if (t === "literature") return W.blue;
+            if (t === "permanent")  return W.comment;
+            if (t === "index")      return W.purple;
+            return W.fgMuted;
+          })(),
+          borderRadius: "6px",
+          padding: isMobile ? "7px 8px" : "3px 8px",
+          fontSize: "11px", cursor: "pointer",
+          fontFamily: "inherit", outline: "none",
+          flexShrink: 0,
+        }
+      },
+        React.createElement("option", { value: "" }, "○ type"),
+        React.createElement("option", { value: "fleeting" },   "◑ vluchtig"),
+        React.createElement("option", { value: "literature" }, "◕ literatuur"),
+        React.createElement("option", { value: "permanent" },  "● permanent"),
+        React.createElement("option", { value: "index" },      "◈ index"),
+      )
+    ),
 
     // Actie-knoppen
     ...[
@@ -172,6 +221,7 @@ const NoteEditor = ({
       llmModel,
       allNotesText,
       onSplitCmd,
+      noteId:       note?.id,   // voor persistente undo
       hideTagStrip: true,  // SmartTagEditor boven de editor toont al de tags
     })
   );

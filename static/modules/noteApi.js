@@ -11,7 +11,7 @@ const NoteAPI = (() => {
     if (!note || typeof note !== "object") return note;
     const safe = [
       "id","title","content","tags","created","modified",
-      "sourceUrl","importedAt","isRead"
+      "sourceUrl","importedAt","isRead","noteType"
     ];
     const out = {};
     for (const k of safe) {

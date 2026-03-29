@@ -27,8 +27,36 @@ const NotesTab = ({
   pasteQueue = [],         // blokken klaar om in de editor te plakken
   onPasteConsumed = null,  // () => void — na verwerking
   editorFocusTrigger = 0, // verhoog om editor-canvas te focussen (split-wissel)
+  splitMode = false,       // als true: klap sidebar automatisch in
 }) => {
   const { useState, useRef, useMemo, useCallback, useEffect } = React;
+
+  // Ctrl+B: toggle sidebar
+  useEffect(() => {
+    if (!isDesktop) return;
+    const handler = (e) => {
+      if (e.ctrlKey && e.key === 'b') {
+        e.preventDefault();
+        toggleDesktopSidebar();
+      }
+    };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, [isDesktop]);
+
+  // Split modus: klap sidebar automatisch in bij activeren, terug bij deactiveren
+  useEffect(() => {
+    if (!isDesktop) return;
+    if (splitMode) {
+      // Inklapppen — sla huidige staat op zodat we hem kunnen herstellen
+      setDesktopSidebarOpen(false);
+      try { localStorage.setItem('zk_sidebar_open', 'false'); } catch {}
+    } else {
+      // Herstellen naar open bij verlaten split modus
+      setDesktopSidebarOpen(true);
+      try { localStorage.setItem('zk_sidebar_open', 'true'); } catch {}
+    }
+  }, [splitMode, isDesktop]);
 
   // Verwerk paste-queue: plak eerste blok in open editor
   useEffect(() => {
@@ -72,8 +100,8 @@ const NotesTab = ({
   }, [reviewData]);
   const [search,        setSearch]        = useState("");
   const [tagFilter,     setTagFilter]     = useState(null);
+  const [typeFilter,    setTypeFilter]    = useState(null);
   const [renderMode,    setRenderMode]    = useState("plain");
-  const [showMeta,      setShowMeta]      = useState(false);
   const [showLinkMenu,  setShowLinkMenu]  = useState(false);
   const [linkSearch,    setLinkSearch]    = useState("");
   const [linkTypeFilter,setLinkTypeFilter]= useState("all");
@@ -81,7 +109,19 @@ const NotesTab = ({
 
   const contentRef = useRef(null);
   const sidebarW   = isMobile ? Math.min(320, window.innerWidth - 40) : 240;
-  const [tabletSidebarOpen, setTabletSidebarOpen] = useState(true);
+  const [tabletSidebarOpen,  setTabletSidebarOpen]  = useState(true);
+  const [desktopSidebarOpen, setDesktopSidebarOpen] = useState(() => {
+    // Herstel voorkeur uit localStorage
+    try { return localStorage.getItem('zk_sidebar_open') !== 'false'; }
+    catch { return true; }
+  });
+  const toggleDesktopSidebar = () => {
+    setDesktopSidebarOpen(v => {
+      const next = !v;
+      try { localStorage.setItem('zk_sidebar_open', next); } catch {}
+      return next;
+    });
+  };
 
   const selNote = useMemo(() =>
     notes.find(n => n.id === selectedId) || null,
@@ -380,11 +420,13 @@ const NotesTab = ({
     selectedId,
     search,
     tagFilter,
+    typeFilter,
     onSelect:          handleSelect,
     onNew:             handleNew,
     onDailyNote:       handleDailyNote,
     onSearchChange:    setSearch,
     onTagFilterChange: setTagFilter,
+    onTypeFilterChange: setTypeFilter,
     isMobile,
     onCloseSidebar:    () => onSidebarToggle?.(false),
   });
@@ -407,6 +449,10 @@ const NotesTab = ({
         onToggleLinkMenu: () => { setShowLinkMenu(v => !v); setLinkSearch(""); setLinkTypeFilter("all"); },
         linkMenuContent:  showLinkMenu ? buildLinkDropdown() : null,
         onSplitCmd,
+        onNoteTypeChange: async (type) => {
+          if (!selNote) return;
+          await handleSave({ ...selNote, noteType: type });
+        },
       })
     : React.createElement(React.Fragment, null,
         // NotePreview — flex:1 vult beschikbare breedte
@@ -468,6 +514,7 @@ const NotesTab = ({
           serverPdfs,
           serverImages,
           isTablet,
+          splitMode,
           onSelect:    id => { onSelectNote(id); setVimMode(false); },
           onInsertLink: async (linkText) => {
             const updated = {
@@ -477,16 +524,13 @@ const NotesTab = ({
             };
             await handleSave(updated);
           },
+          onTagRemove: handleTagRemove,
+          onNoteTypeChange: async (type) => {
+            if (!selNote) return;
+            await handleSave({ ...selNote, noteType: type });
+          },
         }),
-        // ── NotesMeta — ook sibling in flex-row ──────────────────────────────
-        isDesktop && !goyoMode && React.createElement(NotesMeta, {
-          note:          selNote,
-          notes,
-          showPanel:     showMeta,
-          onTogglePanel: () => setShowMeta(p => !p),
-          onSelectNote:  id => onSelectNote(id),
-          onTagRemove:   handleTagRemove,
-        })
+        // NotesMeta vervangen door Info tab in LinksSidebar
       );
 
   // ── Mermaid editor overlay ────────────────────────────────────────────────
@@ -512,39 +556,83 @@ const NotesTab = ({
   const tabletToggleBtn = isTablet && React.createElement("button", {
     onClick: () => setTabletSidebarOpen(p => !p),
     title: tabletSidebarOpen ? "Lijst inklappen" : "Lijst uitklappen",
+    className: "sidebar-toggle-btn",
     style: {
-      background: "none", border: "none",
+      background: tabletSidebarOpen ? "rgba(138,198,242,0.08)" : "none",
+      border: "none",
       borderRight: `1px solid ${W.splitBg}`,
       color: tabletSidebarOpen ? W.blue : W.fgMuted,
       padding: "0 14px", height: "34px", minWidth: "44px",
-      fontSize: "18px", cursor: "pointer", flexShrink: 0,
-      touchAction: "manipulation",  // geen 300ms tap-vertraging op iOS
+      fontSize: "13px", cursor: "pointer", flexShrink: 0,
+      touchAction: "manipulation",
       display: "flex", alignItems: "center", justifyContent: "center",
+      gap: "4px",
+      transition: "background 0.15s, color 0.15s",
     }
-  }, tabletSidebarOpen ? "◀" : "▶");
+  },
+    tabletSidebarOpen ? "‹ Lijst" : "Lijst ›"
+  );
 
   return React.createElement("div", {
     style: { flex: 1, display: "flex", overflow: "hidden", minHeight: 0 }
   },
     mermaidOverlay,
 
-    // Sidebar — desktop altijd zichtbaar, tablet inklapbaar
-    (isDesktop || (isTablet && tabletSidebarOpen)) && React.createElement("div", {
-      className: "sidebar",
+    // Sidebar — desktop inklapbaar, tablet ook inklapbaar
+    React.createElement("div", {
       style: {
-        width: isTablet ? "200px" : `${sidebarW}px`, flexShrink: 0,
-        borderRight: `1px solid ${W.splitBg}`,
-        display: "flex", flexDirection: "column",
-        minHeight: 0, overflow: "hidden",
-        transition: isTablet ? "width 0.2s ease" : "none",
+        position: "relative",
+        width: isDesktop
+          ? (desktopSidebarOpen ? `${sidebarW}px` : "0px")
+          : (isTablet && tabletSidebarOpen ? "200px" : "0px"),
+        flexShrink: 0,
+        overflow: "hidden",
+        transition: "width 0.2s ease",
+        minHeight: 0,
       }
-    }, sidebar),
+    },
+      (isDesktop ? desktopSidebarOpen : (isTablet && tabletSidebarOpen)) &&
+        React.createElement("div", {
+          className: "sidebar",
+          style: {
+            width: isTablet ? "200px" : `${sidebarW}px`,
+            height: "100%",
+            borderRight: `1px solid ${W.splitBg}`,
+            display: "flex", flexDirection: "column",
+            minHeight: 0, overflow: "hidden",
+          }
+        }, sidebar),
+    ),
 
     // Hoofd area — row zodat LinksSidebar naast NotePreview staat
     React.createElement("div", {
       style: { flex: 1, display: "flex", flexDirection: "column",
-               overflow: "hidden", minWidth: 0, minHeight: 0 }
+               overflow: "hidden", minWidth: 0, minHeight: 0, position: "relative" }
     },
+      // Desktop toggle knop: zweeft op de linkerrand van de hoofd-area
+      // Altijd zichtbaar, ook als sidebar ingeklapt is
+      isDesktop && React.createElement("button", {
+        onClick: toggleDesktopSidebar,
+        title: desktopSidebarOpen ? "Lijst inklappen (Ctrl+B)" : "Lijst uitklappen (Ctrl+B)",
+        className: "sidebar-toggle-btn",
+        style: {
+          position: "absolute",
+          left: 0, top: "50%",
+          transform: "translateY(-50%)",
+          zIndex: 20,
+          width: "16px", height: "52px",
+          background: W.bg2,
+          border: `1px solid ${W.splitBg}`,
+          borderLeft: "none",
+          borderRadius: "0 5px 5px 0",
+          color: W.fgMuted,
+          cursor: "pointer",
+          display: "flex", alignItems: "center", justifyContent: "center",
+          fontSize: "10px", padding: 0,
+          boxShadow: "2px 0 6px rgba(0,0,0,0.3)",
+          transition: "background 0.15s, color 0.15s",
+        }
+      }, desktopSidebarOpen ? "‹" : "›"),
       // Tablet toggle-knop bovenaan
       isTablet && React.createElement("div", {
         style: {

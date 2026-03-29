@@ -12,7 +12,7 @@ import argparse
 
 # ── Automatisch installeren van optionele PDF-pakketten ───────────────────────
 def _ensure_pdf_packages():
-    """Installeer pypdf, pikepdf, pdfminer.six en python-docx als ze ontbreken."""
+    """Installeer pypdf, pikepdf, pdfminer.six, python-docx, python-pptx en reportlab als ze ontbreken."""
     needed = []
     try: import pypdf
     except ImportError: needed.append("pypdf")
@@ -22,6 +22,10 @@ def _ensure_pdf_packages():
     except ImportError: needed.append("pdfminer.six")
     try: import docx
     except ImportError: needed.append("python-docx")
+    try: import pptx
+    except ImportError: needed.append("python-pptx")
+    try: import reportlab
+    except ImportError: needed.append("reportlab")
     if needed:
         print(f"[setup] Installeren: {', '.join(needed)} ...", flush=True)
         import subprocess
@@ -125,6 +129,7 @@ class VaultManager:
         if note.get("sourceUrl"):   fm += f"sourceUrl: {note['sourceUrl']}\n"
         if note.get("importedAt"):  fm += f"importedAt: {note['importedAt']}\n"
         if note.get("isRead"):      fm += f"isRead: true\n"
+        if note.get("noteType"):    fm += f"noteType: {note['noteType']}\n"
         fm += "---\n\n"
         return fm + note.get("content","")
 
@@ -132,7 +137,7 @@ class VaultManager:
         try: text = path.read_text(encoding="utf-8")
         except: return None
         note = {"id":path.stem,"title":path.stem,"tags":[],"content":"",
-                "created":"","modified":"","sourceUrl":"","importedAt":"","isRead":False}
+                "created":"","modified":"","sourceUrl":"","importedAt":"","isRead":False,"noteType":""}
         if text.startswith("---"):
             parts = text.split("---",2)
             if len(parts)>=3:
@@ -148,6 +153,7 @@ class VaultManager:
                     elif line.startswith("sourceUrl:"):  note["sourceUrl"]  = line[10:].strip()
                     elif line.startswith("importedAt:"): note["importedAt"] = line[11:].strip()
                     elif line.startswith("isRead:"):     note["isRead"]     = line[7:].strip().lower() == "true"
+                    elif line.startswith("noteType:"):   note["noteType"]   = line[9:].strip()
         else: note["content"] = text
         return note
     def load_notes(self):
@@ -197,6 +203,7 @@ class VaultManager:
         for pdf_name,annots in by_pdf.items():
             self._annot_path(pdf_name).write_text(
                 json.dumps(annots,ensure_ascii=False,indent=2),encoding="utf-8")
+        return {"ok": True}
 
     def load_img_annotations(self):
         try:
@@ -209,6 +216,7 @@ class VaultManager:
     def save_img_annotations(self, annotations):
         self.img_annot_file.write_text(
             json.dumps(annotations, ensure_ascii=False, indent=2), encoding="utf-8")
+        return {"ok": True}
 
     # PDFs
     def list_pdfs(self):
@@ -495,7 +503,12 @@ class VaultManager:
         try: return json.loads(self.config_file.read_text(encoding="utf-8"))
         except: return {}
     def save_config(self, data):
-        cfg = self.get_config(); cfg.update(data)
+        cfg = self.get_config()
+        for k, v in data.items():
+            if v is None:
+                cfg.pop(k, None)  # None = verwijder de key
+            else:
+                cfg[k] = v
         self._write_json(self.config_file, cfg)
 
     # API-sleutels — opgeslagen in config.json (hebben voorrang boven env-variabelen)
@@ -522,6 +535,14 @@ class VaultManager:
         return self.get_config().get("ext_pdf_dirs", [])
     def set_ext_pdf_dirs(self, dirs):
         self.save_config({"ext_pdf_dirs": [str(d) for d in dirs]})
+
+    def get_custom_models(self):
+        """Geeft lijst van handmatig toegevoegde AI-modellen."""
+        return self.get_config().get("custom_models", [])
+
+    def set_custom_models(self, models):
+        """Sla lijst van custom modellen op."""
+        self.save_config({"custom_models": models})
 
     def scan_ext_pdfs(self):
         """Geeft lijst van alle PDF-bestanden in de geconfigureerde externe mappen."""
@@ -1635,28 +1656,103 @@ class ZKHandler(BaseHTTPRequestHandler):
             self.send_header(h,v)
         self.end_headers()
 
+    # ── GET routing tabel ────────────────────────────────────────────────────
+    # Eenvoudige dict-dispatch — sneller en makkelijker te onderhouden
+    # dan een lange if-keten. Elke waarde is een callable zonder args.
+    def _get_routes(self):
+        v = self.vault
+        return {
+            "/api/notes":           lambda: self._send(200, v.load_notes()),
+            "/api/annotations":     lambda: self._send(200, v.load_annotations()),
+            "/api/img-annotations": lambda: self._send(200, v.load_img_annotations()),
+            "/api/pdfs":            lambda: self._send(200, v.list_pdfs()),
+            "/api/images":          lambda: self._send(200, v.list_images()),
+            "/api/llm/models":      lambda: self._llm_models(),
+            "/api/config":          lambda: self._send(200, {"vault_path": v.path_str, "config": v.get_config()}),
+            "/api/ext-pdfs":        lambda: self._send(200, {"dirs": v.get_ext_pdf_dirs(), "files": v.scan_ext_pdfs()}),
+            "/api/disk-usage":      lambda: self._get_disk_usage(),
+            "/api/api-keys":        lambda: self._get_api_keys(),
+            "/api/custom-models":   lambda: self._get_custom_models(),
+            "/api/health":           lambda: self._send(200, {"ok": True, "status": "running"}),
+        }
+
+    def _get_custom_models(self):
+        """Geeft alle custom modellen terug."""
+        return self._send(200, {"custom_models": self.vault.get_custom_models()})
+
+    def _set_custom_models(self):
+        """Sla custom modellen op."""
+        body = self._body()
+        models = body.get("custom_models", [])
+        # Valideer elk model
+        cleaned = []
+        for m in models:
+            if not isinstance(m, dict): continue
+            mid = str(m.get("id", "")).strip()
+            if not mid: continue
+            cleaned.append({
+                "id":       mid,
+                "label":    str(m.get("label", mid)).strip(),
+                "endpoint": str(m.get("endpoint", "")).strip(),
+                "key":      str(m.get("key", "")).strip(),
+            })
+        self.vault.set_custom_models(cleaned)
+        return self._send(200, {"ok": True, "count": len(cleaned)})
+
+    def _get_api_keys(self):
+        result = {}
+        for pr in ("anthropic", "openai", "google", "openrouter", "mistral"):
+            key = self.vault.get_api_key(pr)
+            result[pr] = {
+                "set": bool(key),
+                "preview": (key[:8]+"…"+key[-4:]) if len(key) > 12 else ("●●●●" if key else "")
+            }
+        return self._send(200, result)
+
+    def _get_disk_usage(self):
+        import os, shutil
+        v = self.vault
+        def dir_size(path):
+            total = 0
+            try:
+                for entry in os.scandir(path):
+                    if entry.is_file(follow_symlinks=False): total += entry.stat().st_size
+                    elif entry.is_dir(follow_symlinks=False): total += dir_size(entry.path)
+            except (PermissionError, FileNotFoundError): pass
+            return total
+        notes_b  = dir_size(v.notes_dir)
+        pdfs_b   = dir_size(v.pdf_dir)
+        images_b = dir_size(v.images_dir)
+        annot_b  = dir_size(v.annot_dir)
+        try:
+            disk = shutil.disk_usage(str(v.vault))
+            d_total, d_free, d_used = disk.total, disk.free, disk.used
+        except Exception:
+            d_total = d_free = d_used = 0
+        return self._send(200, {
+            "ok": True,
+            "vault_total": notes_b + pdfs_b + images_b + annot_b,
+            "notes": notes_b, "pdfs": pdfs_b,
+            "images": images_b, "annotations": annot_b,
+            "disk_total": d_total, "disk_free": d_free, "disk_used": d_used,
+        })
+
     def do_GET(self):
         p = urlparse(self.path).path.rstrip("/") or "/"
-        if p=="/api/notes":            return self._send(200,self.vault.load_notes())
-        if p=="/api/annotations":      return self._send(200,self.vault.load_annotations())
-        if p=="/api/img-annotations":  return self._send(200,self.vault.load_img_annotations())
-        if p=="/api/pdfs":             return self._send(200,self.vault.list_pdfs())
-        if p=="/api/images":           return self._send(200,self.vault.list_images())
-        if p=="/api/llm/models":  return self._llm_models()
-        if p=="/api/config":      return self._send(200,{"vault_path":self.vault.path_str,"config":self.vault.get_config()})
-        if p=="/api/api-keys":
-            # Geeft terug welke providers geconfigureerd zijn + gemaskeerde waarde voor weergave
-            result = {}
-            for pr in ("anthropic","openai","google","openrouter","mistral"):
-                key = self.vault.get_api_key(pr)
-                result[pr] = {"set": bool(key), "preview": (key[:8]+"…"+key[-4:]) if len(key)>12 else ("●●●●" if key else "")}
-            return self._send(200, result)
-        if p=="/api/ext-pdfs":     return self._send(200,{"dirs":self.vault.get_ext_pdf_dirs(),"files":self.vault.scan_ext_pdfs()})
+
+        # Exacte routes via dispatch tabel
+        route = self._get_routes().get(p)
+        if route:
+            return route()
         if p.startswith("/api/browse"):
             from urllib.parse import parse_qs, urlparse as _up
             qs = parse_qs(_up(self.path).query)
             dir_path = qs.get("path",[""])[0].strip()
             return self._send(200, self._browse(dir_path))
+        if p.startswith("/api/pdf-text/"):
+            fname=unquote(p[14:])
+            text=self.vault.extract_pdf_text(fname, 8000) or ""
+            return self._send(200,{"text":text,"chars":len(text)})
         if p.startswith("/api/pdf/"):
             fname=unquote(p[9:])
             fp=self.vault.get_pdf_path(fname)
@@ -1692,8 +1788,35 @@ class ZKHandler(BaseHTTPRequestHandler):
                 return self._send(200, fp.read_bytes(), mime)
         return self._send(404,{"error":"Niet gevonden"})
 
+    # ── POST routing tabel ───────────────────────────────────────────────────
+    def _post_routes(self):
+        return {
+            "/api/notes":                lambda: self._send(200, self.vault.save_note(self._body())),
+            "/api/annotations":          lambda: self._send(200, self.vault.save_annotations(self._body())),
+            "/api/img-annotations":      lambda: self._send(200, self.vault.save_img_annotations(self._body())),
+            "/api/llm/improve-text":     lambda: self._llm_improve_text(),
+            "/api/llm/suggest-tags":     lambda: self._llm_suggest_tags(),
+            "/api/llm/chat":             lambda: self._llm_chat(),
+            "/api/llm/similar":          lambda: self._llm_similar(),
+            "/api/llm/graphrag":         lambda: self._llm_graphrag(),
+            "/api/llm/summarize-pdf":    lambda: self._llm_summarize_pdf(),
+            "/api/llm/describe-image":   lambda: self._llm_describe_image(),
+            "/api/llm/summarize-note":   lambda: self._llm_summarize_note(),
+            "/api/llm/mindmap":          lambda: self._llm_mindmap(),
+            "/api/import-url":           lambda: self._import_url(),
+            "/api/import-docx":          lambda: self._import_docx(),
+            "/api/import-pptx":          lambda: self._import_pptx(),
+            "/api/custom-models":        lambda: self._set_custom_models(),
+        }
+
     def do_POST(self):
         p=urlparse(self.path).path.rstrip("/")
+
+        # Exacte routes via dispatch tabel (meest gebruikt)
+        route = self._post_routes().get(p)
+        if route:
+            return route()
+
         if p=="/api/search":
             body = self._body()
             q    = body.get("query","").strip()
@@ -1756,8 +1879,6 @@ class ZKHandler(BaseHTTPRequestHandler):
                 "grammar": grammar_errors,
                 "lang":    lang,
             })
-        if p=="/api/notes":
-            return self._send(200,self.vault.save_note(self._body()))
         if p=="/api/annotations":
             a=self._body()
             if isinstance(a,list): self.vault.save_annotations(a); return self._send(200,{"ok":True})
@@ -1787,17 +1908,6 @@ class ZKHandler(BaseHTTPRequestHandler):
                         fname=hdr.split(b"filename=")[1].split(b'"')[1].decode()
                         return self._send(200,self.vault.save_image(fname,body.rstrip(b"\r\n--")))
             return self._send(400,{"error":"Multipart vereist"})
-        if p=="/api/llm/improve-text":   return self._llm_improve_text()
-        if p=="/api/llm/suggest-tags":   return self._llm_suggest_tags()
-        if p=="/api/llm/chat":           return self._llm_chat()
-        if p=="/api/llm/similar":        return self._llm_similar()
-        if p=="/api/llm/graphrag":       return self._llm_graphrag()
-        if p=="/api/llm/summarize-pdf":  return self._llm_summarize_pdf()
-        if p=="/api/llm/describe-image": return self._llm_describe_image()
-        if p=="/api/llm/summarize-note": return self._llm_summarize_note()
-        if p=="/api/llm/mindmap":        return self._llm_mindmap()
-        if p=="/api/import-url":         return self._import_url()
-        if p=="/api/import-docx":        return self._import_docx()
         if p=="/api/ext-pdfs":
             dirs = self._body().get("dirs", [])
             self.vault.set_ext_pdf_dirs(dirs)
@@ -1817,8 +1927,17 @@ class ZKHandler(BaseHTTPRequestHandler):
             return self._send(200,{"vault_path":ZKHandler.vault.path_str})
         if p=="/api/config":
             body=self._body()
-            allowed={"pdf_personal_use","pdf_personal_email","review_data"}
-            update={k:v for k,v in body.items() if k in allowed}
+            allowed={"pdf_personal_use","pdf_personal_email","review_data",
+                     "custom_models"}
+            update = {}
+            for k, v in body.items():
+                if k in allowed:
+                    update[k] = v
+                elif k == "whiteboard_boards" and isinstance(v, list):
+                    update[k] = v
+                elif k.startswith("whiteboard_"):
+                    # Whiteboard state: dict of None (verwijderen)
+                    update[k] = v
             self.vault.save_config(update)
             return self._send(200,{"ok":True})
         if p=="/api/cleanup-vault":
@@ -1827,8 +1946,8 @@ class ZKHandler(BaseHTTPRequestHandler):
                 import re as _re
                 notes_dir = self.vault.notes_dir
                 css_pat = _re.compile(
-                    r'(?:[\w-]+:)?#[0-9a-fA-F]{3,8};(?:[\w-]+:[^;">\
-]{1,80};?){1,12}"?>\s*'
+                    r'#?[0-9a-fA-F]{0,8};?(?:[\w-]+:[^;">\
+]{1,60};?){1,10}"?>'
                 )
                 cleaned = 0; skipped = 0; errors = []
                 for md_file in notes_dir.glob("*.md"):
@@ -1837,9 +1956,11 @@ class ZKHandler(BaseHTTPRequestHandler):
                         if raw.startswith("---"):
                             parts = raw.split("---", 2)
                             if len(parts) >= 3:
-                                new_body = _sanitize_llm_text(parts[2])
+                                new_body = css_pat.sub("", parts[2])
                                 import re as _re2
-                                if new_body != parts[2].strip():
+                                new_body = _re2.sub(r'^#+\s*$', '', new_body, flags=_re2.MULTILINE)
+                                new_body = _re2.sub(r'\n{3,}', '\n\n', new_body)
+                                if new_body != parts[2]:
                                     md_file.write_text("---" + parts[1] + "---" + new_body, encoding="utf-8")
                                     cleaned += 1
                                 else:
@@ -1847,8 +1968,8 @@ class ZKHandler(BaseHTTPRequestHandler):
                             else:
                                 skipped += 1
                         else:
-                            new_raw = _sanitize_llm_text(raw)
-                            if new_raw != raw.strip():
+                            new_raw = css_pat.sub("", raw)
+                            if new_raw != raw:
                                 md_file.write_text(new_raw, encoding="utf-8")
                                 cleaned += 1
                             else:
@@ -2227,8 +2348,17 @@ class ZKHandler(BaseHTTPRequestHandler):
         messages=body.get("messages",[])
 
         parts=self._build_context(body)
-        system=("Je bent een behulpzame kennisassistent voor een Zettelkasten. "
-                "Antwoord in de taal van de gebruiker. Wees analytisch en precies.")
+
+        # Gebruik client-side system prompt als die meegegeven is (bijv. Socratische modus)
+        # Anders: standaard Zettelkasten assistent prompt
+        client_system = body.get("system", "").strip()
+        if client_system:
+            system = client_system
+        else:
+            system=("Je bent een behulpzame kennisassistent voor een Zettelkasten. "
+                    "Antwoord in de taal van de gebruiker. Wees analytisch en precies.")
+
+        # Kenniscontext (notities, PDFs) altijd toevoegen indien aanwezig
         if parts: system+="\n\n# Kenniscontext:\n\n"+"\n\n---\n\n".join(parts)
 
         self.send_response(200)
@@ -2680,6 +2810,43 @@ class ZKHandler(BaseHTTPRequestHandler):
         except Exception as e:
             try: self.wfile.write(("data: "+json.dumps({"error":"Mistral: "+str(e)})+"\n\n").encode()); self.wfile.flush()
             except: pass
+
+    def _stream_custom_openai(self, model, system, messages, endpoint, api_key=""):
+        """Stream via OpenAI-compatibele custom endpoint."""
+        payload = json.dumps({
+            "model": model,
+            "stream": True,
+            "messages": ([{"role":"system","content":system}] if system else []) + messages,
+        }).encode()
+        headers = {"Content-Type": "application/json"}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        try:
+            req = urllib.request.Request(endpoint, data=payload, headers=headers)
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                for raw in resp:
+                    line = raw.decode("utf-8","replace").strip()
+                    if not line or line == "data: [DONE]": continue
+                    if line.startswith("data: "):
+                        try:
+                            chunk = json.loads(line[6:])
+                            token = (chunk.get("choices",[{}])[0]
+                                     .get("delta",{}).get("content",""))
+                            if token:
+                                self.wfile.write(
+                                    f'data: {json.dumps({"token":token})}\n\n'.encode())
+                                self.wfile.flush()
+                        except Exception:
+                            pass
+        except Exception as e:
+            self.wfile.write(f'data: {json.dumps({"error":str(e)})}\n\n'.encode())
+
+    def _get_custom_model_config(self, model_id):
+        """Geeft custom model config terug als het model_id matcht, anders None."""
+        for m in self.vault.get_custom_models():
+            if m["id"] == model_id:
+                return m
+        return None
 
     def _stream_ollama(self, model, system, messages):
         """Streaming via lokale Ollama."""
@@ -3188,14 +3355,31 @@ class ZKHandler(BaseHTTPRequestHandler):
         if not summary:
             return self._send(500, {"error":"Model gaf geen samenvatting"})
 
-        # ── HTML/CSS sanitering via centrale helper ────────────────────────────
-        summary = _sanitize_llm_text(summary)
-
-        # Samenvatting-labels verwijderen die het model toevoegt
+        # ── Robuuste HTML/CSS sanitering ─────────────────────────────────────────
         import re as _re_s
+
+        # Stap 1: volledige HTML-tags verwijderen (inclusief attributen)
+        summary = _re_s.sub(r'<[^>]*>', '', summary)
+
+        # Stap 2: CSS inline stijlen die overblijven na tag-verwijdering
+        # bijv. "#8ac6f2;font-weight:bold;font-size:13px;margin-bottom:6px"
+        summary = _re_s.sub(r'#?[0-9a-fA-F]{3,8};[\w-]+:[^;\n]{1,60}(?:;[\w-]+:[^;\n]{1,60})*', '', summary)
+        summary = _re_s.sub(r'[\w-]+:[\w\s#.,%()]+;(?:[\w-]+:[\w\s#.,%()]+;?)*', '', summary)
+
+        # Stap 3: HTML-entiteiten decoderen
+        for enc, dec in [('&amp;','&'),('&lt;','<'),('&gt;','>'),('&nbsp;',' '),('&#39;',"'"),('&quot;','"')]:
+            summary = summary.replace(enc, dec)
+
+        # Stap 4: losse > of < tekens opruimen
+        summary = _re_s.sub(r'(?<![\w\s])[<>](?![\w\s])', '', summary)
+
+        # Stap 5: samenvatting-labels verwijderen die het model toevoegt
         summary = _re_s.sub(r'\*{0,2}(?:SAMENVATTING|Samenvatting|SUMMARY|Summary)\*{0,2}\s*[:\n]', '', summary)
         summary = _re_s.sub(r'={2,}\w+={2,}\s*', '', summary)
+
+        # Stap 6: witruimte normaliseren
         summary = _re_s.sub(r'[ \t]{2,}', ' ', summary)
+        summary = _re_s.sub(r'\n{3,}', '\n\n', summary)
         summary = summary.strip()
         return self._send(200, {"ok": True, "summary": summary})
 
@@ -3549,6 +3733,585 @@ class ZKHandler(BaseHTTPRequestHandler):
             print(f"[docx] XML-fallback fout: {e}", flush=True)
             return "", ""
 
+    def _import_pptx(self):
+        """Importeer PPTX: sla op als PDF + maak één samenvatting-notitie."""
+        import tempfile, os as _os, re as _re
+
+        ct = self.headers.get("Content-Type", "")
+        if "multipart/form-data" not in ct:
+            return self._send(400, {"error": "multipart/form-data vereist"})
+
+        length = int(self.headers.get("Content-Length", 0))
+        raw    = self.rfile.read(length)
+
+        from urllib.parse import parse_qs, urlparse as _up
+        qs    = parse_qs(_up(self.path).query)
+        model = qs.get("model", [""])[0]
+
+        bm = _re.search(r'boundary=([^\s;]+)', ct)
+        if not bm:
+            return self._send(400, {"error": "Geen boundary gevonden"})
+        boundary = bm.group(1).strip('"').encode()
+
+        parts    = raw.split(b"--" + boundary)
+        pptx_data = None
+        filename  = "presentatie.pptx"
+        for part in parts:
+            if b'filename=' not in part: continue
+            m = _re.search(rb'filename=["\']?([^"\'\r\n]+)["\']?', part)
+            if m: filename = m.group(1).decode("utf-8", "replace").strip()
+            sep = b"\r\n\r\n"
+            if sep in part:
+                pptx_data = part.split(sep, 1)[1].rstrip(b"\r\n-")
+            break
+
+        if not pptx_data:
+            return self._send(400, {"error": "Geen PPTX-bestand ontvangen"})
+
+        with tempfile.NamedTemporaryFile(suffix=".pptx", delete=False) as tf:
+            tf.write(pptx_data); tmp_pptx = tf.name
+
+        try:
+            result = self._process_pptx(tmp_pptx, filename, model)
+        finally:
+            try: _os.unlink(tmp_pptx)
+            except: pass
+
+        return self._send(200, result)
+
+    def _process_pptx(self, pptx_path, filename, model=""):
+        """Verwerk PPTX: converteer naar PDF + extraheer slide-data voor samenvatting."""
+        import re as _re, tempfile as _tmp, os as _os
+
+        try:
+            from pptx import Presentation
+        except ImportError:
+            return {"error": "python-pptx niet beschikbaar"}
+
+        prs  = Presentation(pptx_path)
+        stem = _re.sub(r"\.pptx?$", "", filename, flags=_re.IGNORECASE)
+        title = stem
+
+        # ── Extraheer slide-tekst ────────────────────────────────────────────
+        slides_out = []
+        for i, slide in enumerate(prs.slides):
+            slide_title = ""
+            body_parts  = []
+            notes_text  = ""
+
+            if slide.has_notes_slide:
+                tf = slide.notes_slide.notes_text_frame
+                notes_text = tf.text.strip() if tf else ""
+
+            for shape in slide.shapes:
+                if not shape.has_text_frame: continue
+                name = (shape.name or "").lower()
+                _ph_idx = None
+                try:
+                    pf = shape.placeholder_format
+                    if pf is not None: _ph_idx = pf.idx
+                except (ValueError, AttributeError): pass
+                is_title = ("title" in name or _ph_idx == 0)
+                text = shape.text_frame.text.strip()
+                if not text: continue
+                if is_title:
+                    slide_title = text
+                    if i == 0 and text: title = text
+                else:
+                    lines = []
+                    for para in shape.text_frame.paragraphs:
+                        t = para.text.strip()
+                        if not t: continue
+                        lvl = para.level or 0
+                        lines.append("  " * lvl + "- " + t)
+                    if lines: body_parts.append("\n".join(lines))
+
+            body = "\n\n".join(body_parts)
+            word_count = len((slide_title + " " + body).split())
+            if not slide_title and not body: continue
+
+            slides_out.append({
+                "index": i + 1,
+                "title": slide_title or f"Slide {i+1}",
+                "body":  body,
+                "notes": notes_text,
+                "words": word_count,
+            })
+
+        # ── Converteer naar PDF en sla op in vault ──────────────────────────
+        pdf_filename = stem + ".pdf"
+        with _tmp.NamedTemporaryFile(suffix=".pdf", delete=False) as tf:
+            tmp_pdf = tf.name
+
+        pdf_saved = False
+        try:
+            ok = self._pptx_to_pdf(pptx_path, tmp_pdf)
+            if ok and _os.path.getsize(tmp_pdf) > 0:
+                with open(tmp_pdf, "rb") as f:
+                    pdf_data = f.read()
+                saved_name = self.vault.save_pdf(pdf_filename, pdf_data)
+                pdf_filename = saved_name
+                pdf_saved = True
+                print(f"[pptx] PDF opgeslagen: {saved_name}", flush=True)
+        except Exception as e:
+            print(f"[pptx] PDF opslaan mislukt: {e}", flush=True)
+        finally:
+            try: _os.unlink(tmp_pdf)
+            except: pass
+
+        # ── Bouw volledige tekst voor AI ────────────────────────────────────
+        full_text = f"Presentatie: {title}\n\n"
+        for s in slides_out:
+            full_text += f"## {s['title']}\n"
+            if s["body"]:  full_text += s["body"] + "\n"
+            if s["notes"]: full_text += f"> {s['notes']}\n"
+            full_text += "\n"
+
+        # AI samenvatting
+        overall_summary = ""
+        if model and full_text.strip():
+            _, overall_summary = self._llm_clean_article(full_text[:5000], model)
+
+        return {
+            "ok":        True,
+            "title":     title,
+            "filename":  filename,
+            "pdf_saved": pdf_saved,
+            "pdf_name":  pdf_filename if pdf_saved else None,
+            "slides":    slides_out,
+            "summary":   (overall_summary or ""),
+            "full_text": full_text[:4000],
+        }
+
+
+    def _pptx_to_pdf(self, pptx_path, pdf_path):
+        """Converteer PPTX naar PDF. Probeert LibreOffice, dan reportlab."""
+        import subprocess as _sp, shutil as _sh, os as _os
+
+        # Zoek LibreOffice op macOS/Linux
+        lo = None
+        for _p in ["/Applications/LibreOffice.app/Contents/MacOS/soffice",
+                   "/usr/bin/libreoffice", "/usr/bin/soffice",
+                   "/usr/local/bin/soffice"]:
+            if _os.path.exists(_p): lo = _p; break
+        if not lo: lo = _sh.which("libreoffice") or _sh.which("soffice")
+
+        if lo:
+            import tempfile as _tmp
+            with _tmp.TemporaryDirectory() as tmpdir:
+                r = _sp.run([lo, "--headless", "--convert-to", "pdf",
+                              "--outdir", tmpdir, pptx_path],
+                             capture_output=True, timeout=90)
+                import glob as _gl
+                pdfs = _gl.glob(_os.path.join(tmpdir, "*.pdf"))
+                if pdfs:
+                    import shutil
+                    shutil.copy(pdfs[0], pdf_path)
+                    return True
+                print(f"[pptx->pdf] LibreOffice mislukt: {r.stderr[:200]}", flush=True)
+
+        # Fallback: reportlab
+        try:
+            from pptx import Presentation
+            from pptx.enum.shapes import MSO_SHAPE_TYPE
+            from reportlab.pdfgen import canvas as _rl_canvas
+            from reportlab.lib.utils import ImageReader as _IRdr
+            import io as _io
+
+            prs = Presentation(pptx_path)
+            sw_pt = prs.slide_width.emu / 914400 * 72
+            sh_pt = prs.slide_height.emu / 914400 * 72
+
+            def ep(e): return (e or 0) / 914400 * 72
+
+            c = _rl_canvas.Canvas(pdf_path, pagesize=(sw_pt, sh_pt))
+            for slide in prs.slides:
+                # Achtergrond
+                bg = (0.094, 0.11, 0.125)
+                try:
+                    fill = slide.background.fill
+                    if fill.type is not None:
+                        rgb = fill.fore_color.rgb
+                        bg = (rgb.red/255, rgb.green/255, rgb.blue/255)
+                except: pass
+                c.setFillColorRGB(*bg)
+                c.rect(0, 0, sw_pt, sh_pt, fill=1, stroke=0)
+
+                for shape in slide.shapes:
+                    try:
+                        l,t,w,h = ep(shape.left),ep(shape.top),ep(shape.width),ep(shape.height)
+                        rl_y = sh_pt - t - h
+                        if shape.shape_type == MSO_SHAPE_TYPE.PICTURE:
+                            c.drawImage(_IRdr(_io.BytesIO(shape.image.blob)),
+                                        l, rl_y, w, h, preserveAspectRatio=True, mask="auto")
+                            continue
+                        if not shape.has_text_frame: continue
+                        tf = shape.text_frame
+                        if not tf.text.strip(): continue
+                        is_title = False
+                        try:
+                            pf = shape.placeholder_format
+                            if pf is not None and pf.idx == 0: is_title = True
+                        except: pass
+                        if "title" in (shape.name or "").lower(): is_title = True
+                        y_cur = rl_y + h - 2
+                        for para in tf.paragraphs:
+                            txt = para.text.strip()
+                            if not txt: y_cur -= 5; continue
+                            fs = 12.0
+                            try:
+                                if para.runs and para.runs[0].font.size:
+                                    fs = float(para.runs[0].font.size.pt)
+                                elif is_title: fs = max(16.0, min(36.0, h * 0.22))
+                                else: fs = max(9.0, min(20.0, (h-8)/max(1,len(tf.paragraphs))*0.72))
+                            except: pass
+                            fs = max(7.0, min(48.0, fs))
+                            fr, fg, fb = (0.94, 0.97, 0.96)
+                            try:
+                                run = para.runs[0] if para.runs else None
+                                if run and run.font.color and run.font.color.type:
+                                    rgb = run.font.color.rgb
+                                    fr,fg,fb = rgb.red/255,rgb.green/255,rgb.blue/255
+                            except: pass
+                            bold = is_title
+                            try:
+                                if para.runs and para.runs[0].font.bold is not None:
+                                    bold = para.runs[0].font.bold
+                            except: pass
+                            c.setFont("Helvetica-Bold" if bold else "Helvetica", fs)
+                            c.setFillColorRGB(fr, fg, fb)
+                            indent = ep(getattr(para.paragraph_format,"left_indent",None) or 0)
+                            y_cur -= fs + 2
+                            if y_cur > rl_y - 2:
+                                max_ch = max(10, int(w / (fs * 0.52)))
+                                line = txt[:max_ch] + ("…" if len(txt)>max_ch else "")
+                                c.drawString(l + indent + 4, y_cur, line)
+                    except: pass
+                c.showPage()
+            c.save()
+            return True
+        except Exception as e:
+            print(f"[pptx->pdf] reportlab mislukt: {e}", flush=True)
+            return False
+
+    def _pptx_to_slides(self, path, filename, model=""):
+        """Converteer PPTX naar slide-data voor de frontend."""
+        import re as _re
+
+        try:
+            from pptx import Presentation
+            from pptx.util import Pt
+        except ImportError:
+            return {"error": "python-pptx niet beschikbaar"}
+
+        prs   = Presentation(path)
+        stem  = _re.sub(r"\.pptx?$", "", filename, flags=_re.IGNORECASE)
+        title = stem
+
+        slides_out = []
+
+        for i, slide in enumerate(prs.slides):
+            slide_title = ""
+            body_parts  = []
+            notes_text  = ""
+
+            # Sprekernotities
+            if slide.has_notes_slide:
+                tf = slide.notes_slide.notes_text_frame
+                notes_text = tf.text.strip() if tf else ""
+
+            # Shapes: titel + content
+            for shape in slide.shapes:
+                if not shape.has_text_frame:
+                    continue
+                name = (shape.name or "").lower()
+                # Detecteer titel-shape — omhul placeholder_format in try/except
+                # want pptx gooit ValueError als shape geen placeholder is
+                _ph_idx = None
+                try:
+                    pf = shape.placeholder_format
+                    if pf is not None:
+                        _ph_idx = pf.idx
+                except (ValueError, AttributeError):
+                    pass
+                is_title = (
+                    "title" in name or
+                    _ph_idx == 0
+                )
+                text = shape.text_frame.text.strip()
+                if not text:
+                    continue
+                if is_title:
+                    slide_title = text
+                    if i == 0 and text:
+                        title = text  # Eerste slide titel = presentatietitel
+                else:
+                    # Converteer bullets naar markdown
+                    lines = []
+                    for para in shape.text_frame.paragraphs:
+                        t = para.text.strip()
+                        if not t:
+                            continue
+                        lvl = para.level or 0
+                        prefix = "  " * lvl + "- "
+                        lines.append(prefix + t)
+                    if lines:
+                        body_parts.append("\n".join(lines))
+
+            body = "\n\n".join(body_parts)
+
+            # Sla volledig lege slides over
+            if not slide_title and not body:
+                continue
+
+            # Suggereer om te includeren als er substantiële content is
+            word_count = len((slide_title + " " + body).split())
+            include    = word_count >= 5
+
+            slides_out.append({
+                "index":   i + 1,
+                "title":   slide_title or f"Slide {i + 1}",
+                "body":    body,
+                "notes":   notes_text,
+                "include": include,
+                "words":   word_count,
+            })
+
+        # Volledige tekst voor AI-analyse
+        full_text = f"Presentatie: {title}\n\n"
+        full_text += "\n\n".join(
+            f"## {s['title']}\n{s['body']}" + (f"\n> {s['notes']}" if s['notes'] else "")
+            for s in slides_out
+        )
+
+        # AI: samenvatting van de hele presentatie
+        overall_summary = ""
+        if model and full_text.strip():
+            _, overall_summary = self._llm_clean_article(full_text[:5000], model)
+
+        # Slide-afbeeldingen via LibreOffice
+        slide_images = self._pptx_slides_to_images(path)
+
+        return {
+            "ok":        True,
+            "title":     title,
+            "filename":  filename,
+            "slides":    slides_out,
+            "summary":   overall_summary,
+            "full_text": full_text[:4000],
+            "images":    slide_images,
+        }
+
+    def _pptx_slides_to_images(self, pptx_path):
+        """Render PPTX slides naar base64 PNG.
+        Pipeline: python-pptx shapes → reportlab PDF → pdftoppm PNG (144 dpi).
+        Fallback naar eenvoudige Pillow render als pdftoppm ontbreekt.
+        """
+        try:
+            from pptx import Presentation
+            from pptx.enum.shapes import MSO_SHAPE_TYPE
+            from reportlab.pdfgen import canvas as _rl_canvas
+            from reportlab.lib.utils import ImageReader as _IRdr
+            import io as _io, base64, tempfile as _tmp, subprocess as _sp
+            import glob as _gl, os as _os
+        except ImportError as e:
+            print(f"[pptx-images] Import mislukt: {e}", flush=True)
+            return []
+
+        # Zoek pdftoppm — ook op vaste paden buiten PATH
+        _pdftoppm = None
+        for _p in ["/usr/bin/pdftoppm", "/usr/local/bin/pdftoppm",
+                   "/opt/homebrew/bin/pdftoppm", "/opt/local/bin/pdftoppm"]:
+            if _os.path.exists(_p): _pdftoppm = _p; break
+        if not _pdftoppm:
+            import shutil as _sh
+            _pdftoppm = _sh.which("pdftoppm")
+
+        try:
+            prs = Presentation(pptx_path)
+        except Exception as e:
+            print(f"[pptx-images] Laden mislukt: {e}", flush=True)
+            return []
+
+        def _emu_pt(e): return (e or 0) / 914400 * 72
+
+        def _slide_to_pdf_page(c, slide, sw_pt, sh_pt):
+            # Achtergrond
+            bg = (0.094, 0.11, 0.125)
+            try:
+                fill = slide.background.fill
+                if fill.type is not None:
+                    rgb = fill.fore_color.rgb
+                    bg = (rgb.red/255, rgb.green/255, rgb.blue/255)
+            except: pass
+            c.setFillColorRGB(*bg)
+            c.rect(0, 0, sw_pt, sh_pt, fill=1, stroke=0)
+
+            for shape in slide.shapes:
+                try:
+                    l = _emu_pt(shape.left);  t = _emu_pt(shape.top)
+                    w = _emu_pt(shape.width); h = _emu_pt(shape.height)
+                    rl_y = sh_pt - t - h
+
+                    if shape.shape_type == MSO_SHAPE_TYPE.PICTURE:
+                        c.drawImage(_IRdr(_io.BytesIO(shape.image.blob)),
+                                    l, rl_y, w, h,
+                                    preserveAspectRatio=True, mask="auto")
+                        continue
+
+                    if not shape.has_text_frame: continue
+                    tf = shape.text_frame
+                    if not tf.text.strip(): continue
+
+                    is_title = False
+                    try:
+                        pf = shape.placeholder_format
+                        if pf is not None and pf.idx == 0: is_title = True
+                    except: pass
+                    if "title" in (shape.name or "").lower(): is_title = True
+
+                    y_cur = rl_y + h - 2
+                    for para in tf.paragraphs:
+                        txt = para.text.strip()
+                        if not txt: y_cur -= 5; continue
+
+                        # Fontgrootte
+                        fs = 12.0
+                        try:
+                            if para.runs and para.runs[0].font.size:
+                                fs = float(para.runs[0].font.size.pt)
+                            elif is_title:
+                                fs = max(16.0, min(36.0, h * 0.22))
+                            else:
+                                n = max(1, len([p for p in tf.paragraphs if p.text.strip()]))
+                                fs = max(9.0, min(20.0, (h - 8) / n * 0.72))
+                        except: pass
+                        fs = max(7.0, min(48.0, fs))
+
+                        # Kleur
+                        fr, fg, fb = (0.94, 0.97, 0.96)
+                        try:
+                            run = para.runs[0] if para.runs else None
+                            if run and run.font.color and run.font.color.type:
+                                rgb = run.font.color.rgb
+                                fr,fg,fb = rgb.red/255, rgb.green/255, rgb.blue/255
+                        except: pass
+
+                        bold = is_title
+                        try:
+                            if para.runs and para.runs[0].font.bold is not None:
+                                bold = para.runs[0].font.bold
+                        except: pass
+
+                        fname = "Helvetica-Bold" if bold else "Helvetica"
+                        c.setFont(fname, fs)
+                        c.setFillColorRGB(fr, fg, fb)
+
+                        indent = _emu_pt(getattr(para.paragraph_format,
+                                                  "left_indent", None) or 0)
+                        y_cur -= fs + 2
+                        if y_cur > rl_y - 2:
+                            # Afkappen op breedte
+                            max_ch = max(10, int(w / (fs * 0.52)))
+                            line = txt[:max_ch] + ("…" if len(txt) > max_ch else "")
+                            c.drawString(l + indent + 4, y_cur, line)
+                except Exception: pass
+
+        # Bouw PDF in geheugen
+        sw_pt = _emu_pt(prs.slide_width.emu)
+        sh_pt = _emu_pt(prs.slide_height.emu)
+        results = []
+
+        with _tmp.TemporaryDirectory() as tmpdir:
+            pdf_path = _os.path.join(tmpdir, "slides.pdf")
+            try:
+                c = _rl_canvas.Canvas(pdf_path, pagesize=(sw_pt, sh_pt))
+                for slide in prs.slides:
+                    _slide_to_pdf_page(c, slide, sw_pt, sh_pt)
+                    c.showPage()
+                c.save()
+            except Exception as e:
+                print(f"[pptx-images] PDF bouwen mislukt: {e}", flush=True)
+                return []
+
+            if _pdftoppm:
+                # Hoge kwaliteit via pdftoppm
+                prefix = _os.path.join(tmpdir, "s")
+                r2 = _sp.run([_pdftoppm, "-r", "150", "-png", pdf_path, prefix],
+                             capture_output=True, timeout=60)
+                # pdftoppm maakt s-1.png of s-01.png afhankelijk van versie
+                import re as _re
+                all_pngs = _gl.glob(_os.path.join(tmpdir, "s*.png"))
+                pngs = sorted(
+                    all_pngs,
+                    key=lambda p: int(_re.search(r"-(\d+)\.png$", p).group(1))
+                                  if _re.search(r"-(\d+)\.png$", p) else 0
+                )
+                if not pngs:
+                    print(f"[pptx-images] pdftoppm geen output, stderr: {r2.stderr[:200]}", flush=True)
+                for png in pngs:
+                    with open(png, "rb") as f:
+                        results.append(base64.b64encode(f.read()).decode())
+
+            # Fallback: Pillow direct vanuit PDF via pypdf
+            if not results:
+                try:
+                    import pypdf
+                    from PIL import Image as _PILImg
+                    reader = pypdf.PdfReader(pdf_path)
+                    for page_num in range(len(reader.pages)):
+                        # Render pagina als afbeelding via pypdf + PIL
+                        # Gebruik een vaste resolutie van 150 dpi
+                        page = reader.pages[page_num]
+                        # Maak een wit canvas op basis van paginagrootte
+                        w_pt = float(page.mediabox.width)
+                        h_pt = float(page.mediabox.height)
+                        dpi = 150
+                        w_px = int(w_pt / 72 * dpi)
+                        h_px = int(h_pt / 72 * dpi)
+                        # pypdf kan niet direct renderen — gebruik Pillow met reportlab output
+                        # We renderen de al gemaakte slide opnieuw via Pillow als fallback
+                        raise Exception("gebruik Pillow fallback")
+                except Exception:
+                    # Allerlaatste fallback: render elke slide direct via Pillow
+                    try:
+                        from PIL import Image as _PILImg, ImageDraw as _PILDraw, ImageFont as _PILFont
+                        import textwrap as _tw2
+                        for slide in prs.slides:
+                            out_w, out_h = 900, int(900 * sh_pt / sw_pt)
+                            pil_img = _PILImg.new("RGB", (out_w, out_h), (24, 28, 32))
+                            draw = _PILDraw.Draw(pil_img)
+                            def _ep(e): return int((e or 0) / 914400 * 96 * out_w / (sw_pt / 72 * 96))
+                            for shape in slide.shapes:
+                                try:
+                                    if not shape.has_text_frame: continue
+                                    txt = shape.text_frame.text.strip()
+                                    if not txt: continue
+                                    l2,t2 = _ep(shape.left), _ep(shape.top)
+                                    h2 = _ep(shape.height)
+                                    is_t = "title" in (shape.name or "").lower()
+                                    fs2 = min(28 if is_t else 16, max(10, h2 // (4 if is_t else 8)))
+                                    try: font2 = _PILFont.truetype("/System/Library/Fonts/Helvetica.ttc", fs2)
+                                    except: font2 = _PILFont.load_default()
+                                    col2 = (240, 248, 245) if is_t else (180, 210, 205)
+                                    y2 = t2 + 4
+                                    for line in txt.split("\n"):
+                                        for wl in (_tw2.wrap(line, 70) or [" "]):
+                                            draw.text((l2+6, y2), wl, fill=col2, font=font2)
+                                            y2 += fs2 + 3
+                                except Exception: pass
+                            buf2 = _io.BytesIO()
+                            pil_img.save(buf2, "PNG")
+                            results.append(base64.b64encode(buf2.getvalue()).decode())
+                        print(f"[pptx-images] Pillow fallback: {len(results)} slides", flush=True)
+                    except Exception as e2:
+                        print(f"[pptx-images] Alle fallbacks mislukt: {e2}", flush=True)
+
+        print(f"[pptx-images] {len(results)} slides gerenderd via reportlab+pdftoppm",
+              flush=True)
+        return results
+
+
     def _llm_clean_article(self, text, model=""):
         """Maak een Markdown-samenvatting van een tekst via LLM.
         Geeft (opgeschoonde_tekst, samenvatting) terug.
@@ -3646,7 +4409,7 @@ class ZKHandler(BaseHTTPRequestHandler):
             print(f"[docx-samenvatting] fout: {e}", flush=True)
             summary = ""
 
-        return text, summary.strip()
+        return text, (summary or "").strip()
 
     def _import_url(self):
         """Haal inhoud van een URL op en converteer naar Markdown — Instapaper-stijl."""
@@ -4105,8 +4868,13 @@ class ZKHandler(BaseHTTPRequestHandler):
             response_text = _re.sub(r'^```\w*\n?', '', response_text).rstrip('`').strip()
 
             # ── Schoon de volledige response op VOOR parsen ─────────────────────
-            # Stap 1+2: CSS-rommel + HTML tags via centrale helper
-            response_text = _sanitize_llm_text(response_text)
+            # Stap 1: CSS-rommel (inline stijlen van lokale modellen)
+            _css_pat = _re.compile(
+                r'#?[0-9a-fA-F]{0,8};?(?:[\w-]+:[^;">' + chr(10) + r']{1,60};?){1,10}"?>'
+            )
+            response_text = _css_pat.sub('', response_text)
+            # Stap 2: HTML tags die na CSS-strip overblijven (bijv. <span ...>)
+            response_text = _re.sub(r'<[^>]{0,300}>', '', response_text)
             # Stap 3: losse label-regels zoals "📋 SAMENVATTING" of "ARTIKEL" op eigen regel
             response_text = _re.sub(
                 r'^[\U0001F4CB\U0001F5D2\U0000270D\s]*(?:SAMENVATTING|SUMMARY|ARTIKEL|ARTICLE)\s*$',
@@ -4172,8 +4940,13 @@ class ZKHandler(BaseHTTPRequestHandler):
 
             # ── Post-processing: markdown opschonen ──────────────────────────
             if md:
-                # Vangnet CSS-rommel + HTML via centrale helper
-                md = _sanitize_llm_text(md)
+                # Vangnet CSS-rommel (mocht iets door de pre-parse cleaning zijn geglipt)
+                md = _re.sub(
+                    r'#?[0-9a-fA-F]{0,8};?(?:[\w-]+:[^;">' + chr(10) + r']{1,60};?){1,10}"?>',
+                    '', md
+                )
+                # Vangnet HTML tags
+                md = _re.sub(r'<[^>]{0,300}>', '', md)
                 # Losse label-regels (SAMENVATTING / ARTIKEL op eigen regel)
                 md = _re.sub(
                     r'^[📋🗒️✍️\s]*(?:SAMENVATTING|SUMMARY|ARTIKEL|ARTICLE)\s*$',
@@ -4191,8 +4964,13 @@ class ZKHandler(BaseHTTPRequestHandler):
 
             # ── Summary post-processing ──────────────────────────────────────
             if summary:
-                # Strip CSS-rommel + HTML via centrale helper
-                summary = _sanitize_llm_text(summary)
+                # Strip resterende CSS-rommel (vangnet)
+                summary = _re.sub(
+                    r'#?[0-9a-fA-F]{0,8};?(?:[\w-]+:[^;">' + chr(10) + r']{1,60};?){1,10}"?>',
+                    '', summary
+                )
+                # Strip HTML tags
+                summary = _re.sub(r'<[^>]{0,300}>', '', summary)
                 # Strip markdown koppen en bold/italic opmaak
                 summary = _re.sub(r'^#{1,4}\s+', '', summary, flags=_re.MULTILINE)
                 summary = _re.sub(r'\*{1,3}([^*\n]+)\*{1,3}', r'\1', summary)
@@ -4219,58 +4997,6 @@ class ZKHandler(BaseHTTPRequestHandler):
             "markdown": md,
             "images":   saved_images,
         }
-
-def _sanitize_llm_text(text):
-    """Verwijder HTML/CSS-rommel die lokale LLMs soms produceren.
-    Werkt op raw tekst en op content met HTML-entities.
-    Iteratief zodat ook geneste constructies verdwijnen.
-    """
-    if not text:
-        return text
-    import re as _re
-
-    _NL = chr(10)
-
-    def _strip_tags(s):
-        prev = None
-        while prev != s:
-            prev = s
-            s = _re.sub(r'<[^<>]*>', '', s)
-        return s
-
-    def _strip_css(s):
-        # Met optioneel prop: prefix voor #hex  (bijv. color:#8ac6f2;...)
-        s = _re.sub(
-            r'(?:[\w-]+:)?#[0-9a-fA-F]{3,8};(?:[\w-]+:[^;">' + _NL + r']{1,80};?){1,12}"?>\s*',
-            '', s)
-        # Zonder #hex: meerdere prop:val paren  (bijv. font-weight:bold;font-size:13px">)
-        s = _re.sub(
-            r'(?:[\w-]+:[^;">' + _NL + r']{1,80};)*[\w-]+:[^;">' + _NL + r']{1,80}"?>\s*',
-            '', s)
-        return s
-
-    # Ronde 1: raw HTML + CSS
-    text = _strip_tags(text)
-    text = _strip_css(text)
-
-    # Ronde 2: entities decoderen en opnieuw strippen
-    decoded = (text
-               .replace('&lt;', '<').replace('&gt;', '>')
-               .replace('&quot;', '"').replace('&amp;', '&'))
-    if decoded != text:
-        decoded = _strip_tags(decoded)
-        decoded = _strip_css(decoded)
-        text = decoded
-
-    # Losse label-regels
-    text = _re.sub(
-        r'^[\U0001F4CB\U0001F5D2\U0000270D\s]*(?:SAMENVATTING|SUMMARY|ARTIKEL|ARTICLE)\s*$',
-        '', text, flags=_re.MULTILINE | _re.IGNORECASE
-    )
-    text = _re.sub(r'\n{3,}', '\n\n', text)
-    return text.strip()
-
-
 
 def get_local_ip():
     import socket

@@ -3,9 +3,26 @@
 // Props: notes[], serverPdfs[], serverImages[]
 
 const StatsPanel = ({ notes = [], serverPdfs = [], serverImages = [] }) => {
-  const { useMemo, useState } = React;
+  const { useMemo, useState, useEffect } = React;
   const [tab, setTab] = useState("overzicht");
   const [cleanupMsg, setCleanupMsg] = useState("");
+  const [disk, setDisk] = useState(null);
+
+  // Laad disk-gebruik bij openen
+  useEffect(() => {
+    fetch("/api/disk-usage")
+      .then(r => r.json())
+      .then(d => { if (d.ok) setDisk(d); })
+      .catch(() => {});
+  }, []);
+
+  const fmtBytes = (b) => {
+    if (b === undefined || b === null) return "–";
+    if (b < 1024)           return b + " B";
+    if (b < 1024 * 1024)    return (b / 1024).toFixed(1) + " KB";
+    if (b < 1024**3)        return (b / 1024**2).toFixed(1) + " MB";
+    return (b / 1024**3).toFixed(2) + " GB";
+  };
 
   const stats = useMemo(() => {
     const now     = Date.now();
@@ -179,6 +196,7 @@ const StatsPanel = ({ notes = [], serverPdfs = [], serverImages = [] }) => {
       tabBtn("groei",     "Groei"),
       tabBtn("tags",      "Tags"),
       tabBtn("top",       "Top notities"),
+      tabBtn("opslag",    "💾 Opslag"),
     ),
 
     // Scroll body
@@ -470,6 +488,141 @@ const StatsPanel = ({ notes = [], serverPdfs = [], serverImages = [] }) => {
             }
           }, "🧹 Vault opschonen")
         ])
+      )
+,
+
+      // ── Opslag tab ──────────────────────────────────────────────────────────
+      tab === "opslag" && React.createElement("div", {
+        style: { display: "flex", flexDirection: "column", gap: "12px" }
+      },
+
+        // Vault breakdown
+        card([
+          React.createElement("div", {
+            style: { fontSize: "11px", color: W.fgMuted, letterSpacing: "1px",
+                     marginBottom: "14px", fontWeight: "600" }
+          }, "💾 VAULT OPSLAG"),
+
+          disk === null
+            ? React.createElement("div", {
+                style: { fontSize: "13px", color: W.fgMuted, padding: "8px 0" }
+              }, "⏳ Laden…")
+            : React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: "10px" } },
+
+                // Totaal vault
+                React.createElement("div", {
+                  style: { display: "flex", justifyContent: "space-between",
+                           alignItems: "center", padding: "6px 0",
+                           borderBottom: `1px solid ${W.splitBg}` }
+                },
+                  React.createElement("span", { style: { fontSize: "13px", color: W.fg, fontWeight: "600" } },
+                    "Totaal vault"),
+                  React.createElement("span", { style: { fontSize: "15px", fontWeight: "700", color: W.blue } },
+                    fmtBytes(disk.vault_total))
+                ),
+
+                // Per categorie met balk
+                ...[
+                  { label: "📝 Notities",     bytes: disk.notes,       color: W.blue    },
+                  { label: "📄 PDFs",          bytes: disk.pdfs,        color: W.yellow  },
+                  { label: "🖼 Afbeeldingen",  bytes: disk.images,      color: W.comment },
+                  { label: "📌 Annotaties",    bytes: disk.annotations, color: W.purple  },
+                ].map(({ label, bytes, color }) => {
+                  const pct = disk.vault_total > 0
+                    ? Math.round(bytes / disk.vault_total * 100) : 0;
+                  return React.createElement("div", { key: label },
+                    React.createElement("div", {
+                      style: { display: "flex", justifyContent: "space-between",
+                               fontSize: "12px", marginBottom: "4px" }
+                    },
+                      React.createElement("span", { style: { color: W.fg } }, label),
+                      React.createElement("span", { style: { color, fontWeight: "600" } },
+                        fmtBytes(bytes) + "  " + pct + "%")
+                    ),
+                    React.createElement("div", {
+                      style: { height: "5px", background: "rgba(255,255,255,0.07)",
+                               borderRadius: "3px", overflow: "hidden" }
+                    },
+                      React.createElement("div", {
+                        style: { width: pct + "%", height: "100%", background: color,
+                                 borderRadius: "3px", transition: "width 0.5s ease" }
+                      })
+                    )
+                  );
+                })
+              )
+        ]),
+
+        // Schijfruimte systeem
+        disk && disk.disk_total > 0 && card([
+          React.createElement("div", {
+            style: { fontSize: "11px", color: W.fgMuted, letterSpacing: "1px",
+                     marginBottom: "14px", fontWeight: "600" }
+          }, "💿 SCHIJFRUIMTE"),
+
+          React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: "8px" } },
+
+            // Grote getallen
+            React.createElement("div", {
+              style: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "8px",
+                       marginBottom: "12px" }
+            },
+              statNum(fmtBytes(disk.disk_total), "totaal",    W.fgMuted),
+              statNum(fmtBytes(disk.disk_used),  "gebruikt",  W.orange),
+              statNum(fmtBytes(disk.disk_free),  "vrij",      W.comment),
+            ),
+
+            // Gebruik balk
+            React.createElement("div", null,
+              React.createElement("div", {
+                style: { display: "flex", justifyContent: "space-between",
+                         fontSize: "11px", color: W.fgMuted, marginBottom: "5px" }
+              },
+                React.createElement("span", null, "Schijfgebruik"),
+                React.createElement("span", { style: { color: W.orange, fontWeight: "600" } },
+                  Math.round(disk.disk_used / disk.disk_total * 100) + "%")
+              ),
+              React.createElement("div", {
+                style: { height: "8px", background: "rgba(255,255,255,0.07)",
+                         borderRadius: "4px", overflow: "hidden" }
+              },
+                React.createElement("div", {
+                  style: {
+                    width: Math.round(disk.disk_used / disk.disk_total * 100) + "%",
+                    height: "100%",
+                    background: disk.disk_used / disk.disk_total > 0.9 ? W.orange
+                              : disk.disk_used / disk.disk_total > 0.7 ? W.yellow : W.comment,
+                    borderRadius: "4px",
+                    transition: "width 0.6s ease"
+                  }
+                })
+              )
+            ),
+
+            // Vault als % van totale schijf
+            React.createElement("div", {
+              style: { fontSize: "11px", color: W.fgDim, marginTop: "4px",
+                       textAlign: "right", fontStyle: "italic" }
+            },
+              `Vault gebruikt ${((disk.vault_total / disk.disk_total) * 100).toFixed(3)}% van de schijf`)
+          )
+        ]),
+
+        // Refresh knop
+        React.createElement("button", {
+          onClick: () => {
+            setDisk(null);
+            fetch("/api/disk-usage").then(r=>r.json())
+              .then(d => { if(d.ok) setDisk(d); }).catch(()=>{});
+          },
+          style: {
+            alignSelf: "flex-start", padding: "6px 16px",
+            background: "rgba(138,198,242,0.08)",
+            border: "1px solid rgba(138,198,242,0.2)",
+            color: W.blue, borderRadius: "6px",
+            fontSize: "12px", cursor: "pointer"
+          }
+        }, "↻ Vernieuwen")
       )
     )
   );

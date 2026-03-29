@@ -10,7 +10,17 @@ const NotesMeta = ({
   onTogglePanel,
   onSelectNote,
   onTagRemove,
+  onNoteTypeChange,
 }) => {
+
+  // Notitietypen: vluchtig → literatuur → permanent
+  const NOTE_TYPES = [
+    { id: "",           label: "Geen type",   color: W.fgMuted,  desc: "" },
+    { id: "fleeting",   label: "Vluchtig",    color: W.orange,   desc: "Snelle capture, nog verwerken" },
+    { id: "literature", label: "Literatuur",  color: W.blue,     desc: "Brongebonden, eigen woorden" },
+    { id: "permanent",  label: "Permanent",   color: W.comment,  desc: "Eigen inzicht, atomair" },
+    { id: "index",      label: "Index",       color: W.purple,   desc: "Structuurnotitie, navigatie" },
+  ];
   if (!note) return null;
 
   const outLinks = extractLinks(note.content).map(id => {
@@ -47,6 +57,33 @@ const NotesMeta = ({
         style: { color: W.comment, wordBreak: "break-all",
                  marginBottom: "14px", fontSize: "14px" }
       }, note.id),
+
+      // Notitietype
+      React.createElement("div", {
+        style: { color: W.fgMuted, fontSize: "9px", marginBottom: "6px", letterSpacing: "1px" }
+      }, "TYPE"),
+      React.createElement("div", {
+        style: { display: "flex", flexWrap: "wrap", gap: "4px", marginBottom: "14px" }
+      },
+        NOTE_TYPES.map(({ id, label, color }) =>
+          React.createElement("button", {
+            key: id,
+            onClick: () => onNoteTypeChange?.(id),
+            title: NOTE_TYPES.find(t => t.id === id)?.desc || "",
+            style: {
+              background: (note.noteType || "") === id
+                ? `rgba(${color === W.orange ? "229,120,109" : color === W.blue ? "138,198,242" : color === W.comment ? "159,202,86" : color === W.purple ? "215,135,255" : "152,144,135"},0.18)`
+                : "transparent",
+              border: `1px solid ${(note.noteType || "") === id ? color : W.splitBg}`,
+              borderRadius: "4px",
+              color: (note.noteType || "") === id ? color : W.fgMuted,
+              padding: "3px 8px", fontSize: "10px",
+              cursor: "pointer", transition: "all 0.12s",
+              fontWeight: (note.noteType || "") === id ? "600" : "400",
+            }
+          }, label)
+        )
+      ),
 
       // Tags
       React.createElement("div", {

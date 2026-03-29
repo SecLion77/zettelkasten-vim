@@ -314,7 +314,7 @@ const SmartTagEditor=({tags=[],onChange,allTags=[],content="",llmModel=""})=>{
       // Alles-toevoegen knop als er meerdere nieuwe zijn
       aiSuggested.filter(t=>!tags.includes(t)).length > 1 &&
         React.createElement("button",{
-          onClick:()=>{ aiSuggested.filter(t=>!tags.includes(t)).forEach(t=>add(t)); },
+          onClick:()=>{ const ns=aiSuggested.filter(t=>!tags.includes(t)).map(t=>t.trim().toLowerCase().replace(/\s+/g,'_').replace(/^#/,'')).filter(Boolean); if(typeof onChange==='function') onChange([...new Set([...tags,...ns])]); },
           style:{
             marginTop:"8px",
             background:"rgba(138,198,242,0.18)",

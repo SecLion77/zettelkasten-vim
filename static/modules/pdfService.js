@@ -5,9 +5,10 @@
 const PDFService = (() => {
   const BASE = "/api";
 
-  const _json = async (method, path, body) => {
+  const _json = async (method, path, body, signal) => {
     const opts = { method, headers: { "Content-Type": "application/json" } };
     if (body !== undefined) opts.body = JSON.stringify(body);
+    if (signal) opts.signal = signal;
     const r = await fetch(BASE + path, opts);
     if (!r.ok) throw new Error(`PDFService ${method} ${path} → ${r.status}`);
     return r.json();
@@ -45,8 +46,8 @@ const PDFService = (() => {
     /** Sla alle annotaties op (volledige lijst) */
     saveAnnotations: (annotations) => _json("POST", "/annotations", annotations),
 
-    /** Start AI-samenvatting */
-    summarizePdf: (filename, model) =>
-      _json("POST", "/llm/summarize-pdf", { filename, model }),
+    /** Start AI-samenvatting — signal is optioneel (AbortController.signal) */
+    summarizePdf: (filename, model, signal) =>
+      _json("POST", "/llm/summarize-pdf", { filename, model }, signal),
   };
 })();
