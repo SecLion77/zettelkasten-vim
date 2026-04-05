@@ -342,10 +342,14 @@ const Whiteboard = ({ notes = [], onCreateNote, llmModel = "", serverImages = []
           const fontSize = Math.max(9, Math.min(14, 13 * v.scale));
           ctx.font = `${fontSize}px 'DM Sans', sans-serif`;
 
-          // Tekst wrappen — alle regels tonen, kaart hoogte past zich aan
+          // Tekst wrappen — gebruik actuele notitietitel als kaart gekoppeld is
           const maxW = sw - 12 * v.scale;
           const lineH = fontSize * 1.45;
-          const lines = wrapText(ctx, c.text || "", maxW);
+          // Live notitietitel ophalen als de kaart een noteId heeft
+          const displayText = c.noteId
+            ? (notes.find(n => n.id === c.noteId)?.title || c.text || c.noteId)
+            : (c.text || "");
+          const lines = wrapText(ctx, displayText, maxW);
           const topPad = textY - sx.y;
           const neededH = topPad + lines.length * lineH + 10 * v.scale;
 
