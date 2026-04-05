@@ -266,27 +266,77 @@ const NotePreview = ({
     transition: "all 0.15s", whiteSpace: "nowrap",
     WebkitTapHighlightColor: "transparent",
   });
+  // ── Export naar Markdown ──────────────────────────────────────────────────
+  const exportNote = React.useCallback(() => {
+    if (!note) return;
+    const title    = note.title || "Naamloos";
+    const content  = note.content || "";
+    const tags     = note.tags || [];
+    const noteType = note.noteType || "";
+    const modified = note.modified ? new Date(note.modified).toLocaleDateString("nl-NL") : "";
+    const created  = note.created  ? new Date(note.created).toLocaleDateString("nl-NL")  : "";
+    const linkMatches = [...content.matchAll(/\[\[([^\]]+)\]\]/g)].map(m => m[1]);
+    const uniqueLinks = [...new Set(linkMatches)];
+    const resolvedLinks = uniqueLinks.map(lid => {
+      const found = (notes || []).find(n => n.id === lid || n.title === lid);
+      return { id: lid, title: found?.title || lid, found: !!found };
+    });
+    let exportContent = content;
+    resolvedLinks.forEach(({ id, title: t }) => {
+      exportContent = exportContent.replace(
+        new RegExp("\\[\\[" + id.replace(/[.*+?^${}()|[\\]\\\\]/g,"\\\\$&") + "\\]\\]", "g"),
+        `[[${t}]]`
+      );
+    });
+    const typeLabels = {fleeting:"Vluchtig",literature:"Literatuur",permanent:"Permanent",index:"Index"};
+    const fm = ["---",
+      `titel: "${title.replace(/"/g,'\\"')}"`,
+      noteType ? `type: ${typeLabels[noteType]||noteType}` : null,
+      tags.length ? `tags: [${tags.map(t=>`"${t}"`).join(", ")}]` : null,
+      created  ? `aangemaakt: ${created}`  : null,
+      modified ? `gewijzigd: ${modified}`  : null,
+      "---"].filter(Boolean).join("\n");
+    const refs = resolvedLinks.filter(l => l.found);
+    const refSection = refs.length
+      ? "\n\n---\n\n## Bronnen & verwijzingen\n\n" + refs.map((l,i) => `${i+1}. [[${l.title}]]`).join("\n")
+      : "";
+    const fullMd = `${fm}\n\n# ${title}\n\n${exportContent}${refSection}\n`;
+    const blob = new Blob([fullMd], {type:"text/markdown;charset=utf-8"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = title.replace(/[^a-z0-9\-_\s]/gi,"").trim().replace(/\s+/g,"-").toLowerCase()+".md";
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [note, notes]);
+
   // Rij 1: note ID + tags
   // Rij 2: acties (leestijd, render, samenvatten, links, review, bewerken, del)
   const toolbar = React.createElement("div", {
     style: { marginBottom: "16px", paddingBottom: "12px",
              borderBottom: `1px solid ${W.splitBg}` }
   },
-    // ── Rij 1: Tags ───────────────────────────────────────────────────────
-    (note.tags || []).length > 0 && React.createElement("div", {
-      style: { display: "flex", alignItems: "center", flexWrap: "wrap",
+    // ── Rij 1: titel + ID + tags ────────────────────────────────────────
+    React.createElement("div", {
+      style: { display: "flex", alignItems: "baseline", flexWrap: "wrap",
                gap: "6px", marginBottom: "10px" }
     },
+      // Titel — compact maar leesbaar
+      React.createElement("span", {
+        style: { fontSize: "14px", fontWeight: "600", color: W.statusFg,
+                 flexShrink: 0, maxWidth: "340px",
+                 overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }
+      }, note.title || note.id),
+      // ID klein ernaast
+      React.createElement("span", {
+        style: { fontSize: "9px", color: W.fgMuted, fontFamily: "monospace",
+                 letterSpacing: "0.5px", opacity: 0.5, flexShrink: 0, alignSelf: "center" }
+      }, note.id),
       ...(note.tags || []).map(t => React.createElement(TagPill, {
         key: t, tag: t,
         onRemove: () => onTagRemove?.(t),
       }))
     ),
-    // ── Scheidingslijn ────────────────────────────────────────────────────
-    React.createElement("div", {
-      style: { height: "1px", background: W.splitBg, marginBottom: "8px", opacity: 0.6 }
-    }),
-
     // ── Rij 2: acties ─────────────────────────────────────────────────────
     React.createElement("div", {
       style: { display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }
@@ -373,6 +423,11 @@ const NotePreview = ({
       )
     ),
     React.createElement("button", {
+      onClick: exportNote,
+      title: "Exporteer als Markdown bestand met bronverwijzingen",
+      style: btnBase(false, W.blue, "none"),
+    }, "⬇ export md"),
+    React.createElement("button", {
       onClick: onEdit,
       style: { ...btnBase(false, W.blue, "none"),
                color: W.blue, border: "1px solid rgba(138,198,242,0.35)",
@@ -437,13 +492,11 @@ const NotePreview = ({
       ref: scrollRef,
       style: { flex: 1, overflowY: "auto",
                WebkitOverflowScrolling: "touch",
-               padding: isMobile ? "16px" : "32px 48px" }
+               padding: isMobile ? "16px" : "24px 40px" }
     },
+    // Gecentreerde content wrapper met maxWidth voor leesbaarheid
     React.createElement("div", {
-      style: {
-        maxWidth: "720px",
-        margin: "0 auto",
-      }
+      style: { maxWidth: "780px", margin: "0 auto" }
     },
     React.createElement(MarkdownWithMermaid, {
       content:      note.content,
@@ -494,7 +547,7 @@ const NotePreview = ({
         })
       )
     )
-    )  // sluit maxWidth div
+    ) // sluit maxWidth wrapper
     )  // sluit scroll-container
   );   // sluit outer wrapper
 };

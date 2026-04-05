@@ -5,7 +5,6 @@
 const StatsPanel = ({ notes = [], serverPdfs = [], serverImages = [] }) => {
   const { useMemo, useState, useEffect } = React;
   const [tab, setTab] = useState("overzicht");
-  const [cleanupMsg, setCleanupMsg] = useState("");
   const [disk, setDisk] = useState(null);
 
   // Laad disk-gebruik bij openen
@@ -274,39 +273,6 @@ const StatsPanel = ({ notes = [], serverPdfs = [], serverImages = [] }) => {
         ])
         ,
 
-        // ── Vault opschonen ─────────────────────────────────────────────────
-        React.createElement("div", {
-          style: { background: W.bg2, borderRadius: "8px", padding: "16px",
-                   border: `1px solid ${W.splitBg}` }
-        },
-          React.createElement("div", {
-            style: { fontSize: "11px", color: W.fgMuted, letterSpacing: "1px",
-                     marginBottom: "10px", fontWeight: "600" }
-          }, "🧹 VAULT OPSCHONEN"),
-          React.createElement("div", {
-            style: { fontSize: "12px", color: W.fgMuted, marginBottom: "12px", lineHeight: "1.6" }
-          }, "Verwijdert CSS-opmaakrommel uit bestaande notities."),
-          cleanupMsg ? React.createElement("div", {
-            style: { fontSize: "13px", marginBottom: "8px",
-                     color: cleanupMsg.startsWith("✓") ? W.comment : W.orange }
-          }, cleanupMsg) : null,
-          React.createElement("button", {
-            onClick: async () => {
-              setCleanupMsg("⏳ Bezig…");
-              try {
-                const res = await fetch("/api/cleanup-vault", {
-                  method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
-                const d = await res.json();
-                if (d.ok) setCleanupMsg("✓ " + d.cleaned + " opgeschoond, " + d.skipped + " al schoon");
-                else setCleanupMsg("✗ " + (d.error || "onbekend"));
-              } catch(e) { setCleanupMsg("✗ Verbindingsfout"); }
-            },
-            disabled: cleanupMsg === "⏳ Bezig…",
-            style: { padding: "8px 18px", borderRadius: "6px", border: "none",
-                     background: "rgba(229,120,109,0.15)", color: W.orange,
-                     cursor: "pointer", fontSize: "13px", fontWeight: "600" }
-          }, "🧹 Vault opschonen")
-        )
       ),
 
       // ── Groei tab ────────────────────────────────────────────────────────
@@ -449,45 +415,6 @@ const StatsPanel = ({ notes = [], serverPdfs = [], serverImages = [] }) => {
               }, `${stats.orphans} notities hebben nog geen links. Gebruik de Links-sidebar om ze te verbinden.`)
         ]),
 
-        // ── Vault opschonen ───────────────────────────────────────────────────
-        card([
-          React.createElement("div", {
-            style: { fontSize: "11px", color: W.fgMuted, letterSpacing: "1px",
-                     marginBottom: "10px", fontWeight: "600" }
-          }, "🧹 VAULT OPSCHONEN"),
-          React.createElement("div", {
-            style: { fontSize: "12px", color: W.fgMuted, marginBottom: "12px", lineHeight: "1.6" }
-          }, "Verwijdert CSS-rommel (inline stijlen) die door lokale AI-modellen in notities zijn ingevoegd. " +
-             "Bestaande notitie-inhoud blijft ongewijzigd."),
-          cleanupMsg
-            ? React.createElement("div", {
-                style: { fontSize: "13px",
-                         color: cleanupMsg.startsWith("✓") ? W.comment : W.orange,
-                         marginBottom: "8px" }
-              }, cleanupMsg)
-            : null,
-          React.createElement("button", {
-            onClick: async () => {
-              setCleanupMsg("⏳ Bezig…");
-              try {
-                const r = await fetch("/api/cleanup-vault", { method: "POST",
-                  headers: { "Content-Type": "application/json" }, body: "{}" });
-                const d = await r.json();
-                if (d.ok) {
-                  setCleanupMsg(`✓ ${d.cleaned} notities opgeschoond, ${d.skipped} al schoon`);
-                } else {
-                  setCleanupMsg("✗ Fout: " + (d.error || "onbekend"));
-                }
-              } catch(e) { setCleanupMsg("✗ Verbindingsfout"); }
-            },
-            disabled: cleanupMsg === "⏳ Bezig…",
-            style: {
-              padding: "8px 18px", borderRadius: "6px", border: "none",
-              background: "rgba(229,120,109,0.15)", color: W.orange,
-              cursor: "pointer", fontSize: "13px", fontWeight: "600"
-            }
-          }, "🧹 Vault opschonen")
-        ])
       )
 ,
 

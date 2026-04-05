@@ -17,21 +17,38 @@ const NoteEditor = ({
   onDelete,
   onToggleGoyo,
   onEditorRef,
-  // link-dropdown state — omhoog gelift naar NotesTab (ISP)
+  notes = [],           // voor [[ autocomplete + promoveer
   showLinkMenu = false,
   onToggleLinkMenu,
   linkMenuContent = null,
-  onSplitCmd = null,  // doorgeven aan VimEditor
-  onNoteTypeChange = null,
+  onSplitCmd = null,
 }) => {
   const { useState, useRef, useEffect } = React;
 
   const [editTitle,   setEditTitle]   = useState(note?.title   || "");
   const [editContent, setEditContent] = useState(note?.content || "");
   const [editTags,    setEditTags]    = useState(note?.tags    || []);
+  const [outlineMode, setOutlineMode] = useState(false);
 
   const titleRef   = useRef(null);
   const contentRef = useRef(null);
+
+  // Promoveer-suggestie: toon als notitie rijp is
+  const promoteSuggestion = React.useMemo(() => {
+    if (!note || note.noteType !== "fleeting") return null;
+    const ageMs = Date.now() - new Date(note.created || note.modified || 0).getTime();
+    const ageDays = ageMs / (1000 * 60 * 60 * 24);
+    // Tel links in content
+    const linkCount = (note.content || "").match(/\[\[/g)?.length || 0;
+    if (ageDays >= 2 || linkCount >= 2) {
+      return {
+        reason: ageDays >= 2
+          ? `${Math.floor(ageDays)} dagen oud`
+          : `${linkCount} wiki-links`,
+      };
+    }
+    return null;
+  }, [note?.id, note?.noteType, note?.created, note?.content]);
 
   // Sync als een ander zettel wordt geopend
   useEffect(() => {
@@ -93,58 +110,12 @@ const NoteEditor = ({
                fontWeight: "bold", outline: "none", WebkitAppearance: "none" }
     }),
 
-    // Notitietype badge in toolbar
-    onNoteTypeChange && React.createElement("div", {
-      style: { position: "relative", flexShrink: 0 },
-    },
-      React.createElement("select", {
-        value: note?.noteType || "",
-        onChange: e => onNoteTypeChange(e.target.value),
-        title: "Notitietype instellen",
-        style: {
-          background: (() => {
-            const t = note?.noteType;
-            if (t === "fleeting")   return "rgba(229,120,109,0.12)";
-            if (t === "literature") return "rgba(138,198,242,0.12)";
-            if (t === "permanent")  return "rgba(159,202,86,0.12)";
-            if (t === "index")      return "rgba(215,135,255,0.12)";
-            return "none";
-          })(),
-          border: `1px solid ${(() => {
-            const t = note?.noteType;
-            if (t === "fleeting")   return "rgba(229,120,109,0.4)";
-            if (t === "literature") return "rgba(138,198,242,0.4)";
-            if (t === "permanent")  return "rgba(159,202,86,0.4)";
-            if (t === "index")      return "rgba(215,135,255,0.4)";
-            return W.splitBg;
-          })()}`,
-          color: (() => {
-            const t = note?.noteType;
-            if (t === "fleeting")   return W.orange;
-            if (t === "literature") return W.blue;
-            if (t === "permanent")  return W.comment;
-            if (t === "index")      return W.purple;
-            return W.fgMuted;
-          })(),
-          borderRadius: "6px",
-          padding: isMobile ? "7px 8px" : "3px 8px",
-          fontSize: "11px", cursor: "pointer",
-          fontFamily: "inherit", outline: "none",
-          flexShrink: 0,
-        }
-      },
-        React.createElement("option", { value: "" }, "○ type"),
-        React.createElement("option", { value: "fleeting" },   "◑ vluchtig"),
-        React.createElement("option", { value: "literature" }, "◕ literatuur"),
-        React.createElement("option", { value: "permanent" },  "● permanent"),
-        React.createElement("option", { value: "index" },      "◈ index"),
-      )
-    ),
-
     // Actie-knoppen
     ...[
       { label: "◎ focus", show: true,        onClick: onToggleGoyo,
         active: goyoMode, color: goyoMode ? W.comment : W.fgMuted },
+      { label: "☰ outline", show: !isMobile, onClick: () => setOutlineMode(p => !p),
+        active: outlineMode, color: outlineMode ? W.purple : W.fgMuted },
       { label: "✓ opslaan", show: true,       onClick: () => { handleSave(); onClose?.(); },
         color: W.bg, fgColor: W.bg, bg: "rgba(159,202,86,0.85)", bold: true },
       { label: "✕ sluiten", show: true,       onClick: onClose,     color: W.fgMuted },
@@ -203,7 +174,61 @@ const NoteEditor = ({
   },
     !goyoMode && toolbar,
     tagStrip,
-    React.createElement(VimEditor, {
+    // Promoveer-suggestie banner
+    promoteSuggestion && !goyoMode && React.createElement("div", {
+      style: {
+        background: "rgba(232,200,122,0.07)",
+        borderBottom: `1px solid rgba(232,200,122,0.2)`,
+        padding: "6px 12px",
+        display: "flex", alignItems: "center", gap: "10px",
+        flexShrink: 0,
+      }
+    },
+      React.createElement("span", { style: { fontSize: "13px" } }, "✨"),
+      React.createElement("span", {
+        style: { flex: 1, fontSize: "11px", color: "#e8c87a", lineHeight: "1.4" }
+      }, `Deze notitie is rijp (${promoteSuggestion.reason}) — promoveer naar Permanent?`),
+      React.createElement("button", {
+        onClick: () => {
+          if (!note) return;
+          const updated = { ...note, title: editTitle, content: editContent,
+                            tags: editTags, noteType: "permanent",
+                            modified: new Date().toISOString() };
+          onSave?.(updated);
+        },
+        style: {
+          background: "rgba(166,209,137,0.15)",
+          border: "1px solid rgba(166,209,137,0.35)",
+          borderRadius: "5px", color: "#a6d189",
+          padding: "3px 10px", fontSize: "11px",
+          cursor: "pointer", fontWeight: "600", flexShrink: 0,
+        }
+      }, "→ Permanent"),
+      React.createElement("button", {
+        onClick: () => {
+          if (!note) return;
+          const updated = { ...note, noteType: "literature",
+                            modified: new Date().toISOString() };
+          onSave?.(updated);
+        },
+        style: {
+          background: "none", border: "1px solid rgba(125,216,198,0.3)",
+          borderRadius: "5px", color: W.blue,
+          padding: "3px 10px", fontSize: "11px",
+          cursor: "pointer", flexShrink: 0,
+        }
+      }, "→ Literatuur")
+    ),
+
+    outlineMode
+      ? React.createElement(OutlineEditor, {
+          value:    editContent,
+          onChange: setEditContent,
+          notes:    notes || [],
+          noteId:   note?.id || "",
+          onSave:   handleSave,
+        })
+      : React.createElement(VimEditor, {
       key:          note?.id,
       value:        editContent,
       onChange:     setEditContent,
@@ -221,8 +246,9 @@ const NoteEditor = ({
       llmModel,
       allNotesText,
       onSplitCmd,
-      noteId:       note?.id,   // voor persistente undo
-      hideTagStrip: true,  // SmartTagEditor boven de editor toont al de tags
+      noteId:       note?.id,
+      hideTagStrip: true,
+      notes,        // voor [[ wiki-link autocomplete
     })
   );
 };

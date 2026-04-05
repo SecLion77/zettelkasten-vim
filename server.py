@@ -155,14 +155,39 @@ class VaultManager:
                     elif line.startswith("isRead:"):     note["isRead"]     = line[7:].strip().lower() == "true"
                     elif line.startswith("noteType:"):   note["noteType"]   = line[9:].strip()
         else: note["content"] = text
+        # Fallback: gebruik bestandsdatum als modified/created ontbreekt
+        if not note["modified"] or not note["created"]:
+            stat = path.stat()
+            mtime = datetime.fromtimestamp(stat.st_mtime).isoformat()
+            # st_birthtime = aanmaakdatum op macOS; st_ctime op Linux (inode-wijziging)
+            try:    ctime = datetime.fromtimestamp(stat.st_birthtime).isoformat()
+            except: ctime = datetime.fromtimestamp(stat.st_ctime).isoformat()
+            if not note["modified"]: note["modified"] = mtime
+            if not note["created"]:  note["created"]  = ctime
         return note
     def load_notes(self):
         return [n for n in (self._parse_note(p) for p in
                 sorted(self.notes_dir.glob("*.md"),key=lambda x:x.stat().st_mtime,reverse=True)) if n]
     def save_note(self, note):
         import tempfile as _tf, os as _os
+        # Verwijder surrogate characters die UTF-8 niet kan encoderen
+        def strip_surrogates(s):
+            if not isinstance(s, str): return s
+            return s.encode("utf-8", "surrogatepass").decode("utf-8", "replace")
+        for field in ("title", "content", "sourceUrl", "importedAt"):
+            if field in note and isinstance(note[field], str):
+                note[field] = strip_surrogates(note[field])
+        if isinstance(note.get("tags"), list):
+            note["tags"] = [strip_surrogates(t) for t in note["tags"]]
         note["modified"] = datetime.now().isoformat()
-        if not note.get("created"): note["created"] = note["modified"]
+        # Bewaar bestaande created datum — lees uit bestand als die niet meegegeven is
+        if not note.get("created"):
+            path = self._note_path(note["id"])
+            existing = self._parse_note(path) if path.exists() else None
+            if existing and existing.get("created"):
+                note["created"] = existing["created"]
+            else:
+                note["created"] = note["modified"]
         path = self._note_path(note["id"])
         text = self._serialize_note(note)
         # Atomisch schrijven: temp + rename (veilig voor OneDrive/Google Drive sync)
@@ -1737,6 +1762,18 @@ class ZKHandler(BaseHTTPRequestHandler):
             "disk_total": d_total, "disk_free": d_free, "disk_used": d_used,
         })
 
+    def do_HEAD(self):
+        """HEAD-verzoeken afhandelen — zelfde routing als GET maar zonder body."""
+        p = urlparse(self.path).path.rstrip("/") or "/"
+        # Stuur 200 terug voor bekende paden, anders 404
+        if p.startswith("/api/") or p == "/":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+        else:
+            self.send_response(404)
+            self.end_headers()
+
     def do_GET(self):
         p = urlparse(self.path).path.rstrip("/") or "/"
 
@@ -2615,12 +2652,20 @@ class ZKHandler(BaseHTTPRequestHandler):
         except urllib.error.HTTPError as e:
             try:
                 body = e.read().decode("utf-8","replace")
-                detail = json.loads(body).get("error",{}).get("message", body[:300])
+                try: detail = json.loads(body).get("error",{}).get("message", body[:400])
+                except: detail = body[:400]
             except: detail = str(e)
-            try: self.wfile.write(("data: "+json.dumps({"error":f"Anthropic {e.code}: {detail}"})+"\n\n").encode()); self.wfile.flush()
+            hints = {401:"→ Controleer Anthropic API-sleutel in ⚙ Instellingen",
+                     429:"→ Rate limit — wacht even",
+                     402:"→ Onvoldoende Anthropic credits — laad bij op console.anthropic.com"}
+            full_msg = f"Anthropic HTTP {e.code}: {detail}" + (f" {hints[e.code]}" if e.code in hints else "")
+            print(f"[anthropic] {full_msg}", flush=True)
+            try: self.wfile.write(("data: "+json.dumps({"error": full_msg})+"\n\n").encode()); self.wfile.flush()
             except: pass
         except Exception as e:
-            try: self.wfile.write(("data: "+json.dumps({"error":"Anthropic API: "+str(e)})+"\n\n").encode()); self.wfile.flush()
+            msg = f"Anthropic API fout: {e}"
+            print(f"[anthropic] {msg}", flush=True)
+            try: self.wfile.write(("data: "+json.dumps({"error": msg})+"\n\n").encode()); self.wfile.flush()
             except: pass
 
     def _stream_google(self, model, system, messages):
@@ -2709,12 +2754,22 @@ class ZKHandler(BaseHTTPRequestHandler):
         except urllib.error.HTTPError as e:
             try:
                 body = e.read().decode("utf-8","replace")
-                detail = json.loads(body).get("error",{}).get("message", body[:300])
+                try: api_msg = json.loads(body).get("error", {})
+                except: api_msg = {}
+                detail = api_msg.get("message", body[:400]) if isinstance(api_msg, dict) else str(api_msg)[:400]
             except: detail = str(e)
-            try: self.wfile.write(("data: "+json.dumps({"error":f"OpenAI {e.code}: {detail}"})+"\n\n").encode()); self.wfile.flush()
+            hints = {401:"→ Controleer OpenAI API-sleutel in ⚙ Instellingen",
+                     429:"→ Rate limit — wacht even of upgrade je OpenAI plan",
+                     402:"→ Onvoldoende OpenAI credits",
+                     400:"→ Controleer model-ID"}
+            full_msg = f"OpenAI HTTP {e.code}: {detail}" + (f" {hints[e.code]}" if e.code in hints else "")
+            print(f"[openai] {full_msg}", flush=True)
+            try: self.wfile.write(("data: "+json.dumps({"error": full_msg})+"\n\n").encode()); self.wfile.flush()
             except: pass
         except Exception as e:
-            try: self.wfile.write(("data: "+json.dumps({"error":"OpenAI API: "+str(e)})+"\n\n").encode()); self.wfile.flush()
+            msg = f"OpenAI API fout: {e}"
+            print(f"[openai] {msg}", flush=True)
+            try: self.wfile.write(("data: "+json.dumps({"error": msg})+"\n\n").encode()); self.wfile.flush()
             except: pass
 
     def _stream_openrouter(self, model, system, messages):
@@ -2729,7 +2784,12 @@ class ZKHandler(BaseHTTPRequestHandler):
                    for m in messages if m.get("role") in ("user","assistant") and (m.get("content") or "").strip()]
         if len(or_msgs) < 2:
             or_msgs.append({"role":"user","content":"(Vervolg)"})
+        # Qwen3 heeft een thinking modus die reasoning_content stuurt ipv content
+        # enable_thinking=False zorgt dat we direct antwoord krijgen zonder wachten
+        is_qwen3 = "qwen3" in model.lower()
         payload = {"model":model,"messages":or_msgs,"stream":True,"max_tokens":4096}
+        if is_qwen3:
+            payload["extra_body"] = {"enable_thinking": False}
         try:
             req = urllib.request.Request("https://openrouter.ai/api/v1/chat/completions",
                 data=json.dumps(payload).encode("utf-8"),
@@ -2750,9 +2810,19 @@ class ZKHandler(BaseHTTPRequestHandler):
                                 self.wfile.write(("data: "+json.dumps({"delta":"","done":True})+"\n\n").encode("utf-8"))
                                 self.wfile.flush(); break
                             ev = json.loads(data_s)
-                            delta = ev.get("choices",[{}])[0].get("delta",{}).get("content","") or ""
-                            self.wfile.write(("data: "+json.dumps({"delta":delta,"done":False})+"\n\n").encode("utf-8"))
-                            self.wfile.flush()
+                            choice = ev.get("choices",[{}])[0]
+                            delta_obj = choice.get("delta", {})
+                            # Normale content
+                            delta = delta_obj.get("content", "") or ""
+                            # Qwen3 thinking: reasoning_content komt vóór content
+                            # Toon als [redenering] prefix zodat zichtbaar is dat model denkt
+                            if not delta:
+                                reasoning = delta_obj.get("reasoning_content", "") or ""
+                                if reasoning:
+                                    delta = reasoning  # toon reasoning ook
+                            if delta:
+                                self.wfile.write(("data: "+json.dumps({"delta":delta,"done":False})+"\n\n").encode("utf-8"))
+                                self.wfile.flush()
                     except: pass
         except urllib.error.HTTPError as e:
             try:
@@ -2803,12 +2873,20 @@ class ZKHandler(BaseHTTPRequestHandler):
         except urllib.error.HTTPError as e:
             try:
                 body = e.read().decode("utf-8","replace")
-                detail = json.loads(body).get("message", body[:300])
+                try: detail = json.loads(body).get("message", body[:400])
+                except: detail = body[:400]
             except: detail = str(e)
-            try: self.wfile.write(("data: "+json.dumps({"error":f"Mistral {e.code}: {detail}"})+"\n\n").encode()); self.wfile.flush()
+            hints = {401:"→ Controleer Mistral API-sleutel in ⚙ Instellingen",
+                     429:"→ Rate limit — wacht even",
+                     402:"→ Onvoldoende Mistral credits"}
+            full_msg = f"Mistral HTTP {e.code}: {detail}" + (f" {hints[e.code]}" if e.code in hints else "")
+            print(f"[mistral] {full_msg}", flush=True)
+            try: self.wfile.write(("data: "+json.dumps({"error": full_msg})+"\n\n").encode()); self.wfile.flush()
             except: pass
         except Exception as e:
-            try: self.wfile.write(("data: "+json.dumps({"error":"Mistral: "+str(e)})+"\n\n").encode()); self.wfile.flush()
+            msg = f"Mistral API fout: {e}"
+            print(f"[mistral] {msg}", flush=True)
+            try: self.wfile.write(("data: "+json.dumps({"error": msg})+"\n\n").encode()); self.wfile.flush()
             except: pass
 
     def _stream_custom_openai(self, model, system, messages, endpoint, api_key=""):
@@ -3123,7 +3201,7 @@ class ZKHandler(BaseHTTPRequestHandler):
                     for img_b64 in images[:3]:
                         parts_list.insert(0,{"inlineData":{"mimeType":"image/png","data":img_b64}})
                 payload = json.dumps({"contents":[{"role":"user","parts":parts_list}],
-                                      "generationConfig":{"maxOutputTokens":2000}}).encode()
+                                      "generationConfig":{"maxOutputTokens":6000}}).encode()
                 url2 = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
                 req = _r2.Request(url2, data=payload,
                     headers={"Content-Type":"application/json"}, method="POST")
@@ -3186,7 +3264,7 @@ class ZKHandler(BaseHTTPRequestHandler):
                     payload = {"model":local_model,"prompt":prompt,"stream":False}
                     if images:
                         payload["images"] = images[:2]
-                    r = self._ollama_post("/api/generate", payload, 360)
+                    r = self._ollama_post("/api/generate", payload, 600)
                     result = r.get("response","").strip()
                     if not result: raise Exception(f"Ollama model '{local_model}' gaf een lege reactie.")
                     return result
@@ -3222,12 +3300,21 @@ class ZKHandler(BaseHTTPRequestHandler):
             """Wrapper voor samenvatting — zelfde als call_llm maar duidelijk benoemd."""
             return call_llm(prompt_text, images)
 
-        # Met tekst
+        # Met tekst — pas tekstlimiet aan op model
         if text.strip():
-            print(f"[PDF-samenvatting] Tekst beschikbaar ({len(text)} tekens), stuur naar model...", flush=True)
+            # Lokale modellen hebben minder context; cloud modellen meer
+            if is_cloud:
+                max_chars = 30000  # cloud: ruim context
+            else:
+                max_chars = 8000   # lokaal: beperkt tot wat llama aankan
+            text_chunk = text[:max_chars]
+            if len(text) > max_chars:
+                # Voeg ook het einde toe (conclusies staan vaak achteraan)
+                text_chunk += "\n\n[...]\n\n" + text[-2000:]
+            print(f"[PDF-samenvatting] Tekst beschikbaar ({len(text)} tekens), "                  f"stuur {len(text_chunk)} tekens naar model...", flush=True)
             try:
                 full_prompt = (prompt +
-                    "===BEGIN DOCUMENT===\n" + text[:35000] + "\n===EINDE DOCUMENT===\n\n"
+                    "===BEGIN DOCUMENT===\n" + text_chunk + "\n===EINDE DOCUMENT===\n\n"
                     "Schrijf nu de samenvatting op basis van bovenstaand document:")
                 result = call_llm_summarize(full_prompt)
                 if result:
@@ -4755,28 +4842,43 @@ class ZKHandler(BaseHTTPRequestHandler):
             "Behoud UITSLUITEND de doorlopende artikeltekst.\n"
         ) if is_linkedin else ""
 
+        # Detecteer taal voor expliciete instructie
+        import re as _re_lang
+        nl_words = len(_re_lang.findall(r'\b(de|het|een|van|is|en|te|in|op|aan)\b', clean_text[:2000], _re_lang.I))
+        en_words = len(_re_lang.findall(r'\b(the|a|an|of|is|and|to|in|on|at)\b', clean_text[:2000], _re_lang.I))
+        detected_lang = "Nederlands" if nl_words > en_words else "Engels"
+        lang_instruction = f"Gebruik UITSLUITEND {detected_lang} — vertaal NOOIT naar een andere taal."
+
+        # Stuur zoveel mogelijk tekst mee (max 20000 tekens)
+        article_text = clean_text[:20000]
+        # Als tekst langer is: voeg ook het laatste stuk toe (begin + einde)
+        if len(clean_text) > 20000:
+            article_text = clean_text[:16000] + "\n\n[...artikel ingekort...]\n\n" + clean_text[-2000:]
+
         combined_prompt = (
             "Verwerk de onderstaande webpagina-tekst tot een nette notitie.\n\n"
+            f"TAALINSTRUCTIE: {lang_instruction}\n\n"
             "STAP 1 — SAMENVATTING (verplicht, altijd):\n"
-            "Schrijf 5-6 zinnen die het artikel samenvatten. Gebruik de taal van de tekst (NL of EN). "
-            "Noem: het onderwerp, de kernboodschap en de conclusie. Geen koppen, geen bullets.\n\n"
+            "Schrijf 5-7 zinnen die het artikel samenvatten. "
+            "Noem: het onderwerp, de kernboodschap, de conclusie en eventuele nuances. "
+            "Geen koppen, geen bullets.\n\n"
             "STAP 2 — OPGESCHOONDE MARKDOWN:\n"
-            "Zet de tekst om naar goed leesbare Markdown. Regels:\n"
+            "Behoud de VOLLEDIGE inhoud van het artikel als gestructureerde Markdown. Regels:\n"
             "- Gebruik ## voor hoofdsecties, ### voor subsecties\n"
             "- Gebruik **vet** voor kernbegrippen, *cursief* voor termen\n"
             "- Gebruik > voor citaten en quotes\n"
             "- Lege regel tussen elke alinea\n"
-            "- Verwijder STRIKT: cookie-meldingen, navigatiemenu, login-verzoeken, \n"
-            "  reclame, social-knoppen, reacties/comments, profielinfo, \n"
-            "  'U kunt uw keuzen bijwerken', 'Lees meer in ons cookiebeleid'\n\n"
+            "- Behoud alle inhoudelijke tekst — kort NIET in\n"
+            "- Verwijder ALLEEN: cookie-meldingen, navigatiemenu, login-verzoeken, "
+            "  reclame, social-knoppen, reacties/comments, profielinfo\n\n"
             "Geef je antwoord EXACT in dit format — geen extra tekst, geen uitleg:\n"
             "===SAMENVATTING===\n"
-            "<5-6 zinnen samenvatting>\n"
+            "<samenvatting>\n"
             "===ARTIKEL===\n"
-            "<opgeschoonde markdown>"
+            "<volledige opgeschoonde markdown>"
             + linkedin_hint + "\n\n"
             f"Titel: {page_title}\n\n"
-            f"Tekst:\n{clean_text[:8000]}"
+            f"Tekst:\n{article_text}"
         )
 
         summary = ""
@@ -4788,28 +4890,39 @@ class ZKHandler(BaseHTTPRequestHandler):
 
             if model.startswith("claude"):
                 api_key = self.vault.get_api_key("anthropic")
-                if api_key:
-                    import urllib.request as _req2
+                if not api_key:
+                    print(f"[import-url] Geen Anthropic API-sleutel ingesteld", flush=True)
+                else:
+                    import urllib.request as _req2, urllib.error as _uerr2
+                    # Beperk prompt tot max 15000 tekens om 400 te voorkomen
+                    safe_prompt = combined_prompt[:15000]
                     payload = json.dumps({
-                        "model": model, "max_tokens": 3000,
-                        "messages": [{"role":"user","content":combined_prompt}]
-                    }).encode()
+                        "model": model, "max_tokens": 6000,
+                        "messages": [{"role":"user","content":safe_prompt}]
+                    }).encode("utf-8")
                     req2 = _req2.Request("https://api.anthropic.com/v1/messages",
                         data=payload,
                         headers={"Content-Type":"application/json",
                                  "x-api-key":api_key,
                                  "anthropic-version":"2023-06-01"},
                         method="POST")
-                    with _req2.urlopen(req2, timeout=60) as r2:
-                        d2 = json.loads(r2.read())
-                    response_text = d2.get("content",[{}])[0].get("text","")
+                    try:
+                        with _req2.urlopen(req2, timeout=60) as r2:
+                            d2 = json.loads(r2.read())
+                        response_text = d2.get("content",[{}])[0].get("text","")
+                    except _uerr2.HTTPError as _he:
+                        _body = _he.read().decode("utf-8","replace")
+                        try: _detail = json.loads(_body).get("error",{}).get("message",_body[:300])
+                        except: _detail = _body[:300]
+                        print(f"[import-url] Anthropic HTTP {_he.code}: {_detail}", flush=True)
+                        return self._send(200, {"error": f"Anthropic {_he.code}: {_detail}", "ok": False})
 
             elif model.startswith("gpt") or model.startswith("o1") or model.startswith("o3") or model.startswith("o4"):
                 api_key = self.vault.get_api_key("openai")
                 if api_key:
                     import urllib.request as _req2
                     payload = json.dumps({
-                        "model": model, "max_tokens": 3000,
+                        "model": model, "max_tokens": 6000,
                         "messages": [{"role":"user","content":combined_prompt}]
                     }).encode()
                     req2 = _req2.Request("https://api.openai.com/v1/chat/completions",

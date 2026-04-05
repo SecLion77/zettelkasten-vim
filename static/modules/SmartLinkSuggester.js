@@ -123,12 +123,15 @@ const SmartLinkSuggester = ({
     }
   }, [llmModel, content]);
 
-  // Auto-load bij mount als gevraagd
+  // Auto-load zodra content beschikbaar is (bijv. na URL-import)
+  const autoLoadedRef = React.useRef(false);
   useEffect(() => {
-    if (autoLoad && content.trim().length > 100) {
-      loadServerSuggestions().then(() => {});
-    }
-  }, []);
+    if (!autoLoad) return;
+    if (autoLoadedRef.current) return;
+    if (content.trim().length < 100) return;
+    autoLoadedRef.current = true;
+    loadServerSuggestions().then(() => {});
+  }, [autoLoad, content]); // opnieuw triggeren als content verandert
 
   // Combineer instant + server suggesties (server overschrijft instant voor overlappende IDs)
   const combined = useMemo(() => {

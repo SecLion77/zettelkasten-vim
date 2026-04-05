@@ -29,6 +29,7 @@ const VaultSettings = ({vaultPath, onChangeVault, onClose}) => {
   const [keysMsg, setKeysMsg] = useState("");
   const [showKey, setShowKey] = useState({});
   const [expandedProvider, setExpandedProvider] = useState(null);
+  const [testResults, setTestResults] = useState({}); // {providerId: {ok, msg, loading}}
 
   // PDF personal use state
   const [personalUse,      setPersonalUse]      = useState(false);
@@ -82,6 +83,55 @@ const VaultSettings = ({vaultPath, onChangeVault, onClose}) => {
       setKeysMsg("✓ Sleutel opgeslagen");
       setTimeout(()=>setKeysMsg(""), 3000);
     } catch(e) { setKeysMsg("✗ Fout: "+e.message); }
+  };
+
+  const testKey = async (providerId) => {
+    setTestResults(p => ({...p, [providerId]: {loading: true, ok: null, msg: "Testen…"}}));
+    // Stuur een klein test-verzoek via de server
+    try {
+      const resp = await fetch("/api/llm/chat", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+          model: {
+            anthropic: "claude-haiku-4-5-20251001",
+            openai:    "gpt-4.1-mini",
+            google:    "gemini-2.0-flash",
+            mistral:   "mistral-small-latest",
+            openrouter:"meta-llama/llama-4-scout",
+          }[providerId] || "",
+          messages: [{role:"user", content:"Zeg alleen: OK"}],
+          system: "Antwoord alleen met OK.",
+        }),
+      });
+      // Lees eerste SSE chunk
+      const reader = resp.body.getReader();
+      const dec = new TextDecoder();
+      let buf = "", found = false;
+      for (let i = 0; i < 20 && !found; i++) {
+        const {done, value} = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, {stream: true});
+        for (const line of buf.split("\n")) {
+          if (!line.startsWith("data: ")) continue;
+          try {
+            const evt = JSON.parse(line.slice(6));
+            if (evt.error) {
+              setTestResults(p => ({...p, [providerId]: {loading:false, ok:false, msg: evt.error}}));
+              found = true; break;
+            }
+            if (evt.token || evt.delta) {
+              setTestResults(p => ({...p, [providerId]: {loading:false, ok:true, msg: "✓ Verbinding werkt"}}));
+              found = true; break;
+            }
+          } catch {}
+        }
+      }
+      reader.cancel();
+      if (!found) setTestResults(p => ({...p, [providerId]: {loading:false, ok:null, msg: "Geen reactie ontvangen"}}));
+    } catch(e) {
+      setTestResults(p => ({...p, [providerId]: {loading:false, ok:false, msg: "Fout: " + e.message}}));
+    }
   };
 
   const inputStyle = {
@@ -305,6 +355,23 @@ const VaultSettings = ({vaultPath, onChangeVault, onClose}) => {
                 padding:"0 14px 14px",
                 borderTop:`1px solid ${W.splitBg}`,
               }},
+                // Test resultaat
+                testResults[p.id] && React.createElement("div",{style:{
+                  marginTop:"10px",
+                  padding:"7px 10px",
+                  borderRadius:"5px",
+                  fontSize:"12px",
+                  background: testResults[p.id].ok === true ? "rgba(166,209,137,0.08)"
+                            : testResults[p.id].ok === false ? "rgba(229,120,109,0.08)"
+                            : "rgba(255,255,255,0.04)",
+                  border: `1px solid ${testResults[p.id].ok === true ? "rgba(166,209,137,0.3)"
+                            : testResults[p.id].ok === false ? "rgba(229,120,109,0.3)"
+                            : W.splitBg}`,
+                  color: testResults[p.id].ok === true ? W.comment
+                       : testResults[p.id].ok === false ? W.orange : W.fgDim,
+                  wordBreak:"break-word",
+                }}, testResults[p.id].msg),
+
                 // Huidig preview
                 hasKey && preview && React.createElement("div",{style:{
                   fontSize:"12px",color:W.fgMuted,
@@ -340,8 +407,19 @@ const VaultSettings = ({vaultPath, onChangeVault, onClose}) => {
 
                 // Knoppen
                 React.createElement("div",{style:{
-                  display:"flex",gap:"8px",marginTop:"10px",alignItems:"center"
+                  display:"flex",gap:"8px",marginTop:"10px",alignItems:"center",flexWrap:"wrap"
                 }},
+                  // Test knop (alleen als sleutel al ingesteld)
+                  hasKey && React.createElement("button",{
+                    onClick: e => { e.stopPropagation(); testKey(p.id); },
+                    disabled: testResults[p.id]?.loading,
+                    style:{
+                      padding:"6px 12px", borderRadius:"5px",
+                      background:"rgba(255,255,255,0.04)",
+                      border:`1px solid ${W.splitBg}`,
+                      color:W.fgDim, fontSize:"12px", cursor:"pointer",
+                    }
+                  }, testResults[p.id]?.loading ? "⏳ Testen…" : "⚡ Test"),
                   React.createElement("button",{
                     onClick:()=>saveKey(p.id),
                     disabled:!keyVal.trim(),

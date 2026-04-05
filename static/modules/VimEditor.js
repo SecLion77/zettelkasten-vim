@@ -5,10 +5,11 @@
 const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange,
                     allTags=[], goyoMode=false, onToggleGoyo, onEditorRef, onModeChange=()=>{},
                     llmModel="", allNotesText="",
-                    onSplitCmd=null,    // (cmd) => void  — :vs/:sp/Ctrl+W-navigatie
-                    onPasteBlock=null,  // (block) => void — plak geciteerd blok in editor
-                    hideTagStrip=false, // verberg ingebouwde tag-strip (als SmartTagEditor al zichtbaar is)
-                    noteId="",          // voor persistente undo per notitie
+                    onSplitCmd=null,
+                    onPasteBlock=null,
+                    hideTagStrip=false,
+                    noteId="",
+                    notes=[],           // voor [[ wiki-link autocomplete
                     }) => {
 
   const { useState, useEffect, useRef, useCallback } = React;
@@ -973,11 +974,34 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
     if (!list.length) return;
     const chosen = list[idx ?? compRef.current.idx];
     if (!chosen) return;
-    const prefix = getWordBeforeCursor(s);
-    const suffix = chosen.word.slice(prefix.length);
-    if (suffix) {
-      for (const ch of suffix) insertChar(s, ch);
-      emit(s); scrollToCursor(s); draw();
+
+    if (compRef.current.wikiMode) {
+      // Wiki-link modus: vervang alles na [[ door titel]]
+      const line   = s.lines[s.cur.row];
+      const before = line.slice(0, s.cur.col);
+      const wikiStart = before.lastIndexOf("[[");
+      if (wikiStart >= 0) {
+        // Verwijder wat er na [[ staat en vervang door title]]
+        const charsAfterBracket = s.cur.col - wikiStart - 2;
+        for (let i = 0; i < charsAfterBracket; i++) {
+          // backspace
+          if (s.cur.col > 0) {
+            const r = s.cur.row;
+            s.lines[r] = s.lines[r].slice(0, s.cur.col-1) + s.lines[r].slice(s.cur.col);
+            s.cur.col--;
+          }
+        }
+        const insert = chosen.word + "]]";
+        for (const ch of insert) insertChar(s, ch);
+        emit(s); scrollToCursor(s); draw();
+      }
+    } else {
+      const prefix = getWordBeforeCursor(s);
+      const suffix = chosen.word.slice(prefix.length);
+      if (suffix) {
+        for (const ch of suffix) insertChar(s, ch);
+        emit(s); scrollToCursor(s); draw();
+      }
     }
     closeCompletion();
   }, [closeCompletion]);
@@ -1159,21 +1183,6 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
       // Ctrl+H/J/K/L — split-venster navigatie (nnoremap <C-H> <C-W><C-H> etc. uit vimrc)
       if (e.ctrlKey && e.key === "h") { e.preventDefault(); onSplitCmd?.("focus-left");  setStatus("◀ notities"); draw(); return; }
       if (e.ctrlKey && e.key === "l") { e.preventDefault(); onSplitCmd?.("focus-right"); setStatus("▶ split");    draw(); return; }
-      if (e.ctrlKey && e.key === "w") {
-        e.preventDefault();
-        // Ctrl+W Ctrl+W: toggle focus tussen splits
-        // Ctrl+W h/l: focus links/rechts (via tweede toets)
-        if (!S.current._ctrlWPending) {
-          S.current._ctrlWPending = true;
-          setStatus("Ctrl+W...");
-          setTimeout(() => { if (S.current._ctrlWPending) { S.current._ctrlWPending = false; setStatus(""); draw(); } }, 1500);
-        } else {
-          S.current._ctrlWPending = false;
-          onSplitCmd?.("focus-toggle");
-          setStatus("⇄ split");
-        }
-        draw(); return;
-      }
       if (e.ctrlKey && e.key === "j") { e.preventDefault();
         // Ctrl+J: als split open → focus rechts, anders snippet-expand
         if (onSplitCmd) { onSplitCmd("focus-right"); setStatus("▶ split"); }
@@ -1293,8 +1302,34 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
         scheduleUndo(s); emit(s); scrollToCursor(s);
         // Spellcheck plannen na elk teken
         if (spellLang !== "off") scheduleSpellCheck();  // na elk teken
-        // Completion: bij alfabetische tekens lokale suggesties
-        if (/[a-zA-ZÀ-ÿ']/.test(e.key)) {
+        // Check altijd eerst of we in wiki-link modus zijn (heeft prioriteit)
+        const _line   = s.lines[s.cur.row];
+        const _before = _line.slice(0, s.cur.col);
+        const _wikiMatch = _before.match(/\[\[([^\]\[]{0,40})$/);
+
+        if (_wikiMatch) {
+          // We zitten na [[  — toon/ververs notitie dropdown
+          const q = _wikiMatch[1].toLowerCase();
+          if (notes && notes.length) {
+            const matches = notes
+              .filter(n => n.title && (q === "" || n.title.toLowerCase().includes(q)))
+              .sort((a, b) => {
+                const ap = a.title.toLowerCase().startsWith(q) ? 0 : 1;
+                const bp = b.title.toLowerCase().startsWith(q) ? 0 : 1;
+                return ap - bp || (b.modified||"").localeCompare(a.modified||"");
+              })
+              .slice(0, 8)
+              .map(n => ({ word: n.title, source: "wiki", id: n.id }));
+            if (matches.length) {
+              compRef.current = {list: matches, idx: 0, open: true, wikiMode: true};
+              setCompList(matches); setCompIdx(0); setCompOpen(true);
+              positionCompAtCursor();
+            } else {
+              closeCompletion();
+            }
+          }
+        } else if (/[a-zA-ZÀ-ÿ']/.test(e.key)) {
+          // Normale woord-completion
           const prefix = getWordBeforeCursor(s);
           if (prefix.length >= 3) {
             triggerLocalCompletion(s);
@@ -1302,12 +1337,8 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
             closeCompletion();
           }
         } else {
-          // Sluit word-completion bij scheidingstekens,
-          // maar toon markdown-snippet hints bij triggers
+          // Markdown snippet hints
           closeCompletion();
-          const line   = s.lines[s.cur.row];
-          const before = line.slice(0, s.cur.col);
-          // Toon hint-popup voor markdown-snippets
           const mdTriggers = [
             { re: /\[\[$/, hint: "[[notitie]]  — link invoegen" },
             { re: /#{1,3} $/, hint: "## Sectie  — kop (h1/h2/h3 + Tab)" },
@@ -1317,11 +1348,23 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
             { re: /^- \[ \]/, hint: "- [ ] taak  (todo + Tab)" },
             { re: /```$/, hint: "```taal … \`\`\`  (code + Tab)" },
           ];
-          const hit = mdTriggers.find(t => t.re.test(before));
+          const hit = mdTriggers.find(t => t.re.test(_before));
           if (hit) {
-            const hint = [{word: hit.hint, source: "md"}];
-            compRef.current = {list: hint, idx: 0, open: true};
-            setCompList(hint); setCompIdx(0); setCompOpen(true);
+            // Bij [[ meteen dropdown openen met alle notities
+            if (/\[\[$/.test(_before) && notes && notes.length) {
+              const matches = notes
+                .sort((a, b) => (b.modified||"").localeCompare(a.modified||""))
+                .slice(0, 8)
+                .map(n => ({ word: n.title, source: "wiki", id: n.id }));
+              compRef.current = {list: matches, idx: 0, open: true, wikiMode: true};
+              setCompList(matches); setCompIdx(0); setCompOpen(true);
+              positionCompAtCursor();
+            } else {
+              const hint = [{word: hit.hint, source: "md"}];
+              compRef.current = {list: hint, idx: 0, open: true};
+              setCompList(hint); setCompIdx(0); setCompOpen(true);
+              positionCompAtCursor();
+            }
           }
         }
         draw(); return;
@@ -1428,37 +1471,8 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
       if (e.key === "Enter")     { runCmd(s, s.cmdBuf); setMode("NORMAL"); s.cmdBuf=""; setCmdBuf(""); draw(); return; }
       if (e.key === "Backspace") { s.cmdBuf=s.cmdBuf.slice(0,-1); setCmdBuf(s.cmdBuf); draw(); return; }
       if (e.key === "Tab") {
-        // :tag completion
         const tm = s.cmdBuf.match(/^(tag[+-]?\s+)(\S*)$/);
-        if (tm) {
-          const p=tm[2].replace(/^#/,"");
-          const hit=allTags.find(t=>t.startsWith(p)&&t!==p);
-          if(hit){s.cmdBuf=tm[1]+hit; setCmdBuf(s.cmdBuf);}
-          draw(); return;
-        }
-        // :e notitietitel completion via allNotesText heuristic
-        const em = s.cmdBuf.match(/^(e\s+)(.*)$/);
-        if (em && allNotesText) {
-          const q = em[2].toLowerCase().trim();
-          // Zoek notitietitels in allNotesText (formaat: "--- title: XYZ ---")
-          const titleMatches = [];
-          const re = /title:\s*(.+)/g;
-          let mt;
-          while ((mt = re.exec(allNotesText)) !== null && titleMatches.length < 8) {
-            const t = mt[1].trim();
-            if (q === "" || t.toLowerCase().includes(q)) titleMatches.push(t);
-          }
-          if (titleMatches.length === 1) {
-            // Unieke match: vul direct aan
-            s.cmdBuf = em[1] + titleMatches[0];
-            setCmdBuf(s.cmdBuf);
-            setStatus("e: " + titleMatches[0]);
-          } else if (titleMatches.length > 1) {
-            // Meerdere matches: toon als status
-            setStatus(titleMatches.slice(0,5).join("  |  ") + (titleMatches.length>5 ? " +" : ""));
-          }
-          draw(); return;
-        }
+        if (tm) { const p=tm[2].replace(/^#/,""); const hit=allTags.find(t=>t.startsWith(p)&&t!==p); if(hit){s.cmdBuf=tm[1]+hit; setCmdBuf(s.cmdBuf);} }
         draw(); return;
       }
       if (e.key.length === 1) { s.cmdBuf+=e.key; setCmdBuf(s.cmdBuf); draw(); return; }
@@ -2206,6 +2220,17 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
     return {x, y};
   };
 
+  // Zet completion popup op de huidige cursorpositie — met schermrandcorrectie
+  const positionCompAtCursor = () => {
+    const {x, y} = getCursorPx();
+    const maxX = window.innerWidth  - 280;
+    const maxY = window.innerHeight - 280;
+    setCompPos({
+      x: Math.max(4, Math.min(x, maxX)),
+      y: Math.min(y, maxY),   // spring omhoog als popup onder scherm valt
+    });
+  };
+
   // ── Help overlay ──────────────────────────────────────────────────────────
   const helpOverlay = helpOpen && React.createElement("div", {
     onClick: () => setHelpOpen(false),
@@ -2351,24 +2376,30 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
       React.createElement("canvas", {ref:cvRef, style:{display:"block"}}),
 
       // ── Completion popup ──────────────────────────────────────────────────
-      compOpen && compList.length > 0 && React.createElement("div", {
-        "data-comp-list": "1",
-        style: {
-          position: "fixed",
-          left: compPos.x + "px",
-          top:  compPos.y + "px",
-          zIndex: 9999,
-          background: W.bg2,
-          border: `1px solid ${W.blue}`,
-          borderRadius: "5px",
-          boxShadow: "0 4px 20px rgba(0,0,0,0.5)",
-          minWidth: "200px",
-          maxWidth: "340px",
-          overflowY: "auto",
-          maxHeight: "240px",
-          pointerEvents: "none",  // toetsafvang blijft bij het canvas
-        }
-      },
+      compOpen && compList.length > 0 && (() => {
+        // Bepaal of popup boven of onder cursor past
+        const popH = Math.min(compList.length * 32 + 28, 260);
+        const spaceBelow = window.innerHeight - compPos.y - 4;
+        const showAbove  = spaceBelow < popH && compPos.y > popH;
+        const popTop  = showAbove ? compPos.y - popH - 4 : compPos.y + 2;
+        return React.createElement("div", {
+          "data-comp-list": "1",
+          style: {
+            position: "fixed",
+            left: compPos.x + "px",
+            top:  popTop + "px",
+            zIndex: 9999,
+            background: W.bg2,
+            border: `1px solid ${W.blue}`,
+            borderRadius: "5px",
+            boxShadow: "0 4px 20px rgba(0,0,0,0.6)",
+            minWidth: "220px",
+            maxWidth: "360px",
+            overflowY: "auto",
+            maxHeight: "260px",
+            pointerEvents: "none",
+          }
+        },
         // Popup header
         React.createElement("div", {
           style: {
@@ -2413,7 +2444,8 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
             )
           )
         )
-      ),
+      ); // einde IIFE popup
+      })(),
 
       // ── Spell-indicator (rechts boven in editor) ─────────────────────────
       spellLang !== "off" && React.createElement("div", {

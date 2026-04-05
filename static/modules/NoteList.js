@@ -15,6 +15,8 @@ const NoteList = ({
   onDailyNote,
   onSearchChange,
   onTagFilterChange,
+  dateFilter = "",
+  onDateFilterChange,
   isMobile = false,
   onCloseSidebar,
 }) => {
@@ -22,6 +24,8 @@ const NoteList = ({
   const listRef    = useRef(null);
   const hoverTimer = useRef(null);
   const [sortBy,    setSortBy]    = useState("modified");
+  const [showCalendar, setShowCalendar] = useState(false);
+  const setDateFilter = onDateFilterChange || (() => {});
   const [hoverNote, setHoverNote] = useState(null); // {note, rect} voor peek-tooltip
   const [pinnedIds, setPinnedIds] = useState(() => {
     try { return JSON.parse(localStorage.getItem("zk_pins") || "[]"); }
@@ -54,26 +58,40 @@ const NoteList = ({
 
   // ── Filtering + sortering ────────────────────────────────────────────────
   const filtered = useMemo(() => {
-    const q = search.toLowerCase();
-    const list = notes.filter(n =>
-      (!q || n.title?.toLowerCase().includes(q)
-          || n.content?.toLowerCase().includes(q)
-          || (n.tags || []).some(t => t.includes(q)))
-      && (!tagFilter  || (n.tags || []).includes(tagFilter))
-      && (!typeFilter || (n.noteType || "") === typeFilter)
-    );
-    // Sorteren
+    const q       = (search || "").toLowerCase().trim();
+    const now     = Date.now();
+    const DAY     = 86400000;
+    const cutoffs = { today: DAY, week: 7*DAY, month: 30*DAY };
+    const cutoff  = dateFilter ? cutoffs[dateFilter] : null;
+    const list = notes.filter(n => {
+      // 1. Datum filter — gebruik created datum (modified kan file-sync datum zijn)
+      if (cutoff !== null) {
+        const d = n.created || n.modified || "";
+        const t = d ? new Date(d).getTime() : NaN;
+        if (!d || isNaN(t) || (now - t) > cutoff) return false;
+      }
+      // 2. Zoekterm
+      if (q) {
+        const inTitle   = (n.title   || "").toLowerCase().includes(q);
+        const inContent = (n.content || "").toLowerCase().includes(q);
+        const inTags    = (n.tags    || []).some(t => t.toLowerCase().includes(q));
+        if (!inTitle && !inContent && !inTags) return false;
+      }
+      // 3. Tag filter
+      if (tagFilter && !(n.tags || []).includes(tagFilter)) return false;
+      // 4. Type filter
+      if (typeFilter && (n.noteType || "") !== typeFilter) return false;
+      return true;
+    });
+
     return [...list].sort((a, b) => {
-      if (sortBy === "title") {
-        return (a.title || "").localeCompare(b.title || "", "nl", {sensitivity: "base"});
-      }
-      if (sortBy === "created") {
+      if (sortBy === "title")
+        return (a.title || "").localeCompare(b.title || "", "nl", {sensitivity:"base"});
+      if (sortBy === "created")
         return new Date(b.created || 0) - new Date(a.created || 0);
-      }
-      // standaard: modified (meest recent boven)
       return new Date(b.modified || b.created || 0) - new Date(a.modified || a.created || 0);
     });
-  }, [notes, search, tagFilter, typeFilter, sortBy]);
+  }, [notes, search, tagFilter, typeFilter, sortBy, dateFilter]);
 
   // Gepinde notities bovenaan
   const displayNotes = React.useMemo(() => {
@@ -168,18 +186,29 @@ const NoteList = ({
           React.createElement("span", { style: { fontSize: "16px", lineHeight: 1 } }, "＋"),
           "nieuw zettel"
         ),
-        React.createElement("button", {
+        // Kalender-toggle
+        onDailyNote && React.createElement("button", {
+          onClick: () => setShowCalendar(p => !p),
+          title: showCalendar ? "Sluit kalender" : "Open kalender",
+          style: { background: showCalendar ? "rgba(138,198,242,0.15)" : "rgba(234,231,136,0.08)",
+                   color: showCalendar ? W.blue : W.yellow,
+                   border: `1px solid ${showCalendar ? "rgba(138,198,242,0.4)" : "rgba(234,231,136,0.25)"}`,
+                   borderRadius: "6px", padding: "8px 10px", fontSize: "14px",
+                   cursor: "pointer", flexShrink: 0,
+                   display: "flex", alignItems: "center",
+                   touchAction: "manipulation", transition: "all 0.12s" }
+        }, "📅"),
+        // Vandaag knop
+        onDailyNote && React.createElement("button", {
           onClick: onDailyNote,
           title: "Open of maak de dagnotitie van vandaag",
-          style: { background: "rgba(234,231,136,0.12)",
-                   color: W.yellow, border: `1px solid rgba(234,231,136,0.3)`,
-                   borderRadius: "6px", padding: "8px 10px", fontSize: "14px",
-                   cursor: "pointer", fontWeight: "bold", flexShrink: 0,
-                   display: "flex", alignItems: "center", gap: "4px",
+          style: { background: "rgba(234,231,136,0.08)",
+                   color: W.yellow, border: `1px solid rgba(234,231,136,0.25)`,
+                   borderRadius: "6px", padding: "8px 6px", fontSize: "11px",
+                   cursor: "pointer", flexShrink: 0,
+                   display: "flex", alignItems: "center",
                    touchAction: "manipulation" }
-        },
-          "📅"
-        )
+        }, "vandaag")
       ),
 
       // Zoekbalk
@@ -195,6 +224,24 @@ const NoteList = ({
                  boxSizing: "border-box" }
       })
     ),
+
+    // ── Kalender widget ─────────────────────────────────────────────────────
+    showCalendar && React.createElement(CalendarWidget, {
+      notes,
+      onDailyNote: (dateStr) => {
+        // Zoek bestaande dagnotitie voor die datum of maak een nieuwe
+        const [yr, mo, dy] = dateStr.split("-");
+        const title = `${["zondag","maandag","dinsdag","woensdag","donderdag","vrijdag","zaterdag"][new Date(dateStr).getDay()]} ${parseInt(dy)}-${parseInt(mo)}-${yr}`;
+        const existing = notes.find(n => n.tags?.includes("dagnotitie") && n.title === title);
+        if (existing) {
+          onSelect?.(existing.id);
+        } else {
+          onDailyNote?.();  // fallback naar vandaag als datum niet overeenkomt
+        }
+        setShowCalendar(false);
+      },
+      onClose: () => setShowCalendar(false),
+    }),
 
     // ── Type-filterbalk ─────────────────────────────────────────────────────
     React.createElement("div", {
@@ -300,6 +347,39 @@ const NoteList = ({
             borderRadius: "4px", padding: "2px 7px",
             fontSize: "10px", cursor: "pointer",
             fontWeight: sortBy === id ? "600" : "400",
+            transition: "all 0.12s",
+          }
+        }, label)
+      )
+    ),
+
+    // ── Datum-filter balk ───────────────────────────────────────────────────
+    React.createElement("div", {
+      style: { display: "flex", alignItems: "center", gap: "2px",
+               padding: "3px 6px", borderBottom: `1px solid ${W.splitBg}`,
+               background: W.bg, flexShrink: 0 }
+    },
+      React.createElement("span", {
+        style: { fontSize: "9px", color: W.fgMuted, marginRight: "3px",
+                 letterSpacing: "0.5px" }
+      }, "📅"),
+      ...[
+        { id: "",       label: "alle" },
+        { id: "today",  label: "vandaag" },
+        { id: "week",   label: "week" },
+        { id: "month",  label: "maand" },
+      ].map(({ id, label }) =>
+        React.createElement("button", {
+          key: id,
+          onClick: () => setDateFilter(id),
+          style: {
+            background: dateFilter === id && id !== "" ? "rgba(232,200,122,0.15)" : "none",
+            color:      dateFilter === id && id !== "" ? W.yellow
+                      : id === "" && dateFilter === "" ? W.blue : W.fgMuted,
+            border:    `1px solid ${dateFilter === id && id !== "" ? "rgba(232,200,122,0.35)" : "transparent"}`,
+            borderRadius: "4px", padding: "2px 7px",
+            fontSize: "10px", cursor: "pointer",
+            fontWeight: dateFilter === id ? "600" : "400",
             transition: "all 0.12s",
           }
         }, label)

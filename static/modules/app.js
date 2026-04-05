@@ -1426,9 +1426,7 @@ const App = () => {
                 // Voeg importedAt toe zodat leeslijst hem herkent
                 const withImport = {...note, importedAt: new Date().toISOString()};
                 const saved=await NoteStore.save(withImport);
-                setNotes([...NoteStore.getAll()]);
-                // Navigeer pas NA de WebImporter reset (setTimeout geeft component tijd om op te ruimen)
-                setTimeout(() => { setSelId(saved.id); setTab("notes"); }, 1600);
+                setNotes([...NoteStore.getAll()]); setSelId(saved.id); setTab("notes");
                 return saved;  // zodat onDescribeImages de id heeft
               }}));
           if(t==="reading") return React.createElement("div",{style:{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",minHeight:0}},

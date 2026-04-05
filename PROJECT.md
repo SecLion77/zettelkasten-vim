@@ -1,310 +1,197 @@
-# PROJECT.md — Zettelkasten VIM Briefing
+# Zettelkasten VIM — PROJECT.md
 
-> Plak dit bestand aan het begin van elke nieuwe chatsessie.
-> Vertel ook welke module je wilt werken: Graph, VimEditor, PDFViewer etc.
-
----
-
-## Wat is dit project?
-
-Zelfstandige Python desktop-app voor kennisbeheer (Zettelkasten). Notities als Markdown op schijf. Geen bundler, geen framework — vanilla JS + React via CDN.
-
-**Stack:**
-- Frontend: Vanilla JS + React (CDN, geen bundler)
-- Backend: Python 3.11+ (puur stdlib, geen Flask)
-- AI: Lokale Ollama modellen + cloud (Anthropic, OpenAI, Google, Mistral, OpenRouter)
-- PDF rendering: PDF.js
-- Font: Hack (monospace), hoofdfont voor de hele UI
+Canoniek briefingdocument voor nieuwe chatsessies. Altijd meesturen als context.
 
 ---
 
-## Bestandslocaties
+## Stack & paden
+
+| Onderdeel | Waarde |
+|-----------|--------|
+| Frontend | Vanilla JS + React (CDN), geen build-stap |
+| Backend | Python 3, `server.py` op poort `8080` |
+| Vault | `/Users/hj/Documents/Zettelkast/notes/` |
+| Project | `/Users/hj/Downloads/zettelkasten-vim/` |
+| Fonts | Hack (editor), DM Sans (UI) |
+| Kleurschema | Void Cyan (`W`-object in `app.js`) |
+| AI lokaal | Ollama op `localhost:11434` |
+| AI online | OpenRouter, Anthropic, Google, Mistral, OpenAI |
+
+---
+
+## Navigatiestructuur (MAIN_TABS)
 
 ```
-/Users/hj/Downloads/zettelkasten-vim/
-├── server.py              ← Python backend
-├── index.html             ← HTML shell + module laadvolgorde
-├── app.js                 ← Globals, constants, api object, TagPill, TagEditor
-└── modules/
-    ├── SpellEngine.js     ← SpellEngine + CompletionEngine
-    ├── VimEditor.js       ← Canvas VIM editor (grootste module, ~2100 regels)
-    ├── TagFilterBar.js    ← Tag-filter balk voor graaf
-    ├── Graph.js           ← Kennisgraaf (~1460 regels)
-    ├── PDFViewer.js       ← PDF viewer + CanvasMount + TextLayerMount
-    ├── VaultSettings.js   ← Instellingen modal (vault, API-sleutels, PDF, weergave)
-    ├── ImagesGallery.js   ← Afbeeldingen gallerij
-    ├── MermaidEditor.js   ← Mermaid + MindMap + LLMNotebook + FuzzySearch + SearchViewer
-    ├── ModelPicker.js     ← Model selector dropdown
-    ├── LinksSidebar.js    ← Rechter links-zijbalk (backlinks/outlinks/linken)
-    ├── NoteEditor.js      ← Notitie editor wrapper
-    ├── NotePreview.js     ← Preview + semantisch verwant paneel
-    ├── NotesTab.js        ← Orkestratielaag: NoteList + NoteEditor + LinksSidebar
-    ├── NoteList.js        ← Notitie-lijst + dagnotitie knop
-    ├── NotesMeta.js       ← Metadata-zijpaneel
-    ├── TagManager.js      ← SmartTagEditor + TagManagerPanel
-    ├── WebImporter.js     ← URL/Markdown/Word import
-    ├── ReadingList.js     ← Leeslijst
-    ├── StatsPanel.js      ← Statistieken + 💾 schijfruimte tab
-    ├── ReviewPanel.js     ← Spaced repetition review
-    ├── pdfService.js      ← PDF API-client (ondersteunt AbortController signal)
-    ├── noteApi.js         ← Notities API-client
-    ├── noteStore.js       ← In-memory notities store
-    └── annotationStore.js ← PDF-annotaties store
-
-Vault: /Users/hj/Documents/Zettelkast/
-Server draait op poort 8080.
+📝 Schrijven       ← NotesTab (hoofd)
+📚 Bibliotheek     → PDF | Plaatjes | Leeslijst | Review
+🔍 Ontdekken       → Zoeken | Graaf | Mindmap | Notebook | Canvas
+🌐 Invoer          → URL/Word | PDF
+⚙  Beheer          → Tags | Statistieken | Opschonen
 ```
+
+**Split-mode tabs** (vaste volgorde): Zoeken → Graaf → Mindmap → Notebook → Canvas → PDF → Plaatjes
+
+Split-mode opent altijd op de Zoeken tab.
 
 ---
 
 ## Module laadvolgorde (index.html)
 
-Volgorde is kritiek — elke module verwacht vorige modules beschikbaar:
+Kritisch — modules mogen alleen afhankelijkheden gebruiken die eerder geladen zijn:
 
-```
-PDF.js → React → ReactDOM
-→ noteApi, noteStore, pdfService, annotationStore  (data-modules)
-→ app.js          (globals: W, api, genId, renderMd, TagPill, TagEditor, FONT_SIZE, etc.)
-→ SpellEngine.js  (SpellEngine, CompletionEngine)
-→ VimEditor.js    (gebruikt SpellEngine + CompletionEngine)
-→ TagFilterBar.js
-→ Graph.js        (gebruikt TagFilterBar)
-→ PDFViewer.js    (definieert ook ONLINE_MODELS, MODEL_*, useWindowSize)
-→ VaultSettings.js
-→ ImagesGallery.js
-→ MermaidEditor.js (gebruikt VimEditor; definieert LLMNotebook, MindMap, FuzzySearch, SearchViewer)
-→ ModelPicker.js  (gebruikt ONLINE_MODELS uit PDFViewer)
-→ NoteList, SmartLinkSuggester, LinksSidebar, NoteEditor, NotePreview,
-   NotesMeta, TagManager, NotesTab, WebImporter, ReadingList, StatsPanel, ReviewPanel
-→ Bootstrap: ReactDOM.createRoot(#root).render(App)
-```
+1. PDF.js, React, ReactDOM
+2. `noteApi.js`, `noteStore.js`, `pdfService.js`, `annotationStore.js` (stable)
+3. `app.js` — definieert `W`, `TagPill`, `VimEditor`, `genId`, `ZK_DEBUG`, `zklog`
+4. UI-modules (NoteList, NoteEditor, etc.)
+5. `Whiteboard.js`, `VaultCleanup.js`
+6. Bootstrap: `ReactDOM.createRoot(...).render(React.createElement(App))`
 
 ---
 
-## Belangrijke globals (gedefinieerd in app.js)
+## Architectuurprincipes
 
-```javascript
-W                  // Wombat kleurpalet: W.bg, W.fg, W.blue, W.yellow, W.orange, W.comment etc.
-api                // HTTP client: api.get(), api.post(), api.put(), api.del()
-genId()            // Genereer unieke notitie-ID
-extractLinks(text) // Haal [[links]] uit tekst
-extractTags(text)  // Haal #tags uit tekst
-renderMd(text, notes, onLink)  // Markdown → HTML met zlink pills
-TagPill            // React component voor tag weergave
-TagEditor          // React component voor tag invoer
-FONT_SIZE          // Editor font grootte (pixels)
-LINE_H             // Editor regel hoogte (pixels)
-PAD_LEFT           // Editor linker padding
-```
+**State management**
+- `notes` array leeft in `App` (app.js), doorgegeven als props
+- `NoteStore` is de in-memory cache, `NoteAPI` is de enige server-fetch laag
+- `dateFilter`, `search`, `tagFilter` zijn gehesen naar `NotesTab` (stabiel over re-renders)
+- `sidebar` const in `NotesTab` heeft `key="main-notelist"` om unmount te voorkomen
 
----
+**Datums**
+- `created` = echte aanmaakdatum (uit frontmatter of `st_birthtime` op macOS)
+- `modified` = laatste opslagdatum (altijd overschreven bij save)
+- `created` wordt NOOIT overschreven bij save — server leest bestaande waarde
+- Datumfilter filtert op `created`, sorteer-knoppen sorteren op `modified`
 
-## App component (app.js) — key state
+**AI / SSE streaming**
+- SSE lezen via `resp.body.getReader()`, nooit `r.json()`
+- Qwen3 modellen krijgen `enable_thinking: False` via `extra_body`
+- `reasoning_content` tokens worden ook doorgestuurd als fallback
 
-```javascript
-// Tabs
-tab, setTab          // actieve subtab: "notes"|"search"|"graph"|"pdf"|"images"|"llm"|...
-splitMode            // split-screen aan/uit
-splitTab             // rechter split tab (default: "llm")
-splitFocus           // "left"|"right"
+**Server routing (model → provider)**
+- `claude-*` → Anthropic
+- `gemini-*` → Google
+- `gpt-*` / `o1-*` / `o3-*` / `o4-*` → OpenAI
+- `org/model` (bevat `/`) → OpenRouter (incl. Qwen3, Llama4)
+- `mistral-*` / `magistral-*` → Mistral
+- overig → Ollama lokaal
 
-// Notities
-notes, setNotes      // gespiegeld vanuit NoteStore
-selId, setSelId      // geselecteerde notitie-ID
-
-// Jobs (achtergrondtaken)
-jobs, setJobs        // [{id, type, label, status, result, error}]
-addJob(job)          // job.controller = AbortController voor annulering
-updateJob(id, patch)
-cancelJob(id)        // abort + markeer als geannuleerd
-
-// Server status
-serverOnline         // bool — elke 10s gepollt via /api/health
-```
-
----
-
-## VimEditor — architectuur
-
-Canvas-gebaseerde editor. Alle editor-staat in `S = useRef({...})` — nooit stale in event handlers.
-
-**Key state in S.current:**
-```javascript
-lines[]      // regelarray
-cur          // {row, col}
-scroll       // eerste zichtbare regel
-mode         // "INSERT"|"NORMAL"|"COMMAND"|"SEARCH"|"VISUAL"
-visual       // bool
-visualLine   // bool (V mode)
-visualStart  // {row, col}
-folds        // {row → eindRow} — gevouwen secties
-marks        // {a-z → {row, col}}
-macros       // {a-z → [keys]}
-macroRec     // null of register letter
-lastAction   // {type, ...} voor dot repeat
-pendingOp    // 'c'|'d'|'y' wacht op text object
-relativeNumbers // bool
-```
-
-**Vim features geïmplementeerd:**
-- INSERT/NORMAL/VISUAL/COMMAND/SEARCH modes
-- Visual mode: v (char), V (linewise) — d/y/c op selectie
-- Text objects: ci"/di(/ya{ etc. — inner/around voor " ' \` ( [ { <
-- % bracket matching (multi-regel)
-- Folds: za/zo/zc/zR/zM voor markdown headers — fold header pill zichtbaar
-- Marks: ma/'a
-- Macros: qq...q / @q
-- Dot repeat: . herhaalt insert/delete/replace
-- r replace-char (ook herhaalbaar via .)
-- Relative line numbers: :rnu
-- Persistente undo: localStorage per noteId, max 40 stappen, 24u TTL
-- Incrementele spellcheck: alleen gewijzigde regels
-- Notitie-templates: :template dagnotitie/meeting/literatuur/project/vraag
-- Keyboard shortcuts: ? of :help → overlay
-
-**Props:**
-```javascript
-value, onChange, onSave, onEscape
-noteTags, onTagsChange, allTags
-noteId           // voor persistente undo
-llmModel
-allNotesText     // voor completion engine
-onSplitCmd       // split navigatie callbacks
-onEditorRef      // geeft {focus, setCursor, insertAtCursor} terug
-```
-
----
-
-## Graph — architectuur
-
-Canvas-gebaseerde graaf in `Graph.js`.
-
-**Key refs:**
-```javascript
-nodesRef.current   // array van nodes
-alphaRef.current   // simulatie cooling (1.0 = heet, 0 = gestabiliseerd)
-dirtyRef.current   // true = herteken nodig
-lassoRef.current   // {active, x1,y1,x2,y2}
-```
-
-**Tick loop:** bouwt `nodeMap = new Map(nodes.map(n=>[n.id,n]))` per frame voor O(1) lookups.
-Simulatie stopt automatisch als `maxV < 0.3` — geen CPU gebruik na stabilisatie.
-
-**Features:**
-- Arrowheads op edges
-- Lasso selectie (Shift+sleep)
-- 💥 uiteen / ↺ herstart knoppen
-- Pad-finder (ook via tag-nodes), pathOnly toggle
-- Safari: controls paneel gebruikt `top+bottom` anchoring
-
----
-
-## Split modus
-
-```
-┌─────────────────────┬─────────────────────┐
-│  Linker editor      │  Rechter paneel      │
-│  (NotesTab)         │  Tab-balk:           │
-│                     │  ✏️ Zoeken Graaf      │
-│  Ctrl+W Ctrl+W →   │  Mindmap Notebook    │
-│  toggle focus       │  PDF Plaatjes        │
-└─────────────────────┴─────────────────────┘
-```
-
-Bij activeren:
-- Linker sidebar (notitieslijst) klapt automatisch in
-- Rechter linkszijbalk klapt automatisch in
-- Standaard tab rechts: "llm" (Notebook)
-
-Focus wisselen: Ctrl+W Ctrl+W, Ctrl+H (links), Ctrl+L (rechts)
-Sidebar toggle: Ctrl+B (links), ▶ knop (rechts)
-
----
-
-## Zoeken / SearchViewer
-
-`FuzzySearch` (in MermaidEditor.js) heeft twee modi:
-- **fuzzy**: `/api/search` — FZF-stijl
-- **fulltext**: `/api/fulltext` — exacte zoekterm
-
-Beide modi: klikken op resultaat → laadt in **SearchViewer** rechts (niet direct openen).
-
-**SearchViewer** (canvas-based, in MermaidEditor.js):
-- Vim-navigatie: j/k, n/N (treffers), g/G, Ctrl+D/U
-- Zoekterm highlight (geel)
-- Muisselectie → y of Ctrl+C om te kopiëren
-- Y = kopieer huidige regel
-- Relatieve/absolute regelnummers (rel# knop)
-- initialRow: springt naar de gevonden regel
-- "◀ Plak selectie links" in split modus
-
----
-
-## Server (server.py)
-
-Puur Python stdlib — geen Flask. HTTP via `BaseHTTPRequestHandler`.
-
-**Routing:**
-```python
-def _get_routes(self):   # GET endpoints als dict
-def _post_routes(self):  # POST endpoints als dict
-# Complexe handlers als aparte methoden: _get_disk_usage(), _get_api_keys(), etc.
-```
-
-**Endpoints (selectie):**
-```
-GET  /api/health          → {"ok": true}  (server status check)
-GET  /api/notes           → alle notities
-GET  /api/disk-usage      → vault + schijf statistieken
-POST /api/search          → fuzzy zoeken
-POST /api/fulltext        → full-text zoeken
-POST /api/spellcheck      → spell + grammar check (incrementeel via dirty_rows)
-POST /api/llm/chat        → LLM chat
-POST /api/llm/summarize-pdf    → PDF samenvatting (ondersteunt AbortController)
-POST /api/llm/describe-image   → afbeelding beschrijven (ondersteunt AbortController)
-POST /api/import-url      → URL importeren (ondersteunt AbortController)
-```
+**noteApi.js sanitize whitelist**
+Bevat: `id`, `title`, `content`, `tags`, `created`, `modified`, `sourceUrl`, `importedAt`, `isRead`, `noteType`.
+Nieuwe velden toevoegen aan deze lijst bij uitbreiding.
 
 ---
 
 ## Bekende patronen & valkuilen
 
-**Safari/iOS:**
-- Graph controls: gebruik `top + bottom` anchoring, NIET `height: calc(100vh - X)`
-- Scroll containers: `position: absolute; inset: 0; overflow: auto` met expliciete `height: 100%`
-- `overflowY: scroll` werkt betrouwbaarder dan `auto` in absolute elementen
-- PDF scroll: `touchAction: "pan-y"` op TextLayerMount (NIET "none")
+| Patroon | Oplossing |
+|---------|-----------|
+| Stale closure in canvas/draw loop | `useRef` + dep array goed bijhouden |
+| NoteList reset state bij re-render | `key="main-notelist"` op het NoteList element |
+| SSE wordt als JSON gelezen | Gebruik `ReadableStream` reader |
+| macOS bash 3.2 syntax | Geen `${var,,}` — gebruik lowercase literals |
+| Props niet doorgegeven | Altijd expliciet doorgeven door de hele keten |
+| `modified` altijd vandaag door file-sync | Filter op `created`, niet `modified` |
+| `fileRef.current` is null | Hidden `<input>` altijd in DOM, los van conditionele toolbar |
+| Config key werkt niet | Voeg toe aan server-side allowlist in `server.py` |
+| AI-knop disabled | Check `llmModel` prop én `content` prop (min 5 tekens) |
 
-**React patterns:**
-- `S = useRef({...})` in VimEditor — alle editor state, nooit stale
-- `dirtyRef.current = true` bij ALLE interacties die hertekening vereisen
-- `nodeMap = new Map(...)` per frame in Graph tick — O(1) lookup
+---
 
-**CSS-rommel van LLM:**
-- `_sanitize_llm_text()` in server.py sanitiseert voor opslag
-- `renderMd` in app.js: callout HTML als `%%MEDIA%%` placeholder opslaan vóór taghl regex
+## Huidige features
 
-**Syntaxis checken:**
+### Notities & editor
+- VIM-stijl editor met `:commando`'s (`:tag`, `:goyo`, `:spell`, `:vs`)
+- `[[wiki-link]]` autocomplete bij typen `[[`
+- Inline tag-extractie (`#tag` in tekst)
+- Promoveer-suggestie banner (vluchtig → permanent/literatuur)
+- Daily Notes knop (📅 in notitieslijst header)
+- Inbox-badge voor vluchtige notities >2 dagen oud
+
+### Notitieslijst (NoteList)
+- Zoeken op titel/inhoud/tags
+- Filter op notitietype + tag
+- Sorteren: recent (modified) / nieuw (created) / A–Z
+- Datumfilter: alle / vandaag / week / maand (op `created` datum)
+- Gepinde notities bovenaan
+
+### Preview (NotePreview)
+- Titel zichtbaar in toolbar (met ID en tags)
+- Export MD knop (⬇ export md) — YAML frontmatter + bronverwijzingen
+- Markdown rich/plain toggle
+- Backlinks, outlinks, leestijd
+- Review markering
+- Tekst gecentreerd met `maxWidth: 780px`
+
+### Rechterzijbalk (LinksSidebar)
+- Tabs: ← In | → Uit | + Link | Info
+- Info tab: notitietype selector, SmartTagEditor (met AI), metadata (ID/datum)
+- Inklapbaar — toggle knop gecentreerd in smalle rand
+- Props: `llmModel`, `onTagsChange`, `onNoteTypeChange`, `onTagRemove`
+
+### Linker sidebar (NoteList in NotesTab)
+- Inklapbaar via ‹ knop bovenaan
+- Uitklapbaar via › knop in smalle rand
+
+### PDF bibliotheek (PDFViewer)
+- Volledig scherm als geen PDF open
+- Hidden `<input>` altijd in DOM (import knop werkt altijd)
+- Annotaties: tekst, tags, kleuren, AI-tags
+- AI samenvatten via LLM
+
+### AI-features
+- SmartTagEditor met AI-suggesties (editor, sidebar, PDF annotaties)
+- Slimme link suggesties (SmartLinkSuggester)
+- Graaf: verrassende verbinding + AI-analyse via SSE
+- Debug via `ZK_DEBUG` — zie sectie Debug
+
+### Canvas / Whiteboard
+- Vrij canvas met kaarten en verbindingen
+- Kaarten omzetten naar notities
+- Opslag via `/api/config` (whiteboard_* keys)
+- Beschikbaar als hoofd-tab én in split-mode
+
+---
+
+## Installatie (alles in één keer)
+
 ```bash
-node --check modules/VimEditor.js
-python3 -c "import ast; ast.parse(open('server.py').read())"
+PROJ=/Users/hj/Downloads/zettelkasten-vim
+
+cp ~/Downloads/app.js        $PROJ/app.js
+cp ~/Downloads/index.html    $PROJ/index.html
+cp ~/Downloads/server.py     $PROJ/server.py
+
+for f in NoteList NoteEditor NotePreview NotesTab LinksSidebar \
+          VimEditor Graph PDFViewer VaultCleanup VaultSettings \
+          StatsPanel SmartLinkSuggester TagManager Whiteboard noteApi; do
+  cp ~/Downloads/modules/$f.js $PROJ/modules/$f.js
+done
+```
+
+Server herstarten:
+```bash
+pkill -f "python.*server.py"
+cd /Users/hj/Downloads/zettelkasten-vim && python3 server.py &
 ```
 
 ---
 
-## Huidige openstaande punten
+## Debug
 
-- Niets kritiek bekend op moment van schrijven
-- Safari graaf: knoppen zichtbaar na scroll in controls paneel ✓
-- iPad PDF scroll: touchAction pan-y fix ✓
-- Server offline indicator: /api/health endpoint ✓
+```javascript
+// Browser console — aan:
+localStorage.setItem('zk_debug', '1')
+// Uit:
+localStorage.removeItem('zk_debug')
+// Of via URL:
+// http://localhost:8080/?debug
+```
+
+`console.error` en `console.warn` zijn altijd zichtbaar. Alleen `zklog()` calls zijn aan/uit te zetten.
 
 ---
 
-## Werkwijze
+## Open punten
 
-- Lever alleen **gewijzigde bestanden** (geen volledige ZIPs tenzij gevraagd)
-- Syntaxischeck altijd vóór levering: `node --check` en `ast.parse`
-- UI-taal: **Nederlands**
-- Code-taal: **Engels**
-- Bij grote wijzigingen: werk per module in aparte bestanden
+- **Datumfilter**: werkt alleen correct voor notities met een echte `created` datum. Notities die vóór de server-fix opgeslagen zijn kunnen `created = vandaag` hebben. De server overschrijft `created` nu nooit meer bij save en gebruikt `st_birthtime` als fallback.
+- **CSS-garbage**: double-escaping in `renderMd` is deels opgelost via `/api/cleanup-vault`. Volledig oplossen vereist sanitisatie bij save-time.

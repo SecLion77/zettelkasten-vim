@@ -342,13 +342,25 @@ const Whiteboard = ({ notes = [], onCreateNote, llmModel = "", serverImages = []
           const fontSize = Math.max(9, Math.min(14, 13 * v.scale));
           ctx.font = `${fontSize}px 'DM Sans', sans-serif`;
 
-          // Tekst wrappen
+          // Tekst wrappen — alle regels tonen, kaart hoogte past zich aan
           const maxW = sw - 12 * v.scale;
           const lineH = fontSize * 1.45;
           const lines = wrapText(ctx, c.text || "", maxW);
-          const maxLines = Math.floor((sh - (textY - sx.y) - 8 * v.scale) / lineH);
-          lines.slice(0, maxLines).forEach((ln, i) => {
-            if (i === maxLines - 1 && lines.length > maxLines) ln = ln.slice(0,-2) + "…";
+          const topPad = textY - sx.y;
+          const neededH = topPad + lines.length * lineH + 10 * v.scale;
+
+          // Als tekst groter is dan kaart: teken de kaart groter (alleen visueel)
+          if (neededH > sh) {
+            ctx.fillStyle = c.noteId ? "rgba(138,198,242,0.08)" : col.bg;
+            ctx.strokeStyle = isSel ? col.border : (c.noteId ? "#8ac6f2" : col.border + "80");
+            ctx.lineWidth = isSel ? 1.5 : 0.8;
+            roundRect(ctx, sx.x, sx.y, sw, neededH, 6 * v.scale);
+            ctx.fill(); ctx.stroke();
+            ctx.fillStyle = col.text;
+            ctx.font = `${fontSize}px 'DM Sans', sans-serif`;
+          }
+
+          lines.forEach((ln, i) => {
             ctx.fillText(ln, sx.x + 6 * v.scale, textY + i * lineH + fontSize);
           });
 
@@ -407,7 +419,7 @@ const Whiteboard = ({ notes = [], onCreateNote, llmModel = "", serverImages = []
   // ── Kaarten aanmaken ─────────────────────────────────────────────────────
   // Alle mutaties gaan via stateRef — nooit stale closure-state
   const addCard = useCallback((wx, wy, text = "", colorIdx = 0, noteId = null) => {
-    const card = { id: genId(), x: wx - 80, y: wy - 40, w: 160, h: 80, text, colorIdx, noteId };
+    const card = { id: genId(), x: wx - 90, y: wy - 45, w: 180, h: 90, text, colorIdx, noteId };
     const next = [...stateRef.current.cards, card];
     stateRef.current = { ...stateRef.current, cards: next };
     setCards(next);

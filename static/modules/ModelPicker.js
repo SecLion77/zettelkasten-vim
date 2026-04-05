@@ -3,25 +3,8 @@
 
 const ModelPicker = ({llmModel, setLlmModel, compact=false}) => {
   const [open, setOpen]       = React.useState(false);
-  const [localModels, setLocal]   = React.useState([]);
-  const [customModels, setCustom] = React.useState([]);
+  const [localModels, setLocal] = React.useState([]);
   const ref = React.useRef(null);
-
-  // Laad custom modellen bij mount en bij wijzigingen vanuit VaultSettings
-  const loadCustom = React.useCallback(() => {
-    fetch("/api/custom-models").then(r=>r.json()).then(d=>{
-      if (d.custom_models) {
-        setCustom(d.custom_models);
-        window._customModels = d.custom_models; // zodat MODEL_LABEL ze kent
-      }
-    }).catch(()=>{});
-  }, []);
-
-  React.useEffect(() => {
-    loadCustom();
-    window.addEventListener("custom-models-changed", loadCustom);
-    return () => window.removeEventListener("custom-models-changed", loadCustom);
-  }, [loadCustom]);
 
   // Sluit bij klik buiten
   React.useEffect(() => {
@@ -113,54 +96,71 @@ const ModelPicker = ({llmModel, setLlmModel, compact=false}) => {
       React.createElement("div",{style:{height:"1px",background:W.splitBg,margin:"6px 0"}}),
       React.createElement("div",{style:{padding:"4px 14px 3px",fontSize:"11px",
         color:W.comment, letterSpacing:"0.7px", opacity:0.8, fontWeight:"bold"}},"LOKAAL (OLLAMA)"),
-      localModels.length === 0
-        ? React.createElement("div",{style:{padding:"6px 18px",fontSize:"14px",color:W.fgDim}},"laden…")
-        : localModels.map(m =>
-            React.createElement("button", {
-              key:m, onClick:()=>select(m),
-              style:{
-                display:"flex", alignItems:"center", gap:"8px",
-                width:"100%", textAlign:"left",
-                background: llmModel===m ? "rgba(159,202,86,0.15)" : "none",
-                border:"none", padding:"5px 14px 5px 18px",
-                color: llmModel===m ? W.comment : W.fg,
-                fontSize:"14px", cursor:"pointer",
-              }
-            },
-              React.createElement("span",{style:{fontSize:"15px",width:"20px"}},"🖥"),
-              React.createElement("span",null, m),
-              llmModel===m && React.createElement("span",{style:{marginLeft:"auto",fontSize:"11px",color:W.comment}},"✓")
-            )
-          ),
 
-      // Custom modellen sectie
-      customModels.length > 0 && React.createElement(React.Fragment, null,
-        React.createElement("div",{style:{height:"1px",background:W.splitBg,margin:"6px 0"}}),
-        React.createElement("div",{style:{padding:"4px 14px 3px",fontSize:"11px",
-          color:W.yellow, letterSpacing:"0.7px", opacity:0.8, fontWeight:"bold"}},"CUSTOM"),
-        customModels.map(m =>
+      // Aanbevolen lokale modellen — altijd zichtbaar
+      ...[
+        {id:"qwen3:8b",      label:"Qwen3 8B",      desc:"Aanbevolen · NL/EN · 128K context", icon:"🐉"},
+        {id:"gemma3:12b",    label:"Gemma 3 12B",   desc:"16GB RAM · lang context · sterk NL", icon:"💎"},
+        {id:"llama3.3:8b",   label:"Llama 3.3 8B",  desc:"Stabiel · snel · 8GB RAM",          icon:"🦙"},
+        {id:"llama3.2-vision",label:"Llama 3.2 Vision",desc:"Beelden + tekst · vision model",  icon:"👁"},
+      ].map(m => {
+        const isInstalled = localModels.includes(m.id) || localModels.some(l => l.startsWith(m.id.split(":")[0]));
+        const isActive = llmModel === m.id;
+        return React.createElement("button", {
+          key: m.id,
+          onClick: () => isInstalled ? select(m.id) : null,
+          title: isInstalled ? m.label : `Niet geïnstalleerd — voer uit: ollama pull ${m.id}`,
+          style:{
+            display:"flex", alignItems:"center", gap:"8px",
+            width:"100%", textAlign:"left",
+            background: isActive ? "rgba(159,202,86,0.15)" : "none",
+            border:"none", padding:"5px 14px 5px 18px",
+            color: isActive ? W.comment : isInstalled ? W.fg : W.fgDim,
+            fontSize:"14px", cursor: isInstalled ? "pointer" : "default",
+            opacity: isInstalled ? 1 : 0.55,
+          }
+        },
+          React.createElement("span",{style:{fontSize:"15px",width:"20px",flexShrink:0}}, m.icon),
+          React.createElement("div",{style:{flex:1,minWidth:0}},
+            React.createElement("div",null, m.label),
+            React.createElement("div",{style:{fontSize:"10px",color:W.fgMuted,marginTop:"1px"}},
+              isInstalled ? m.desc : `ollama pull ${m.id}`)
+          ),
+          isActive && React.createElement("span",{style:{marginLeft:"auto",fontSize:"11px",color:W.comment}},"✓"),
+          !isInstalled && React.createElement("span",{style:{marginLeft:"auto",fontSize:"10px",color:W.fgDim}},"↓")
+        );
+      }),
+
+      // Overige geïnstalleerde modellen
+      localModels.filter(m => !["qwen3","gemma3","llama3.3","llama3.2"].some(p => m.startsWith(p))).length > 0 &&
+        React.createElement("div",{style:{padding:"6px 14px 2px",fontSize:"10px",color:W.fgMuted}},"Overige geïnstalleerd:"),
+      ...localModels
+        .filter(m => !["qwen3","gemma3","llama3.3","llama3.2"].some(p => m.startsWith(p)))
+        .map(m =>
           React.createElement("button", {
-            key: m.id, onClick: () => select(m.id),
+            key:m, onClick:()=>select(m),
             style:{
               display:"flex", alignItems:"center", gap:"8px",
               width:"100%", textAlign:"left",
-              background: llmModel===m.id ? `rgba(232,200,122,0.15)` : "none",
-              border:"none", padding:"5px 14px 5px 18px",
-              color: llmModel===m.id ? W.yellow : W.fg,
-              fontSize:"14px", cursor:"pointer",
+              background: llmModel===m ? "rgba(159,202,86,0.15)" : "none",
+              border:"none", padding:"4px 14px 4px 18px",
+              color: llmModel===m ? W.comment : W.fg,
+              fontSize:"13px", cursor:"pointer",
             }
           },
-            React.createElement("span",{style:{fontSize:"15px",width:"20px"}},"⚙"),
-            React.createElement("span",null, m.label || m.id),
-            llmModel===m.id && React.createElement("span",{style:{marginLeft:"auto",fontSize:"11px",color:W.yellow}},"✓")
+            React.createElement("span",{style:{fontSize:"14px",width:"20px"}},"🖥"),
+            React.createElement("span",null, m),
+            llmModel===m && React.createElement("span",{style:{marginLeft:"auto",fontSize:"11px",color:W.comment}},"✓")
           )
-        )
-      ),
+        ),
+      localModels.length === 0 &&
+        React.createElement("div",{style:{padding:"4px 18px 6px",fontSize:"12px",color:W.fgDim}},
+          "Ollama niet gevonden — start Ollama om lokale modellen te gebruiken"),
 
       // API-key hint
       React.createElement("div",{style:{padding:"8px 14px 4px",fontSize:"12px",
         color:W.fgDim,borderTop:`1px solid ${W.splitBg}`,marginTop:"4px"}},
-        "Online: stel API-key in via Instellingen")
+        "Online: stel API-key in als env-variabele")
     )
   );
 };

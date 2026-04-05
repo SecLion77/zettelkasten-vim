@@ -12,9 +12,13 @@ const LinksSidebar = ({
   onSelect,
   onInsertLink,
   onTagRemove,
+  onTagsChange,
   onNoteTypeChange,
   isTablet = false,
   splitMode = false,
+  externalOpen = null,
+  onExternalToggle = null,
+  llmModel = "",
 }) => {
   const { useState, useMemo, useEffect } = React;
   const [tab, setTab]           = useState("back");
@@ -30,13 +34,19 @@ const LinksSidebar = ({
     { id: "index",      label: "Index",       color: W.purple,    desc: "Structuurnotitie — navigatie en overzicht" },
   ];
   // Op tablet standaard ingeklapt; ook inklappen bij split modus
-  const [open, setOpen]         = useState(!isTablet && !splitMode);
+  const [_open, _setOpen]       = useState(!isTablet && !splitMode);
+  // Gebruik externe state als beschikbaar, anders interne
+  const open    = externalOpen !== null ? externalOpen : _open;
+  const setOpen = onExternalToggle !== null
+    ? () => onExternalToggle()
+    : _setOpen;
 
-  // Auto-collapse bij split modus aan/uit
+  // Auto-collapse bij split modus aan/uit (alleen als interne state)
   useEffect(() => {
-    if (splitMode) setOpen(false);
-    else if (!isTablet) setOpen(true);
-  }, [splitMode, isTablet]);
+    if (externalOpen !== null) return; // extern beheerd
+    if (splitMode) _setOpen(false);
+    else if (!isTablet) _setOpen(true);
+  }, [splitMode, isTablet, externalOpen]);
 
   // ── Outlinks: [[...]] patronen in content ────────────────────────────────────
   const outlinks = useMemo(() => {
@@ -129,34 +139,62 @@ const LinksSidebar = ({
 
 
 
-  // Ingeklapt: smalle rand met gecentreerde toggle knop
+  // Ingeklapt: smalle rand met toggle knop gecentreerd
   if (!open) {
+    const backN = backlinks.length;
+    const outN  = outlinks.length;
     return React.createElement("div", {
       style: {
-        width: "16px", flexShrink: 0,
+        width: "20px", flexShrink: 0,
         borderLeft: `1px solid ${W.splitBg}`,
         background: W.bg2,
         display: "flex", flexDirection: "column",
         alignItems: "center", justifyContent: "center",
+        position: "relative",
       }
     },
-      React.createElement("button", {
+      // Centrale toggle knop — gecentreerd in de rand
+      React.createElement("div", {
         onClick: () => setOpen(true),
         title: "Links uitklappen",
-        className: "sidebar-toggle-btn",
         style: {
-          background: "none",
-          border: `1px solid ${W.splitBg}`,
-          borderRight: "none",
-          borderRadius: "5px 0 0 5px",
-          color: W.fgMuted, cursor: "pointer",
-          width: "16px", height: "52px",
-          display: "flex", alignItems: "center", justifyContent: "center",
-          fontSize: "10px", padding: 0,
-          touchAction: "manipulation",
-          transition: "background 0.15s, color 0.15s",
-        }
-      }, "‹")
+          display: "flex", flexDirection: "column",
+          alignItems: "center", justifyContent: "center",
+          gap: "6px",
+          padding: "10px 0",
+          cursor: "pointer",
+          borderRadius: "6px 0 0 6px",
+          background: "rgba(255,255,255,0.0)",
+          transition: "background 0.12s",
+          width: "20px",
+        },
+        onMouseEnter: e => e.currentTarget.style.background = "rgba(125,216,198,0.08)",
+        onMouseLeave: e => e.currentTarget.style.background = "transparent",
+      },
+        // Pijltje
+        React.createElement("span", {
+          style: { fontSize: "10px", color: W.fgMuted, lineHeight: 1 }
+        }, "‹"),
+        // Verticaal label
+        React.createElement("span", {
+          style: {
+            fontSize: "8px", color: W.fgDim,
+            letterSpacing: "1.2px", textTransform: "uppercase",
+            writingMode: "vertical-rl", transform: "rotate(180deg)",
+            userSelect: "none", lineHeight: 1.2,
+          }
+        }, "Links"),
+        // Badge
+        (backN + outN) > 0 && React.createElement("span", {
+          style: {
+            fontSize: "8px", color: W.blue,
+            background: `${W.blue}18`,
+            border: `1px solid ${W.blue}40`,
+            borderRadius: "6px", padding: "1px 3px",
+            lineHeight: 1, minWidth: "12px", textAlign: "center",
+          }
+        }, backN + outN)
+      )
     );
   }
 
@@ -171,20 +209,19 @@ const LinksSidebar = ({
         React.createElement("button", {
           onClick: () => setOpen(false),
           title: "Links inklappen",
-          className: "sidebar-toggle-btn",
           style: {
             background: "none",
             border: `1px solid ${W.splitBg}`,
-            borderRight: "none",
-            borderRadius: "5px 0 0 5px",
+            borderRadius: "4px",
             color: W.fgMuted, cursor: "pointer",
-            width: "16px", height: "36px",
+            width: "22px", height: "22px",
             display: "flex", alignItems: "center", justifyContent: "center",
-            fontSize: "10px", padding: 0,
+            fontSize: "11px", padding: 0,
             touchAction: "manipulation",
-            transition: "background 0.15s, color 0.15s",
-            marginRight: "-1px",
-          }
+            transition: "all 0.12s",
+          },
+          onMouseEnter: e => { e.currentTarget.style.color = W.blue; e.currentTarget.style.borderColor = W.blue; },
+          onMouseLeave: e => { e.currentTarget.style.color = W.fgMuted; e.currentTarget.style.borderColor = W.splitBg; },
         }, "›")
       ),
       React.createElement("div", { style: S.tabs },
@@ -269,7 +306,7 @@ const LinksSidebar = ({
         content:      note?.content || "",
         noteId:       note?.id || "",
         allNotes,
-        llmModel:     null,   // geen LLM in de smalle zijbalk
+        llmModel,
         onInsertLink: (linkText, title) => {
           onInsertLink?.(linkText);
         },
@@ -336,22 +373,19 @@ const LinksSidebar = ({
           })
         ),
 
-        // Tags
+        // Tags — met SmartTagEditor voor AI-suggesties
         React.createElement("div", null,
           React.createElement("div", {
             style: { fontSize: "9px", color: W.fgMuted, letterSpacing: "1px",
                      marginBottom: "6px", textTransform: "uppercase" }
           }, "Tags"),
-          React.createElement("div", {
-            style: { display: "flex", flexWrap: "wrap", gap: "4px" }
-          },
-            ...(note.tags || []).map(t =>
-              React.createElement(TagPill, { key: t, tag: t, onRemove: () => onTagRemove?.(t) })
-            ),
-            !(note.tags || []).length && React.createElement("span", {
-              style: { fontSize: "12px", color: W.splitBg }
-            }, "geen")
-          )
+          React.createElement(SmartTagEditor, {
+            tags:     note.tags || [],
+            onChange: (newTags) => onTagsChange?.(newTags),
+            allTags:  [...new Set(allNotes.flatMap(n => n.tags || []))],
+            content:  note.content || "",
+            llmModel,
+          })
         ),
 
         // Metadata

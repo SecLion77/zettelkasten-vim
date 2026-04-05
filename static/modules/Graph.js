@@ -1,7 +1,7 @@
 // ── Graph ───────────────────────────────────────────────────────────────────
 // Deps: W, genId, extractLinks, extractTags, TagFilterBar
 
-const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDeleteNote}) => {
+const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDeleteNote, llmModel=""}) => {
   const { useState, useRef, useCallback, useMemo, useEffect } = React;
 
   const cvRef      = useRef(null);
@@ -28,12 +28,17 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
   const [semanticMode, setSemanticMode]= useState(false);
   const [semanticEdges,setSemanticEdges]=useState([]);
   const [semLoading,   setSemLoading]  = useState(false);
+  const [surpriseNote, setSurpriseNote]= useState(null); // {a, b} onverwachte verbinding
+  const [aiInsight,    setAiInsight]   = useState(null); // AI-analyse van de verbinding
+  const [aiLoading,    setAiLoading]   = useState(false);
   const [pathFrom,     setPathFrom]    = useState(null);
   const [pathTo,       setPathTo]      = useState(null);
   const [pathResult,   setPathResult]  = useState(null);
   const [pathOnly,     setPathOnly]    = useState(false); // toon alleen pad-nodes
   const [ctxMenu,      setCtxMenu]     = useState(null);
   const [pinnedIds,    setPinnedIds]   = useState(new Set());
+  const [focusNode,    setFocusNode]   = useState(null); // {id, depth} — neighborhood filter
+  const [peekNoteId,   setPeekNoteId]  = useState(null); // notitie peek panel
   const [scale,        setScale]       = useState(1);
   const [lassoRect,    setLassoRect]   = useState(null);  // {x,y,w,h} in screen coords
   const [lassoSel,     setLassoSel]    = useState(new Set()); // geselecteerde node-ids
@@ -41,10 +46,14 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
   const semEdgesRef= useRef([]);
   const lassoRef   = useRef(null); // {active, sx, sy} startpunt lasso
   const pinnedRef  = useRef(new Set());
+  const focusRef   = useRef(null); // focusNode via ref voor stale-closure-vrije draw loop
+  const surpriseRef = useRef(null); // surpriseNote via ref
 
   useEffect(()=>{ pathRef.current    = pathResult; }, [pathResult]);
   useEffect(()=>{ semEdgesRef.current= semanticEdges; }, [semanticEdges]);
   useEffect(()=>{ pinnedRef.current  = pinnedIds; }, [pinnedIds]);
+  useEffect(()=>{ focusRef.current   = focusNode;   dirtyRef.current = true; }, [focusNode]);
+  useEffect(()=>{ surpriseRef.current = surpriseNote; dirtyRef.current = true; }, [surpriseNote]);
 
   // ── Cleanup: verwijder broken links uit alle notities ─────────────────────
   const [cleanupMsg,   setCleanupMsg]  = useState("");
@@ -205,6 +214,181 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
     return null;
   }, []);
 
+  // ── Neighborhood: geef alle node-IDs binnen N stappen ────────────────────────
+  const getNeighborhood = React.useCallback((rootId, depth) => {
+    const result = new Set([rootId]);
+    let frontier = new Set([rootId]);
+    for (let d = 0; d < depth; d++) {
+      const next = new Set();
+      frontier.forEach(id => {
+        const node = nodesRef.current.find(n => n.id === id);
+        if (!node) return;
+        // Uitgaande links
+        (node.links || []).forEach(lid => { if (!result.has(lid)) { result.add(lid); next.add(lid); } });
+        (node.tagLinks || []).forEach(lid => { if (!result.has(lid)) { result.add(lid); next.add(lid); } });
+        // Inkomende links (backlinks)
+        nodesRef.current.forEach(n => {
+          if (!result.has(n.id) && ((n.links||[]).includes(id) || (n.tagLinks||[]).includes(id))) {
+            result.add(n.id); next.add(n.id);
+          }
+        });
+      });
+      frontier = next;
+      if (frontier.size === 0) break;
+    }
+    return result;
+  }, []);
+
+  // ── Verrassende verbinding — rijke analyse met meerdere verbindingstypen ──────
+  const findSurpriseConnection = React.useCallback(() => {
+    const noteNodes = nodesRef.current.filter(n => n.type === "note");
+    if (noteNodes.length < 4) return;
+
+    const stop = new Set(["notitie","geeft","wordt","heeft","zijn","deze","voor",
+      "door","over","meer","naar","ook","een","van","het","de","dat","dit","maar",
+      "als","bij","uit","op","in","is","aan","te","om","ze","we","er","dan",
+      "nog","al","nu","zo","wel","niet","met","hij","zij","kan","werd"]);
+
+    const nodeWords = (n) => {
+      const text = ((n.label||"") + " " + (n.content||"").slice(0,500)).toLowerCase();
+      return new Set(text.split(/[^a-z]+/).filter(w => w.length > 4 && !stop.has(w)));
+    };
+
+    const linked = new Set();
+    const neighbors = {};
+    noteNodes.forEach(n => {
+      if (!neighbors[n.id]) neighbors[n.id] = new Set();
+      (n.links || []).forEach(lid => {
+        linked.add([n.id, lid].sort().join("|"));
+        neighbors[n.id].add(lid);
+        if (!neighbors[lid]) neighbors[lid] = new Set();
+        neighbors[lid].add(n.id);
+      });
+    });
+
+    const candidates = [];
+    for (let i = 0; i < noteNodes.length; i++) {
+      for (let j = i + 1; j < noteNodes.length; j++) {
+        const a = noteNodes[i], b = noteNodes[j];
+        if (linked.has([a.id, b.id].sort().join("|"))) continue;
+
+        const reasons = [];
+        let score = 0;
+
+        // 1. Gedeelde tags
+        const aTags = new Set(a.tags || []);
+        const sharedTags = (b.tags || []).filter(t => aTags.has(t) && t !== "daily" && t !== "dagnotitie");
+        if (sharedTags.length) {
+          score += sharedTags.length * 4;
+          reasons.push({ icon: "🏷", label: "Gedeelde tags", detail: sharedTags.map(t => "#"+t).join(", ") });
+        }
+
+        // 2. Gedeelde kernwoorden in titel + content
+        const aWords = nodeWords(a), bWords = nodeWords(b);
+        const sharedWords = [...aWords].filter(w => bWords.has(w));
+        if (sharedWords.length >= 2) {
+          score += sharedWords.length * 2;
+          reasons.push({ icon: "📝", label: "Overlappende thema\u2019s", detail: sharedWords.slice(0,5).join(", ") });
+        }
+
+        // 3. Gemeenschappelijke buur (2-stappen nabijheid)
+        const aNbrs = neighbors[a.id] || new Set();
+        const bNbrs = neighbors[b.id] || new Set();
+        const sharedNbrs = [...aNbrs].filter(id => bNbrs.has(id));
+        if (sharedNbrs.length) {
+          score += sharedNbrs.length * 3;
+          const names = sharedNbrs.slice(0,2)
+            .map(id => noteNodes.find(n => n.id === id)?.label || "")
+            .filter(Boolean);
+          reasons.push({ icon: "🕸", label: "Gemeenschappelijke buur", detail: "via " + names.join(", ") });
+        }
+
+        // 4. Complementaire notitietype (literatuur→permanent, vluchtig→permanent)
+        const tA = a.noteType || "", tB = b.noteType || "";
+        if ((tA==="fleeting"&&tB==="permanent")||(tA==="permanent"&&tB==="fleeting")||
+            (tA==="literature"&&tB==="permanent")||(tA==="permanent"&&tB==="literature")) {
+          score += 2;
+          const lbl = {fleeting:"vluchtig",literature:"literatuur",permanent:"permanent",index:"index"};
+          reasons.push({ icon: "⚡", label: "Complementaire typen", detail: (lbl[tA]||tA) + " + " + (lbl[tB]||tB) });
+        }
+
+        if (score > 0) candidates.push({ a, b, score, reasons, sharedTags, sharedWords: sharedWords.slice(0,4) });
+      }
+    }
+
+    if (!candidates.length) { setSurpriseNote({empty: true}); return; }
+
+    candidates.sort((x, y) => y.score - x.score);
+    const pool = candidates.slice(0, Math.min(15, candidates.length));
+    // Gewogen random op score
+    const totalW = pool.reduce((s, c) => s + c.score, 0);
+    let r = Math.random() * totalW, pick = pool[pool.length-1];
+    for (const c of pool) { r -= c.score; if (r <= 0) { pick = c; break; } }
+
+    setSurpriseNote(pick);
+    setAiInsight(null); // reset vorige AI analyse
+
+    // AI analyse via SSE streaming (niet r.json() — dat werkt niet op SSE)
+    if (llmModel) {
+      setAiLoading(true);
+      const noteA = notes.find(n => n.id === pick.a.id);
+      const noteB = notes.find(n => n.id === pick.b.id);
+      const ctxA = (noteA?.content || "").slice(0, 400).trim();
+      const ctxB = (noteB?.content || "").slice(0, 400).trim();
+      (async () => {
+        try {
+          const resp = await fetch("/api/llm/chat", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              model: llmModel,
+              system: "Je bent een Zettelkasten-assistent. Antwoord beknopt in het Nederlands, maximaal 3 zinnen.",
+              messages: [{ role: "user", content:
+                `Twee notities die nog niet gelinkt zijn:\n\n` +
+                `**"${pick.a.label}"**\n${ctxA}\n\n` +
+                `**"${pick.b.label}"**\n${ctxB}\n\n` +
+                `Wat is de verrassende conceptuele verbinding? Welk nieuw inzicht of vraag ontstaat als je ze combineert?`
+              }],
+            }),
+          });
+          if (!resp.ok) throw new Error("HTTP " + resp.status);
+          const reader = resp.body.getReader();
+          const dec = new TextDecoder();
+          let buf = "", full = "";
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buf += dec.decode(value, { stream: true });
+            const lines = buf.split("\n");
+            buf = lines.pop() || "";
+            for (const line of lines) {
+              if (!line.startsWith("data: ")) continue;
+              try {
+                const evt = JSON.parse(line.slice(6));
+                if (evt.error) throw new Error(evt.error);
+                const chunk = evt.token || evt.delta || "";
+                if (chunk) { full += chunk; setAiInsight(full); }
+                if (evt.done) break;
+              } catch {}
+            }
+          }
+          if (!full) setAiInsight(null);
+        } catch (e) {
+          setAiInsight("Kon geen AI-analyse laden: " + e.message);
+        } finally {
+          setAiLoading(false);
+        }
+      })();
+    }
+    const cv = cvRef.current; if (!cv) return;
+    const dpr = window.devicePixelRatio || 1;
+    const CW = cv.width / dpr, CH = cv.height / dpr;
+    const mx = (pick.a.x + pick.b.x) / 2, my = (pick.a.y + pick.b.y) / 2;
+    const dist = Math.sqrt((pick.b.x-pick.a.x)**2 + (pick.b.y-pick.a.y)**2);
+    const zs = Math.min(1.8, Math.max(0.6, 300 / Math.max(dist, 1)));
+    viewRef.current = { scale: zs, ox: CW/2 - mx*zs, oy: CH/2 - my*zs };
+    dirtyRef.current = true;
+  }, [llmModel, notes]);
   // ── Spread geselecteerde nodes uiteen ───────────────────────────────────────
   const spreadSelected = React.useCallback((ids) => {
     if (!ids || ids.size === 0) return;
@@ -252,10 +436,12 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
     const dpr=window.devicePixelRatio||1;
 
     const attempt = (tries=0) => {
-      const CW=cv.width/dpr, CH=cv.height/dpr;
-      // Canvas nog niet gemeten — probeer opnieuw
+      // Lees canvas grootte altijd vers via getBoundingClientRect
+      const rect = cv.getBoundingClientRect();
+      const CW = rect.width || cv.width/dpr;
+      const CH = rect.height || cv.height/dpr;
       if(!CW || !CH) {
-        if (tries < 10) setTimeout(()=>attempt(tries+1), 50);
+        if (tries < 15) setTimeout(()=>attempt(tries+1), 50);
         return;
       }
       const ns=nodesRef.current;
@@ -266,13 +452,16 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
       const maxY=Math.max(...ns.map(n=>n.y));
       const pw=maxX-minX||1, ph=maxY-minY||1;
       const padding=80;
-      const s=Math.min((CW-padding)/pw,(CH-padding)/ph,2);
+      const s=Math.min((CW-padding)/pw,(CH-padding)/ph,2.5);
       viewRef.current={
         scale:s,
         ox: CW/2 - ((minX+maxX)/2)*s,
         oy: CH/2 - ((minY+maxY)/2)*s,
       };
-      setScale(s); // trigger re-render
+      setScale(s);
+      // Forceer hertekening in de volgende frame
+      dirtyRef.current = true;
+      requestAnimationFrame(()=>{ dirtyRef.current = true; });
     };
     attempt();
   }, []);
@@ -728,6 +917,39 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
         }
       });
 
+      // Surprise set — eenmalig berekend vóór gebruik
+      const _surprise = surpriseNote && !surpriseNote.empty ? surpriseNote : null;
+      const surpriseIds = _surprise ? new Set([_surprise.a.id, _surprise.b.id]) : null;
+
+      // Surprise verbindingslijn — gestippeld tussen de twee nodes
+      if(surpriseIds && _surprise) {
+        const na = nodes.find(n => n.id === _surprise.a.id);
+        const nb = nodes.find(n => n.id === _surprise.b.id);
+        if(na && nb) {
+          const pulse = 0.5 + Math.sin(Date.now()/600) * 0.3;
+          ctx.save();
+          ctx.setLineDash([8/v.scale, 6/v.scale]);
+          ctx.strokeStyle = `rgba(232,200,122,${pulse})`;
+          ctx.lineWidth = 2.5/v.scale;
+          ctx.beginPath();
+          ctx.moveTo(na.x, na.y);
+          ctx.lineTo(nb.x, nb.y);
+          ctx.stroke();
+          // Middenpunt label "?"
+          const mx = (na.x+nb.x)/2, my = (na.y+nb.y)/2;
+          ctx.setLineDash([]);
+          ctx.beginPath();ctx.arc(mx,my,10/v.scale,0,Math.PI*2);
+          ctx.fillStyle="rgba(18,22,26,0.9)";ctx.fill();
+          ctx.strokeStyle="rgba(232,200,122,0.7)";ctx.lineWidth=1.5/v.scale;ctx.stroke();
+          ctx.fillStyle="rgba(232,200,122,0.9)";
+          ctx.font=`bold ${12/v.scale}px sans-serif`;
+          ctx.textAlign="center";ctx.textBaseline="middle";
+          ctx.fillText("?",mx,my);
+          ctx.restore();
+          dirtyRef.current=true;
+        }
+      }
+
       // Nodes
       const searchSet=new Set(
         searchQ.trim()
@@ -735,6 +957,32 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
           : []
       );
       const hasSearch=searchSet.size>0;
+
+      // Neighborhood filter — eenmalig per frame berekend (niet per node)
+      const focusSet = focusNode
+        ? (() => {
+            const result = new Set([focusNode.id]);
+            let frontier = new Set([focusNode.id]);
+            for (let d = 0; d < focusNode.depth; d++) {
+              const next = new Set();
+              frontier.forEach(id => {
+                const node = nodes.find(n => n.id === id);
+                if (!node) return;
+                (node.links || []).forEach(lid => { if (!result.has(lid)) { result.add(lid); next.add(lid); } });
+                (node.tagLinks || []).forEach(lid => { if (!result.has(lid)) { result.add(lid); next.add(lid); } });
+                nodes.forEach(n => {
+                  if (!result.has(n.id) &&
+                      ((n.links||[]).includes(id) || (n.tagLinks||[]).includes(id))) {
+                    result.add(n.id); next.add(n.id);
+                  }
+                });
+              });
+              frontier = next;
+              if (!frontier.size) break;
+            }
+            return result;
+          })()
+        : null;
 
       nodes.forEach(n=>{
         const sel=n.id===selectedId;
@@ -748,13 +996,28 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
         const isLassoSel=lassoSel.has(n.id);
         // pathOnly: verberg alles behalve pad-nodes
         if(pathOnly && pathSet && !isPathNode && !sel) return;
-        const dimmed=(hasSearch&&!isSearchHit&&!sel)||(pathOnly&&pathSet&&!isPathNode);
+        const inFocus    = focusSet ? focusSet.has(n.id) : true;
+        const isSurprise = surpriseIds ? surpriseIds.has(n.id) : false;
+        const dimmed=(hasSearch&&!isSearchHit&&!sel)
+                   ||(pathOnly&&pathSet&&!isPathNode)
+                   ||(focusSet&&!inFocus&&!sel)
+                   ||(surpriseIds&&!isSurprise&&!sel);
 
         if(sel){
           ctx.beginPath();ctx.arc(n.x,n.y,r+12,0,Math.PI*2);
           const g=ctx.createRadialGradient(n.x,n.y,0,n.x,n.y,r+12);
           g.addColorStop(0,"rgba(234,231,136,0.3)");g.addColorStop(1,"rgba(234,231,136,0)");
           ctx.fillStyle=g;ctx.fill();
+        }
+        // Surprise glow — grote pulserende halo om beide nodes
+        if(isSurprise){
+          const pulseR = r + 14 + Math.sin(Date.now()/400) * 4;
+          ctx.beginPath();ctx.arc(n.x,n.y,pulseR,0,Math.PI*2);
+          const sg=ctx.createRadialGradient(n.x,n.y,r,n.x,n.y,pulseR);
+          sg.addColorStop(0,"rgba(232,200,122,0.35)");
+          sg.addColorStop(1,"rgba(232,200,122,0)");
+          ctx.fillStyle=sg;ctx.fill();
+          dirtyRef.current=true; // blijf hertekenen voor pulse animatie
         }
         if(hov&&!sel){
           ctx.beginPath();ctx.arc(n.x,n.y,r+6,0,Math.PI*2);
@@ -774,6 +1037,7 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
           color=`rgb(${r2},${g2},${b2})`;
         } else if(n.tags?.length) color=tagColors[n.tags[0]]||W.keyword;
         if(sel) color=W.yellow;
+        if(isSurprise&&!sel) color=W.yellow; // amber voor surprise nodes
         if(onPathNode&&!sel) color="#eae788";
         if(n.id===pathFrom&&!sel) color="#9fca56";
         if(n.id===pathTo&&!sel) color="#e5786d";
@@ -892,7 +1156,7 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
     };
     afRef.current=requestAnimationFrame(tick);
     return()=>cancelAnimationFrame(afRef.current);
-  },[notes,selectedId,tagColors,hubMode,communityMode,pathFrom,pathTo,searchQ,scale,pathOnly]);
+  },[notes,selectedId,tagColors,hubMode,communityMode,pathFrom,pathTo,searchQ,scale,pathOnly,focusNode,surpriseNote]);
 
   // ── Node under cursor (world coords) ─────────────────────────────────────
   const nodeAt=(sx,sy)=>{
@@ -976,7 +1240,7 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
         React.createElement("input",{
           value:searchQ,
           onChange:e=>setSearchQ(e.target.value),
-          onKeyDown:e=>{ if(e.key==="Enter") jumpToSearch(); if(e.key==="Escape") setSearchQ(""); },
+          onKeyDown:e=>{ if(e.key==="Enter") jumpToSearch(); if(e.key==="Escape"){ setSearchQ(""); setPeekNoteId(null); } },
           placeholder:"Zoek node…",
           style:{flex:1,background:"rgba(0,0,0,0.4)",border:"1px solid rgba(255,255,255,0.12)",
                  borderRadius:"4px",padding:"4px 8px",color:W.fg,fontSize:"12px",outline:"none"}
@@ -1038,12 +1302,13 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
          {label:"community",  val:communityMode,  set:setCommunityMode,  col:"#d787ff"},
          {label:"pad 🔍",     val:pathMode,       set:v=>{setPathMode(v);if(!v){setPathFrom(null);setPathTo(null);setPathResult(null);setPathOnly(false);}},col:W.yellow},
          {label:semLoading?"≈ laden…":"≈ sem.",   val:semanticMode, set:v=>setSemanticMode(v), col:"#d787ff"},
-        ].map(({label,val,set,col})=>React.createElement("button",{
-          key:label,onClick:()=>set(!val),
-          style:{background:val?`${col||"#8ac6f2"}22`:"rgba(0,0,0,0.4)",
-                 border:`1px solid ${val?(col||"rgba(138,198,242,0.5)"):"rgba(255,255,255,0.1)"}`,
-                 color:val?(col||"#a8d8f0"):W.fgMuted,
-                 borderRadius:"4px",padding:"3px 9px",fontSize:"13px",cursor:"pointer",fontWeight:val?"600":"400"}
+         {label:"✨ verrass", val:false, set:()=>findSurpriseConnection(), col:W.yellow, btn:true},
+        ].map(({label,val,set,col,btn})=>React.createElement("button",{
+          key:label, onClick: btn ? ()=>set() : ()=>set(!val),
+          style:{background: btn ? "rgba(232,200,122,0.12)" : val?`${col||"#8ac6f2"}22`:"rgba(0,0,0,0.4)",
+                 border:`1px solid ${btn ? "rgba(232,200,122,0.35)" : val?(col||"rgba(138,198,242,0.5)"):"rgba(255,255,255,0.1)"}`,
+                 color: btn ? W.yellow : val?(col||"#a8d8f0"):W.fgMuted,
+                 borderRadius:"4px",padding:"3px 9px",fontSize:"13px",cursor:"pointer",fontWeight:val||btn?"600":"400"}
         },label))
       ),
 
@@ -1056,7 +1321,16 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
                  color:"#a8d8f0",borderRadius:"4px",padding:"3px 9px",fontSize:"12px",cursor:"pointer",flex:1}
         },"⊞ fit"),
         React.createElement("button",{
-          onClick:()=>{ viewRef.current={scale:1,ox:0,oy:0}; setScale(1); },
+          onClick:()=>{
+              const cv2=cvRef.current;
+              const dpr2=window.devicePixelRatio||1;
+              const CW2=cv2?cv2.getBoundingClientRect().width||cv2.width/dpr2:800;
+              const CH2=cv2?cv2.getBoundingClientRect().height||cv2.height/dpr2:600;
+              viewRef.current={scale:1, ox:CW2/2, oy:CH2/2};
+              setScale(1);
+              dirtyRef.current=true;
+              requestAnimationFrame(()=>{ dirtyRef.current=true; });
+            },
           title:"Reset zoom naar 1:1",
           style:{background:"rgba(255,255,255,0.05)",border:"1px solid rgba(255,255,255,0.1)",
                  color:W.fgMuted,borderRadius:"4px",padding:"3px 9px",fontSize:"12px",cursor:"pointer"}
@@ -1103,54 +1377,6 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
           style:{background:"rgba(229,120,109,0.08)",border:"1px solid rgba(229,120,109,0.2)",
                  color:W.orange,borderRadius:"4px",padding:"3px 9px",fontSize:"12px",cursor:"pointer"}
         },"\u21BA herstart")
-      ),
-
-      // Cleanup knoppen
-      onUpdateNote && React.createElement("div",{style:{marginTop:"4px",display:"flex",flexDirection:"column",gap:"4px"}},
-        React.createElement("button",{
-          onClick: cleanupBrokenLinks,
-          title:"Verwijder [[links]] naar niet-bestaande notities",
-          style:{
-            background:"rgba(229,120,109,0.08)",
-            border:"1px solid rgba(229,120,109,0.2)",
-            color: cleanupMsg.startsWith("✓") ? W.comment : "#e5786d",
-            borderRadius:"4px", padding:"4px 9px",
-            fontSize:"11px", cursor:"pointer", textAlign:"left",
-          }
-        }, cleanupMsg || "🧹 Gebroken links opruimen"),
-        React.createElement("button",{
-          onClick: cleanupEmptyNotes,
-          title:"Zoek en verwijder lege notities (geen titel, geen inhoud)",
-          style:{
-            background: emptyMsg.startsWith("⚠") ? "rgba(234,231,136,0.08)" : "rgba(229,120,109,0.08)",
-            border:`1px solid ${emptyMsg.startsWith("⚠") ? "rgba(234,231,136,0.3)" : "rgba(229,120,109,0.2)"}`,
-            color: emptyMsg.startsWith("✓") ? W.comment : emptyMsg.startsWith("⚠") ? W.yellow : "#e5786d",
-            borderRadius:"4px", padding:"4px 9px",
-            fontSize:"11px", cursor:"pointer", textAlign:"left",
-          }
-        }, emptyMsg || "🗑 Lege notities verwijderen"),
-        React.createElement("button",{
-          onClick: deleteOrphans,
-          title:"Verwijder wezen-notities — geen links naar of van andere notities",
-          style:{
-            background: orphanMsg.startsWith("⚠") ? "rgba(234,231,136,0.08)" : "rgba(229,120,109,0.08)",
-            border:`1px solid ${orphanMsg.startsWith("⚠") ? "rgba(234,231,136,0.3)" : "rgba(229,120,109,0.2)"}`,
-            color: orphanMsg.startsWith("✓") ? W.comment : orphanMsg.startsWith("⚠") ? W.yellow : "#e5786d",
-            borderRadius:"4px", padding:"4px 9px",
-            fontSize:"11px", cursor:"pointer", textAlign:"left",
-          }
-        }, orphanMsg || "🔗 Wezen-notities verwijderen"),
-        React.createElement("button",{
-          onClick: cleanupCssGarbage,
-          title:"Verwijder LLM-CSS-rommel (font-weight:bold;color:#hex) uit alle notities",
-          style:{
-            background: cssCleanMsg.startsWith("✓") ? "rgba(159,202,86,0.08)" : "rgba(138,198,242,0.08)",
-            border:`1px solid ${cssCleanMsg.startsWith("✓") ? "rgba(159,202,86,0.3)" : "rgba(138,198,242,0.2)"}`,
-            color: cssCleanMsg.startsWith("✓") ? W.comment : cssCleanMsg.startsWith("⚠") ? W.orange : W.blue,
-            borderRadius:"4px", padding:"4px 9px",
-            fontSize:"11px", cursor:"pointer", textAlign:"left",
-          }
-        }, cssCleanMsg || "✨ CSS-rommel opschonen")
       ),
 
       // Tip
@@ -1366,7 +1592,7 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
                 if(p && p.length>0) setPathOnly(true); // automatisch alleen pad tonen
               },0);
             } else { setPathFrom(n.id);setPathTo(null);setPathResult(null);setPathOnly(false); }
-          } else if(n.type!=="tag") { onSelect(n.id); }
+          } else if(n.type!=="tag") { setPeekNoteId(n.id); }
         }
         dragging.current=null;
       },
@@ -1395,6 +1621,7 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
       onClick:e=>e.stopPropagation(),
     },
       [
+        {label:"👁 Bekijk notitie", action:()=>{ setPeekNoteId(ctxMenu.node.id); setCtxMenu(null); }},
         {label:"📖 Open notitie", action:()=>{ onSelect(ctxMenu.node.id); setCtxMenu(null); }},
         {label:pinnedIds.has(ctxMenu.node.id)?"📌 Losmaak (unpin)":"📌 Vastzetten (pin)",
          action:()=>{
@@ -1428,17 +1655,329 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
            if(ctxMenu.node.tags?.length){ setFilterTag(ctxMenu.node.tags[0]); }
            setCtxMenu(null);
          }, disabled:!(ctxMenu.node.tags?.length)},
-      ].map(({label,action,disabled})=>React.createElement("div",{
-        key:label,onClick:disabled?undefined:action,
-        style:{padding:"9px 14px",fontSize:"13px",cursor:disabled?"default":"pointer",
-               color:disabled?W.fgDim:W.fg,borderBottom:"1px solid rgba(255,255,255,0.05)",
-               background:"transparent",
-               transition:"background 0.1s",
-               userSelect:"none"},
-        onMouseEnter:e=>{ if(!disabled)e.target.style.background="rgba(255,255,255,0.07)"; },
-        onMouseLeave:e=>{ e.target.style.background="transparent"; },
-      },label))
+        {divider:true},
+        {label: (focusNode?.id===ctxMenu.node.id && focusNode?.depth===1) ? "✓ Direct verbonden (1)" : "◎ Toon direct verbonden",
+         action:()=>{ setFocusNode({id:ctxMenu.node.id,depth:1}); setCtxMenu(null); }},
+        {label: (focusNode?.id===ctxMenu.node.id && focusNode?.depth===2) ? "✓ Netwerk 2 stappen" : "◉ Toon netwerk 2 stappen",
+         action:()=>{ setFocusNode({id:ctxMenu.node.id,depth:2}); setCtxMenu(null); }},
+        {label: (focusNode?.id===ctxMenu.node.id && focusNode?.depth===3) ? "✓ Netwerk 3 stappen" : "⬤ Toon netwerk 3 stappen",
+         action:()=>{ setFocusNode({id:ctxMenu.node.id,depth:3}); setCtxMenu(null); }},
+        focusNode ? {label:"✕ Verwijder focus-filter", highlight:true,
+         action:()=>{ setFocusNode(null); setCtxMenu(null); }} : null,
+      ].filter(Boolean).map((item,i)=>{
+        if(item.divider) return React.createElement("div",{
+          key:"div"+i,
+          style:{height:"1px",background:"rgba(255,255,255,0.08)",margin:"3px 0"}
+        });
+        const {label,action,disabled,highlight}=item;
+        return React.createElement("div",{
+          key:label,onClick:disabled?undefined:action,
+          style:{padding:"9px 14px",fontSize:"13px",cursor:disabled?"default":"pointer",
+                 color:disabled?W.fgDim:highlight?W.orange:W.fg,
+                 borderBottom:"1px solid rgba(255,255,255,0.05)",
+                 background:"transparent",
+                 transition:"background 0.1s",
+                 userSelect:"none"},
+          onMouseEnter:e=>{ if(!disabled)e.target.style.background="rgba(255,255,255,0.07)"; },
+          onMouseLeave:e=>{ e.target.style.background="transparent"; },
+        },label);
+      })
     ),
+
+    // ── Focus-filter badge ────────────────────────────────────────────────
+    focusNode && React.createElement("div",{style:{
+      position:"absolute", top:"12px", left:"50%", transform:"translateX(-50%)",
+      background:"rgba(22,22,22,0.92)", border:`1px solid rgba(125,216,198,0.35)`,
+      borderRadius:"20px", padding:"5px 14px 5px 10px",
+      display:"flex", alignItems:"center", gap:"8px",
+      fontSize:"12px", color:W.blue, zIndex:25,
+      boxShadow:"0 2px 12px rgba(0,0,0,0.5)",
+      backdropFilter:"blur(8px)",
+    }},
+      React.createElement("span",{style:{fontSize:"14px"}},"◎"),
+      React.createElement("span",null,
+        `Focus: ${nodesRef.current.find(n=>n.id===focusNode.id)?.label||focusNode.id} — ${focusNode.depth} stap${focusNode.depth>1?"pen":""}`
+      ),
+      React.createElement("button",{
+        onClick:()=>setFocusNode(null),
+        style:{background:"none",border:`1px solid rgba(125,216,198,0.3)`,
+               color:W.fgMuted,borderRadius:"10px",padding:"1px 7px",
+               fontSize:"11px",cursor:"pointer",marginLeft:"4px"}
+      },"×")
+    ),
+
+    // ── Verrassende verbinding banner ────────────────────────────────────────
+    surpriseNote && React.createElement("div", {
+      style: {
+        position: "absolute", bottom: "52px", left: "50%",
+        transform: "translateX(-50%)",
+        background: "rgba(18,22,26,0.97)",
+        border: `1px solid rgba(232,200,122,0.4)`,
+        borderRadius: "10px", padding: "12px 18px",
+        zIndex: 25, maxWidth: "420px", width: "calc(100% - 40px)",
+        boxShadow: "0 4px 24px rgba(0,0,0,0.6)",
+        backdropFilter: "blur(10px)",
+      }
+    },
+      surpriseNote.empty
+        ? React.createElement("div", {
+            style: { fontSize: "13px", color: W.fgMuted, textAlign: "center" }
+          }, "Geen verrassende verbindingen gevonden — meer notities nodig.")
+        : React.createElement(React.Fragment, null,
+            React.createElement("div", {
+              style: { fontSize: "10px", color: W.yellow, letterSpacing: "1px",
+                       textTransform: "uppercase", marginBottom: "8px" }
+            }, "✨ Verrassende verbinding"),
+            React.createElement("div", {
+              style: { display: "flex", alignItems: "center", gap: "8px",
+                       marginBottom: "8px" }
+            },
+              React.createElement("span", {
+                onClick: () => { setPeekNoteId(surpriseNote.a.id); setSurpriseNote(null); },
+                style: { fontSize: "13px", fontWeight: "600", color: W.blue,
+                         cursor: "pointer", flex: 1, overflow: "hidden",
+                         textOverflow: "ellipsis", whiteSpace: "nowrap" }
+              }, surpriseNote.a.label),
+              React.createElement("span", { style: { color: W.fgMuted, flexShrink: 0 } }, "⟷"),
+              React.createElement("span", {
+                onClick: () => { setPeekNoteId(surpriseNote.b.id); setSurpriseNote(null); },
+                style: { fontSize: "13px", fontWeight: "600", color: W.blue,
+                         cursor: "pointer", flex: 1, overflow: "hidden",
+                         textOverflow: "ellipsis", whiteSpace: "nowrap",
+                         textAlign: "right" }
+              }, surpriseNote.b.label)
+            ),
+            // Onderbouwing per reden
+            surpriseNote.reasons?.length > 0
+              ? React.createElement("div", { style: { marginBottom: "10px" } },
+                  surpriseNote.reasons.map((r, i) =>
+                    React.createElement("div", {
+                      key: i,
+                      style: {
+                        display: "flex", alignItems: "flex-start", gap: "8px",
+                        padding: "5px 8px", marginBottom: "4px",
+                        background: "rgba(255,255,255,0.04)",
+                        borderRadius: "5px",
+                        borderLeft: "2px solid rgba(232,200,122,0.4)",
+                      }
+                    },
+                      React.createElement("span", { style: { fontSize: "13px", flexShrink: 0 } }, r.icon),
+                      React.createElement("div", null,
+                        React.createElement("div", {
+                          style: { fontSize: "11px", color: W.yellow, fontWeight: "600" }
+                        }, r.label),
+                        React.createElement("div", {
+                          style: { fontSize: "11px", color: W.fgMuted, marginTop: "1px" }
+                        }, r.detail)
+                      )
+                    )
+                  )
+                )
+              : React.createElement("div", {
+                  style: { fontSize: "11px", color: W.fgMuted, marginBottom: "8px" }
+                }, surpriseNote.sharedTags?.map(t => "#"+t).join(", ")),
+            // AI inzicht sectie
+            (aiLoading || aiInsight) && React.createElement("div", {
+              style: {
+                margin: "6px 0 10px",
+                padding: "8px 10px",
+                background: "rgba(125,216,198,0.06)",
+                border: `1px solid rgba(125,216,198,0.2)`,
+                borderRadius: "6px",
+              }
+            },
+              React.createElement("div", {
+                style: { fontSize: "9px", color: W.blue, letterSpacing: "1px",
+                         textTransform: "uppercase", marginBottom: "5px",
+                         display: "flex", alignItems: "center", gap: "5px" }
+              },
+                React.createElement("span", null, "🧠"),
+                "AI-inzicht",
+                aiLoading && React.createElement("span", {
+                  style: { animation: "ai-pulse 1.4s ease-in-out infinite",
+                           color: W.yellow, marginLeft: "4px" }
+                }, "laden…")
+              ),
+              aiInsight && React.createElement("div", {
+                style: { fontSize: "12px", color: W.fgDim, lineHeight: "1.6",
+                         fontStyle: "italic" }
+              }, aiInsight)
+            ),
+
+            React.createElement("div", { style: { display: "flex", gap: "8px" } },
+              React.createElement("button", {
+                onClick: () => { setSurpriseNote(null); setAiInsight(null); },
+                style: { flex: 1, background: "none",
+                         border: `1px solid ${W.splitBg}`,
+                         borderRadius: "5px", color: W.fgMuted,
+                         padding: "5px 0", fontSize: "12px", cursor: "pointer" }
+              }, "Sluiten"),
+              React.createElement("button", {
+                onClick: () => { setAiInsight(null); findSurpriseConnection(); },
+                style: { flex: 1, background: "rgba(232,200,122,0.1)",
+                         border: `1px solid rgba(232,200,122,0.3)`,
+                         borderRadius: "5px", color: W.yellow,
+                         padding: "5px 0", fontSize: "12px", cursor: "pointer" }
+              }, "✨ Andere"),
+              React.createElement("button", {
+                onClick: () => {
+                  // Voeg link toe: open peek van a en laat gebruiker handmatig linken
+                  setPeekNoteId(surpriseNote.a.id);
+                  setSurpriseNote(null);
+                },
+                style: { flex: 1, background: "rgba(125,216,198,0.12)",
+                         border: `1px solid rgba(125,216,198,0.3)`,
+                         borderRadius: "5px", color: W.blue,
+                         padding: "5px 0", fontSize: "12px",
+                         cursor: "pointer", fontWeight: "600" }
+              }, "📖 Bekijk")
+            )
+          )
+    ),
+
+    // ── Notitie peek panel — slide-in rechts ─────────────────────────────
+    peekNoteId && (() => {
+      const peekNote = notes.find(n => n.id === peekNoteId);
+      const typeColors = {
+        fleeting: "#e8a44a", literature: W.blue,
+        permanent: W.comment, index: W.purple,
+      };
+      const typeLabels = {
+        fleeting: "Vluchtig", literature: "Literatuur",
+        permanent: "Permanent", index: "Index",
+      };
+      return React.createElement("div", {
+        style: {
+          position: "absolute", top: 0, right: 0, bottom: 0,
+          width: "360px",
+          background: W.bg2,
+          borderLeft: "1px solid " + W.splitBg,
+          display: "flex", flexDirection: "column",
+          zIndex: 300,
+          boxShadow: "-8px 0 32px rgba(0,0,0,0.5)",
+          animation: "slideInRight .18s ease-out",
+        }
+      },
+        // Header
+        React.createElement("div", {
+          style: {
+            padding: "10px 14px 8px",
+            borderBottom: "1px solid " + W.splitBg,
+            flexShrink: 0,
+            display: "flex", alignItems: "flex-start", gap: "8px",
+          }
+        },
+          React.createElement("div", { style: { flex: 1, minWidth: 0 } },
+            peekNote?.noteType && React.createElement("div", {
+              style: {
+                display: "inline-flex", alignItems: "center", gap: "4px",
+                fontSize: "9px", color: typeColors[peekNote.noteType] || W.fgMuted,
+                background: (typeColors[peekNote.noteType] || W.fgMuted) + "18",
+                border: "1px solid " + (typeColors[peekNote.noteType] || W.fgMuted) + "40",
+                borderRadius: "3px", padding: "1px 6px", marginBottom: "5px",
+                textTransform: "uppercase", letterSpacing: "0.5px",
+              }
+            },
+              React.createElement("div", {
+                style: { width: "5px", height: "5px", borderRadius: "50%",
+                         background: typeColors[peekNote.noteType], flexShrink: 0 }
+              }),
+              typeLabels[peekNote.noteType]
+            ),
+            React.createElement("div", {
+              style: { fontSize: "14px", fontWeight: "600", color: W.statusFg,
+                       lineHeight: "1.3", overflow: "hidden", textOverflow: "ellipsis",
+                       whiteSpace: "nowrap" }
+            }, peekNote ? peekNote.title : "Notitie niet gevonden"),
+            peekNote?.tags?.length > 0 && React.createElement("div", {
+              style: { display: "flex", gap: "3px", flexWrap: "wrap", marginTop: "5px" }
+            },
+              peekNote.tags.map(t => React.createElement("span", {
+                key: t,
+                style: {
+                  fontSize: "9px", color: W.comment,
+                  background: "rgba(159,202,86,0.1)",
+                  border: "1px solid rgba(159,202,86,0.2)",
+                  borderRadius: "3px", padding: "1px 5px",
+                }
+              }, "#" + t))
+            )
+          ),
+          // Sluit knop
+          React.createElement("button", {
+            onClick: () => setPeekNoteId(null),
+            title: "Sluiten (Esc)",
+            style: {
+              background: "none", border: "none", color: W.fgMuted,
+              cursor: "pointer", fontSize: "18px", padding: "0 2px",
+              lineHeight: 1, flexShrink: 0,
+            },
+            onMouseEnter: e => e.currentTarget.style.color = W.fg,
+            onMouseLeave: e => e.currentTarget.style.color = W.fgMuted,
+          }, "×")
+        ),
+
+        // Markdown inhoud
+        React.createElement("div", {
+          style: {
+            flex: 1, overflowY: "auto", padding: "14px 16px",
+            WebkitOverflowScrolling: "touch",
+          }
+        },
+          peekNote
+            ? React.createElement("div", { className: "mdv" },
+                React.createElement(MarkdownWithMermaid, {
+                  content: peekNote.content || "",
+                  notes, renderMode: "rich", isMobile: false,
+                  onClick: (id) => {
+                    const linked = notes.find(n => n.id === id || n.title === id);
+                    if (linked) setPeekNoteId(linked.id);
+                  },
+                })
+              )
+            : React.createElement("div", {
+                style: { color: W.fgMuted, fontSize: "13px", fontStyle: "italic" }
+              }, "Notitie niet gevonden.")
+        ),
+
+        // Footer
+        peekNote && React.createElement("div", {
+          style: {
+            borderTop: "1px solid " + W.splitBg,
+            padding: "8px 14px",
+            flexShrink: 0,
+            display: "flex", alignItems: "center", gap: "8px",
+          }
+        },
+          peekNote.modified && React.createElement("span", {
+            style: { fontSize: "10px", color: W.fgMuted }
+          }, new Date(peekNote.modified).toLocaleDateString("nl-NL")),
+          React.createElement("div", { style: { flex: 1 } }),
+          // Focus filter knop
+          React.createElement("button", {
+            onClick: () => { setFocusNode({id: peekNoteId, depth: 1}); setPeekNoteId(null); },
+            title: "Toon netwerk rondom deze notitie",
+            style: {
+              background: "rgba(125,216,198,0.08)",
+              border: "1px solid rgba(125,216,198,0.2)",
+              borderRadius: "5px", color: W.blue,
+              padding: "4px 10px", fontSize: "11px", cursor: "pointer",
+            }
+          }, "◎ Focus"),
+          // Open notitie knop
+          React.createElement("button", {
+            onClick: () => { onSelect(peekNoteId); setPeekNoteId(null); },
+            style: {
+              background: "rgba(125,216,198,0.12)",
+              border: "1px solid rgba(125,216,198,0.3)",
+              borderRadius: "5px", color: W.blue,
+              padding: "4px 12px", fontSize: "11px",
+              cursor: "pointer", fontWeight: "600",
+            }
+          }, "📖 Open →")
+        )
+      );
+    })(),
 
     // ── Legenda onderaan ──────────────────────────────────────────────────
     React.createElement("div",{style:{

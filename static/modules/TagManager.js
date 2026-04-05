@@ -155,8 +155,8 @@ const SmartTagEditor=({tags=[],onChange,allTags=[],content="",llmModel=""})=>{
     comment:"#9fca56",blue:"#8ac6f2",fgMuted:"#857b6f",yellow:"#eae788",splitBg:"#3a3a3a"};
 
   // Bepaal of AI beschikbaar is
-  const aiAvailable = !!(content && llmModel);
-  const hasContent  = !!(content && content.trim().length > 20);
+  const aiAvailable = !!(content && content.trim().length > 4 && llmModel);
+  const hasContent  = !!(content && content.trim().length > 4);
 
   return React.createElement("div",{style:{position:"relative"}},
 
@@ -314,7 +314,7 @@ const SmartTagEditor=({tags=[],onChange,allTags=[],content="",llmModel=""})=>{
       // Alles-toevoegen knop als er meerdere nieuwe zijn
       aiSuggested.filter(t=>!tags.includes(t)).length > 1 &&
         React.createElement("button",{
-          onClick:()=>{ const ns=aiSuggested.filter(t=>!tags.includes(t)).map(t=>t.trim().toLowerCase().replace(/\s+/g,'_').replace(/^#/,'')).filter(Boolean); if(typeof onChange==='function') onChange([...new Set([...tags,...ns])]); },
+          onClick:()=>{ aiSuggested.filter(t=>!tags.includes(t)).forEach(t=>add(t)); },
           style:{
             marginTop:"8px",
             background:"rgba(138,198,242,0.18)",

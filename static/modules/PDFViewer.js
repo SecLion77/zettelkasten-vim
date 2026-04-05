@@ -49,29 +49,31 @@ const TextLayerMount = ({textLayer, width, height}) => {
 // Online modellen gegroepeerd per provider
 const ONLINE_MODELS = [
   // ── Anthropic ──────────────────────────────────────────────────────────────
-  { id:"claude-opus-4-20250514",      label:"Claude Opus 4",       provider:"anthropic",  group:"Anthropic",  icon:"⚡" },
-  { id:"claude-sonnet-4-20250514",    label:"Claude Sonnet 4",     provider:"anthropic",  group:"Anthropic",  icon:"⚡" },
-  { id:"claude-haiku-4-5-20251001",   label:"Claude Haiku 4.5",    provider:"anthropic",  group:"Anthropic",  icon:"⚡" },
+  { id:"claude-opus-4-20250514",      label:"Claude Opus 4",        provider:"anthropic",  group:"Anthropic",   icon:"⚡" },
+  { id:"claude-sonnet-4-20250514",    label:"Claude Sonnet 4",      provider:"anthropic",  group:"Anthropic",   icon:"⚡" },
+  { id:"claude-haiku-4-5-20251001",   label:"Claude Haiku 4.5",     provider:"anthropic",  group:"Anthropic",   icon:"⚡" },
   // ── Google ─────────────────────────────────────────────────────────────────
-  { id:"gemini-2.5-pro",              label:"Gemini 2.5 Pro",      provider:"google",     group:"Google",     icon:"🔷" },
-  { id:"gemini-2.0-flash",            label:"Gemini 2.0 Flash",    provider:"google",     group:"Google",     icon:"🔷" },
+  { id:"gemini-2.5-pro",              label:"Gemini 2.5 Pro",       provider:"google",     group:"Google",      icon:"🔷" },
+  { id:"gemini-2.5-flash-preview-04-17", label:"Gemini 2.5 Flash", provider:"google",     group:"Google",      icon:"🔷" },
+  { id:"gemini-2.0-flash",            label:"Gemini 2.0 Flash",     provider:"google",     group:"Google",      icon:"🔷" },
   // ── OpenAI ─────────────────────────────────────────────────────────────────
-  { id:"gpt-4.1",                     label:"GPT-4.1",             provider:"openai",     group:"OpenAI",     icon:"🟢" },
-  { id:"gpt-4.1-mini",                label:"GPT-4.1 mini",        provider:"openai",     group:"OpenAI",     icon:"🟢" },
-  { id:"o4-mini",                     label:"o4-mini (redeneren)", provider:"openai",     group:"OpenAI",     icon:"🟢" },
+  { id:"gpt-4.1",                     label:"GPT-4.1",              provider:"openai",     group:"OpenAI",      icon:"🟢" },
+  { id:"gpt-4.1-mini",                label:"GPT-4.1 mini",         provider:"openai",     group:"OpenAI",      icon:"🟢" },
+  { id:"o4-mini",                     label:"o4-mini (redeneren)",  provider:"openai",     group:"OpenAI",      icon:"🟢" },
   // ── Mistral (direct) ───────────────────────────────────────────────────────
-  { id:"mistral-medium-latest",       label:"Mistral Medium 3",    provider:"mistral",    group:"Mistral",    icon:"🌬" },
-  { id:"mistral-small-latest",        label:"Mistral Small 3.1",   provider:"mistral",    group:"Mistral",    icon:"🌬" },
-  { id:"magistral-medium-latest",     label:"Magistral Medium",    provider:"mistral",    group:"Mistral",    icon:"🌬" },
+  { id:"mistral-medium-latest",       label:"Mistral Medium 3",     provider:"mistral",    group:"Mistral",     icon:"🌬" },
+  { id:"mistral-small-latest",        label:"Mistral Small 3.1",    provider:"mistral",    group:"Mistral",     icon:"🌬" },
+  { id:"magistral-medium-latest",     label:"Magistral Medium",     provider:"mistral",    group:"Mistral",     icon:"🌬" },
   // ── Open Source via OpenRouter ─────────────────────────────────────────────
-  { id:"moonshotai/kimi-k2.5",        label:"Kimi K2.5",           provider:"openrouter", group:"Open source",icon:"🌙" },
-  { id:"moonshotai/kimi-k2",          label:"Kimi K2",             provider:"openrouter", group:"Open source",icon:"🌙" },
-  { id:"meta-llama/llama-4-maverick", label:"Llama 4 Maverick",    provider:"openrouter", group:"Open source",icon:"🦙" },
-  { id:"meta-llama/llama-4-scout",    label:"Llama 4 Scout",       provider:"openrouter", group:"Open source",icon:"🦙" },
-  { id:"google/gemma-3-27b-it",       label:"Gemma 3 27B",         provider:"openrouter", group:"Open source",icon:"💎" },
-  { id:"mistralai/mistral-small-3.1", label:"Mistral Small (OR)",  provider:"openrouter", group:"Open source",icon:"🌬" },
-  { id:"deepseek/deepseek-r1",        label:"DeepSeek R1",         provider:"openrouter", group:"Open source",icon:"🔍" },
-  { id:"qwen/qwen3-30b-a3b",          label:"Qwen3 30B",           provider:"openrouter", group:"Open source",icon:"🐉" },
+  { id:"moonshotai/kimi-k2.5",        label:"Kimi K2.5",            provider:"openrouter", group:"Open source", icon:"🌙" },
+  { id:"moonshotai/kimi-k2",          label:"Kimi K2",              provider:"openrouter", group:"Open source", icon:"🌙" },
+  { id:"meta-llama/llama-4-maverick", label:"Llama 4 Maverick ⭐",  provider:"openrouter", group:"Open source", icon:"🦙" },
+  { id:"meta-llama/llama-4-scout",    label:"Llama 4 Scout",        provider:"openrouter", group:"Open source", icon:"🦙" },
+  { id:"qwen/qwen3-235b-a22b",        label:"Qwen3 235B",           provider:"openrouter", group:"Open source", icon:"🐉" },
+  { id:"qwen/qwen3-30b-a3b",          label:"Qwen3 30B (snel)",     provider:"openrouter", group:"Open source", icon:"🐉" },
+  { id:"deepseek/deepseek-r1",        label:"DeepSeek R1",          provider:"openrouter", group:"Open source", icon:"🔍" },
+  { id:"google/gemma-3-27b-it",       label:"Gemma 3 27B",          provider:"openrouter", group:"Open source", icon:"💎" },
+  { id:"mistralai/mistral-small-3.1", label:"Mistral Small (OR)",   provider:"openrouter", group:"Open source", icon:"🌬" },
 ];
 
 // Provider-kleuren
@@ -95,269 +97,43 @@ const MODEL_COLOR = (m) => {
   return o ? (PROVIDER_COLOR[o.provider] || "#e3e0d7") : "#9fca56";
 };
 
-// ── PDFUploadPanel — upload + AI tags + notitietype ──────────────────────────
+// ── PDFUploadPanel — clean upload-paneel voor Invoer → PDF tab ───────────────
 const PDFUploadPanel = ({ serverPdfs=[], onRefreshPdfs, onOpenPdf, llmModel,
                           allTags=[], notes=[], onAddNote, addJob, updateJob }) => {
   const { useState, useRef, useCallback } = React;
   const [dragOver,   setDragOver]   = useState(false);
   const [uploading,  setUploading]  = useState(false);
+  const [uploaded,   setUploaded]   = useState([]);   // [{name, isNew}]
   const [error,      setError]      = useState(null);
   const fileRef = useRef(null);
-
-  // Preview fase na upload
-  const [preview,    setPreview]    = useState(null); // {name, text}
-  const [pdfTags,    setPdfTags]    = useState([]);
-  const [pdfType,    setPdfType]    = useState("literature");
-  const [tagsLoading, setTagsLoading] = useState(false);
-  const [typeLoading, setTypeLoading] = useState(false);
-  const [suggestedType, setSuggestedType] = useState(null);
-  const [noteSaved,  setNoteSaved]  = useState(false);
-
-  const TYPE_META = {
-    fleeting:   { label: "Vluchtig",   color: "#e8a44a" },
-    literature: { label: "Literatuur", color: W.blue    },
-    permanent:  { label: "Permanent",  color: W.comment },
-    index:      { label: "Index",      color: W.purple  },
-  };
-
-  const resetPreview = () => {
-    setPreview(null); setPdfTags([]); setPdfType("literature");
-    setTagsLoading(false); setTypeLoading(false);
-    setSuggestedType(null); setNoteSaved(false);
-  };
 
   const doUpload = useCallback(async (files) => {
     const pdfs = [...files].filter(f => f.name.toLowerCase().endsWith(".pdf"));
     if (!pdfs.length) return;
     setUploading(true); setError(null);
-    try {
-      const file = pdfs[0]; // eerste PDF — preview per stuk
-      const jid = addJob?.({ id: Math.random().toString(36).slice(2),
-        type: "pdf", label: "📄 " + file.name.slice(0, 30) + "…" });
-      const res = await PDFService.uploadPdf(file);
-      const name = res?.name || file.name;
-      updateJob?.(jid, { status: "done", result: "Geüpload" });
-      await onRefreshPdfs?.();
-
-      // Extraheer tekst voor AI analyse
-      let pdfText = "";
+    const added = [];
+    for (const file of pdfs) {
       try {
-        const tr = await fetch("/api/pdf-text/" + encodeURIComponent(name));
-        const td = await tr.json();
-        pdfText = td.text || "";
-      } catch {}
-
-      setPreview({ name, text: pdfText });
-
-      // Parallel: AI tags + notitietype
-      if (llmModel && pdfText) {
-        setTagsLoading(true); setTypeLoading(true);
-
-        _aiTagSuggest(pdfText.slice(0, 4000), [], allTags, llmModel)
-          .then(t => { if (t.length) setPdfTags(t); })
-          .catch(() => {})
-          .finally(() => setTagsLoading(false));
-
-        fetch("/api/llm/chat", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            model: llmModel,
-            messages: [{ role: "user", content:
-              "Analyseer dit document en geef het beste Zettelkasten-notitietype. " +
-              "Kies ALLEEN: fleeting, literature, permanent, index\n\n" +
-              pdfText.slice(0, 800)
-            }],
-            system: "Geef ALLEEN één woord: fleeting, literature, permanent of index.",
-          }),
-        }).then(r => r.json()).then(d => {
-          const raw = (d.content || d.response || "").trim().toLowerCase();
-          const match = ["fleeting","literature","permanent","index"].find(v => raw.includes(v));
-          if (match) { setSuggestedType(match); setPdfType(match); }
-        }).catch(() => {}).finally(() => setTypeLoading(false));
+        const jid = addJob?.({ id: Math.random().toString(36).slice(2),
+          type: "pdf", label: "📄 Uploaden: " + file.name.slice(0,30) + "…" });
+        const res = await PDFService.uploadPdf(file);
+        const name = res?.name || file.name;
+        added.push({ name });
+        updateJob?.(jid, { status: "done", result: "Geüpload" });
+      } catch(e) {
+        setError(e.message);
       }
-
-      // Upload meerdere PDFs stil op de achtergrond
-      for (const extra of pdfs.slice(1)) {
-        const ej = addJob?.({ id: Math.random().toString(36).slice(2),
-          type: "pdf", label: "📄 " + extra.name.slice(0, 30) + "…" });
-        await PDFService.uploadPdf(extra);
-        updateJob?.(ej, { status: "done", result: "Geüpload" });
-      }
-      if (pdfs.length > 1) await onRefreshPdfs?.();
-
-    } catch(e) {
-      setError(e.message);
     }
+    await onRefreshPdfs?.();
+    setUploaded(prev => [...added, ...prev]);
     setUploading(false);
-  }, [onRefreshPdfs, addJob, updateJob, allTags, llmModel]);
+  }, [onRefreshPdfs, addJob, updateJob]);
 
   const onDrop = useCallback((e) => {
     e.preventDefault(); setDragOver(false);
     doUpload(e.dataTransfer.files);
   }, [doUpload]);
 
-  // ── Preview fase ──────────────────────────────────────────────────────────
-  if (preview) return React.createElement("div", {
-    style: { flex: 1, display: "flex", flexDirection: "column",
-             overflow: "hidden", minHeight: 0, background: W.bg }
-  },
-    // Header
-    React.createElement("div", {
-      style: { background: W.bg2, borderBottom: `1px solid ${W.splitBg}`,
-               padding: "12px 16px", flexShrink: 0,
-               overflow: "visible", position: "relative", zIndex: 10 }
-    },
-      React.createElement("div", {
-        style: { fontSize: "14px", fontWeight: "600", color: W.statusFg,
-                 marginBottom: "8px", display: "flex", alignItems: "center",
-                 gap: "8px" }
-      },
-        React.createElement("span", null, "📄"),
-        React.createElement("span", {
-          style: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                   flex: 1 }
-        }, preview.name),
-        React.createElement("button", {
-          onClick: () => { onOpenPdf?.(preview.name); resetPreview(); },
-          style: { background: "rgba(125,216,198,0.1)",
-                   border: `1px solid rgba(125,216,198,0.3)`,
-                   borderRadius: "5px", color: W.blue,
-                   padding: "3px 10px", fontSize: "11px", cursor: "pointer",
-                   flexShrink: 0 }
-        }, "→ Open PDF")
-      ),
-
-      // Notitietype
-      React.createElement("div", {
-        style: { display: "flex", gap: "4px", alignItems: "center",
-                 marginBottom: "8px", flexWrap: "wrap" }
-      },
-        React.createElement("span", {
-          style: { fontSize: "9px", color: W.fgMuted, textTransform: "uppercase",
-                   letterSpacing: "0.5px", marginRight: "2px" }
-        }, typeLoading ? "✦ type…" : "Type:"),
-        ["fleeting","literature","permanent","index"].map(id => {
-          const m = TYPE_META[id];
-          const isActive = pdfType === id;
-          const isSugg = suggestedType === id;
-          return React.createElement("button", {
-            key: id, onClick: () => setPdfType(id),
-            style: {
-              padding: "2px 8px", fontSize: "10px", cursor: "pointer",
-              background: isActive ? `${m.color}20` : "transparent",
-              border: `1px solid ${isActive ? m.color : isSugg ? m.color+"60" : W.splitBg}`,
-              borderRadius: "4px",
-              color: isActive ? m.color : isSugg ? m.color : W.fgMuted,
-              fontWeight: isActive ? "600" : "400",
-              display: "flex", alignItems: "center", gap: "4px",
-            }
-          },
-            React.createElement("div", {
-              style: { width: "6px", height: "6px", borderRadius: "50%",
-                       background: m.color, opacity: isActive ? 1 : 0.4 }
-            }),
-            m.label,
-            isSugg && !isActive && React.createElement("span", {
-              style: { fontSize: "8px", color: W.yellow }
-            }, "✦")
-          );
-        })
-      ),
-
-      // Tags
-      React.createElement("div", {
-        style: { display: "flex", alignItems: "center", gap: "6px",
-                 marginBottom: "4px" }
-      },
-        React.createElement("span", {
-          style: { fontSize: "9px", color: W.fgMuted, textTransform: "uppercase",
-                   letterSpacing: "0.5px" }
-        }, tagsLoading ? "✦ tags laden…" : "Tags:"),
-      ),
-      React.createElement(SmartTagEditor, {
-        tags: pdfTags, onChange: setPdfTags,
-        allTags, content: preview.text?.slice(0, 4000) || "", llmModel,
-      })
-    ),
-
-    // Acties
-    React.createElement("div", {
-      style: { padding: "10px 16px", borderBottom: `1px solid ${W.splitBg}`,
-               flexShrink: 0, display: "flex", gap: "8px", alignItems: "center" }
-    },
-      React.createElement("div", {
-        style: { fontSize: "11px", color: W.fgMuted, flex: 1 }
-      },
-        noteSaved
-          ? React.createElement("span", { style: { color: W.comment } },
-              "✓ Literatuurnotitie aangemaakt")
-          : "Maak een literatuurnotitie aan die naar deze PDF linkt"
-      ),
-      !noteSaved && React.createElement("button", {
-        onClick: () => resetPreview(),
-        style: { background: "none", border: `1px solid ${W.splitBg}`,
-                 color: W.fgMuted, borderRadius: "5px",
-                 padding: "5px 10px", fontSize: "12px", cursor: "pointer" }
-      }, "Sla over"),
-      !noteSaved && React.createElement("button", {
-        onClick: async () => {
-          const now = new Date().toISOString();
-          const stem = preview.name.replace(/\.pdf$/i, "");
-          const content =
-            `📎 **Bron:** [[pdf:${preview.name}]]\n\n` +
-            `---\n\n` +
-            `## Aantekeningen\n\n` +
-            `_Voeg hier je eigen samenvatting en inzichten toe._\n\n` +
-            `---\n📄 *Geïmporteerd: ${preview.name}*`;
-          await onAddNote?.({
-            id: typeof genId === "function" ? genId() :
-                Math.random().toString(36).slice(2),
-            title: stem,
-            content,
-            tags: pdfTags,
-            noteType: pdfType,
-            importedAt: now, created: now, modified: now,
-          });
-          setNoteSaved(true);
-          setTimeout(() => resetPreview(), 1500);
-        },
-        style: {
-          background: "rgba(125,216,198,0.15)",
-          border: `1px solid rgba(125,216,198,0.4)`,
-          borderRadius: "5px", color: W.blue,
-          padding: "5px 16px", fontSize: "12px",
-          cursor: "pointer", fontWeight: "600",
-        }
-      }, "✎ Maak notitie")
-    ),
-
-    // PDF lijst (compact)
-    React.createElement("div", {
-      style: { flex: 1, overflowY: "auto", padding: "8px 0" }
-    },
-      serverPdfs.map((pdf, i) => {
-        const pdfName = typeof pdf === "string" ? pdf : pdf.name;
-        return React.createElement("div", {
-          key: i,
-          style: { display: "flex", alignItems: "center", gap: "8px",
-                   padding: "6px 16px", cursor: "pointer",
-                   borderBottom: `1px solid ${W.splitBg}` },
-          onClick: () => onOpenPdf?.(pdfName),
-          onMouseEnter: e => e.currentTarget.style.background = "rgba(255,255,255,0.03)",
-          onMouseLeave: e => e.currentTarget.style.background = "transparent",
-        },
-          React.createElement("span", { style: { fontSize: "12px" } }, "📄"),
-          React.createElement("span", {
-            style: { flex: 1, fontSize: "12px", color: W.fg,
-                     overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }
-          }, pdfName)
-        );
-      })
-    )
-  );
-
-  // ── Upload fase ────────────────────────────────────────────────────────────
   return React.createElement("div", {
     style: { flex: 1, display: "flex", flexDirection: "column",
              overflow: "hidden", minHeight: 0, background: W.bg }
@@ -385,6 +161,7 @@ const PDFUploadPanel = ({ serverPdfs=[], onRefreshPdfs, onOpenPdf, llmModel,
       }, uploading ? "⏳ Bezig…" : "+ Kies bestand(en)")
     ),
 
+    // Scroll-gebied
     React.createElement("div", {
       style: { flex: 1, overflowY: "auto", padding: "20px",
                WebkitOverflowScrolling: "touch" }
@@ -416,11 +193,42 @@ const PDFUploadPanel = ({ serverPdfs=[], onRefreshPdfs, onOpenPdf, llmModel,
         }, "⚠ " + error)
       ),
 
-      // Vault bibliotheek
-      serverPdfs.length > 0 && React.createElement("div", null,
+      // Recent geüpload
+      uploaded.length > 0 && React.createElement("div", null,
         React.createElement("div", {
           style: { fontSize: "11px", color: W.fgMuted, letterSpacing: "1px",
                    marginBottom: "8px", fontWeight: "600" }
+        }, "ZOJUIST GEÜPLOAD"),
+        ...uploaded.map((u, i) =>
+          React.createElement("div", {
+            key: i,
+            style: { display: "flex", alignItems: "center", gap: "10px",
+                     padding: "8px 12px", borderRadius: "6px",
+                     background: "rgba(159,202,86,0.06)",
+                     border: `1px solid rgba(159,202,86,0.2)`,
+                     marginBottom: "6px" }
+          },
+            React.createElement("span", { style: { fontSize: "16px" } }, "📄"),
+            React.createElement("span", {
+              style: { flex: 1, fontSize: "13px", color: W.fg,
+                       overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }
+            }, u.name),
+            React.createElement("button", {
+              onClick: () => onOpenPdf?.(u.name),
+              style: { background: "rgba(138,198,242,0.1)",
+                       border: `1px solid rgba(138,198,242,0.3)`,
+                       borderRadius: "5px", color: W.blue,
+                       padding: "3px 10px", fontSize: "12px", cursor: "pointer" }
+            }, "→ Openen")
+          )
+        )
+      ),
+
+      // Vault bibliotheek overzicht
+      serverPdfs.length > 0 && React.createElement("div", null,
+        React.createElement("div", {
+          style: { fontSize: "11px", color: W.fgMuted, letterSpacing: "1px",
+                   marginBottom: "8px", fontWeight: "600", marginTop: uploaded.length ? "20px" : "0" }
         }, `IN VAULT (${serverPdfs.length})`),
         ...serverPdfs.map((pdf, i) => {
           const pdfName = typeof pdf === "string" ? pdf : pdf.name;
@@ -450,12 +258,18 @@ const PDFUploadPanel = ({ serverPdfs=[], onRefreshPdfs, onOpenPdf, llmModel,
             }, "→ open")
           );
         })
-      )
+      ),
+
+      serverPdfs.length === 0 && uploaded.length === 0 &&
+        React.createElement("div", {
+          style: { textAlign: "center", color: W.fgMuted, fontSize: "13px",
+                   marginTop: "20px" }
+        }, "Nog geen PDFs in de vault.")
     ),
 
     React.createElement("input", {
-      ref: fileRef, type: "file", accept: ".pdf",
-      multiple: true, style: { display: "none" },
+      ref: fileRef, type: "file", multiple: true, accept: ".pdf",
+      style: { display: "none" },
       onChange: e => { doUpload(e.target.files); e.target.value = ""; }
     })
   );
@@ -859,7 +673,7 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
     if(!pendingSel)return;
     // Gebruik de pagina van de selectie (ref), niet de huidige scroll-pagina
     const hlPage = pendingPageRef.current;
-    console.log("[PDF] saveHighlight: page=",hlPage,"rects=",pendingRectsRef.current.length);
+    zklog("[PDF] saveHighlight: page=",hlPage,"rects=",pendingRectsRef.current.length);
     const pgWrap = pageRefs.current[hlPage];
     const cw = pgWrap ? pgWrap.offsetWidth  : (renderedPages.find(p=>p.num===hlPage)?.width  || 1);
     const ch = pgWrap ? pgWrap.offsetHeight : (renderedPages.find(p=>p.num===hlPage)?.height || 1);
@@ -1117,7 +931,7 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
           // ── RASTERWEERGAVE ──────────────────────────────────────────────
           if (libView === "grid") return React.createElement("div", { style: {
             display: "grid",
-            gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
+            gridTemplateColumns: "repeat(auto-fill, minmax(190px, 1fr))",
             gap: "14px", padding: "18px 20px",
           }},
             ...filtered.map(p => {
@@ -1152,7 +966,7 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
                 React.createElement("div", {
                   onClick: () => openFromServer(p.name),
                   style: {
-                    height: "160px", background: thumb ? "transparent" : "rgba(138,198,242,0.05)",
+                    height: "130px", background: thumb ? "transparent" : "rgba(138,198,242,0.05)",
                     display: "flex", alignItems: "center", justifyContent: "center",
                     borderBottom: `1px solid ${W.splitBg}`, position: "relative", flexShrink: 0,
                     overflow: "hidden",
@@ -1225,72 +1039,74 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
           );
 
           // ── LIJSTWEERGAVE ───────────────────────────────────────────────
-          // ── LIJSTWEERGAVE — volledig, geen thumbnail ──────────────────────────
-          return React.createElement("div", { style: { width: "100%" } },
+          return React.createElement("div", { style: { padding: "8px 0" }},
             filtered.map(p => {
               const annotCount = (AnnotationStore.getAll() || []).filter(a => a.file === p.name).length;
               const sizeKb = Math.round((p.size || 0) / 1024);
               const isOpen = pdfFile?.name === p.name;
               const stem = p.name.replace(/\.pdf$/i, "");
+              const thumb = thumbCache[p.name];
               const readMins = Math.max(1, Math.round(sizeKb / 50));
 
               return React.createElement("div", {
                 key: p.name,
                 style: {
-                  display: "flex", alignItems: "center", gap: "0",
+                  display: "flex", alignItems: "center", gap: "12px",
+                  padding: "9px 20px",
                   borderBottom: `1px solid ${W.splitBg}`,
-                  background: isOpen ? "rgba(125,216,198,0.05)" : "transparent",
-                  transition: "background 0.1s",
+                  background: isOpen ? "rgba(138,198,242,0.06)" : "transparent",
+                  cursor: "pointer", transition: "background 0.1s",
                 },
-                onMouseEnter: e => { if (!isOpen) e.currentTarget.style.background = "rgba(255,255,255,0.03)"; },
-                onMouseLeave: e => { e.currentTarget.style.background = isOpen ? "rgba(125,216,198,0.05)" : "transparent"; },
+                onMouseEnter: e => e.currentTarget.style.background = "rgba(255,255,255,0.04)",
+                onMouseLeave: e => e.currentTarget.style.background = isOpen ? "rgba(138,198,242,0.06)" : "transparent",
+                onClick: () => openFromServer(p.name),
               },
-                // Klikbaar info-gedeelte — neemt alle ruimte
-                React.createElement("div", {
-                  style: { flex: 1, minWidth: 0, padding: "11px 20px", cursor: "pointer" },
-                  onClick: () => openFromServer(p.name),
-                },
-                  // Naam
+                // Mini-thumbnail
+                React.createElement("div", { style: {
+                  width: "44px", height: "58px", flexShrink: 0,
+                  background: thumb ? "transparent" : "rgba(138,198,242,0.07)",
+                  borderRadius: "4px", overflow: "hidden",
+                  border: `1px solid ${W.splitBg}`,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                }},
+                  thumb
+                    ? React.createElement("img", {
+                        src: thumb, alt: stem,
+                        style: { width: "100%", height: "100%", objectFit: "cover" }
+                      })
+                    : React.createElement("span", { style: { fontSize: "20px", opacity: 0.5 }}, "📄")
+                ),
+
+                // Info
+                React.createElement("div", { style: { flex: 1, minWidth: 0 }},
                   React.createElement("div", { style: {
-                    fontSize: "14px", fontWeight: isOpen ? "600" : "400",
-                    color: isOpen ? W.blue : W.fg,
+                    fontSize: "14px", fontWeight: "500", color: isOpen ? W.blue : W.fg,
                     overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                    marginBottom: "3px",
                   }}, stem),
-                  // Meta-rij
                   React.createElement("div", { style: {
-                    display: "flex", gap: "14px",
-                    fontSize: "11px", color: W.fgMuted, alignItems: "center",
+                    display: "flex", gap: "10px", marginTop: "3px",
+                    fontSize: "11px", color: W.fgMuted, flexWrap: "wrap",
                   }},
                     React.createElement("span", null,
                       sizeKb > 1024 ? `${(sizeKb/1024).toFixed(1)} MB` : `${sizeKb} KB`),
-                    React.createElement("span", null, `~${readMins} min`),
-                    annotCount > 0 && React.createElement("span", {
-                      style: { color: W.comment }
-                    }, `✏ ${annotCount}`),
-                    isOpen && React.createElement("span", {
-                      style: { color: W.blue, fontSize: "10px",
-                               background: "rgba(125,216,198,0.12)",
-                               borderRadius: "3px", padding: "1px 6px" }
-                    }, "open")
+                    React.createElement("span", { style: { color: W.fgDim }}, `~${readMins} min lezen`),
+                    annotCount > 0 && React.createElement("span", { style: { color: W.comment }},
+                      `${annotCount} annotatie${annotCount !== 1 ? "s" : ""}`),
+                    isOpen && React.createElement("span", { style: {
+                      color: W.blue, background: "rgba(138,198,242,0.12)",
+                      borderRadius: "4px", padding: "0 5px",
+                    }}, "open")
                   )
                 ),
 
-                // Acties — rechts, flexShrink:0
-                React.createElement("div", {
-                  style: { display: "flex", alignItems: "center",
-                           gap: "4px", padding: "0 12px", flexShrink: 0 }
-                },
+                // Acties
+                React.createElement("div", { style: { display: "flex", gap: "5px", flexShrink: 0 }},
                   React.createElement("button", {
                     onClick: e => { e.stopPropagation(); openFromServer(p.name); },
-                    style: {
-                      background: "rgba(125,216,198,0.08)",
-                      border: `1px solid rgba(125,216,198,0.22)`,
-                      color: W.blue, borderRadius: "5px",
-                      padding: "4px 14px", fontSize: "12px",
-                      cursor: "pointer", fontWeight: "600",
-                    }
-                  }, "Open"),
+                    style: { background: "rgba(138,198,242,0.1)", border: `1px solid rgba(138,198,242,0.25)`,
+                             color: W.blue, borderRadius: "5px", padding: "4px 12px",
+                             fontSize: "12px", cursor: "pointer", fontWeight: "600" }
+                  }, "📖 Open"),
                   React.createElement("button", {
                     title: "Verwijder",
                     onClick: async e => {
@@ -1301,14 +1117,10 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
                       onDeletePdf?.(p.name);
                       if (pdfFile?.name === p.name) { setPdfDoc(null); setPdfFile(null); }
                     },
-                    style: {
-                      background: "none", border: "none",
-                      color: W.fgMuted, borderRadius: "4px",
-                      padding: "4px 7px", fontSize: "14px", cursor: "pointer",
-                    },
-                    onMouseEnter: e => { e.currentTarget.style.color = W.orange; e.currentTarget.style.background = "rgba(245,169,127,0.1)"; },
-                    onMouseLeave: e => { e.currentTarget.style.color = W.fgMuted; e.currentTarget.style.background = "none"; },
-                  }, "×")
+                    style: { background: "rgba(229,120,109,0.08)", border: "1px solid rgba(229,120,109,0.2)",
+                             color: W.orange, borderRadius: "5px", padding: "4px 8px",
+                             fontSize: "12px", cursor: "pointer" }
+                  }, "🗑")
                 )
               );
             })
@@ -1335,9 +1147,8 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
           pdfFile?.name?.replace(/\.pdf$/i,"")||""),
       ),
 
-      // ── Scroll area: alle pagina's doorlopend ───────────────────────────────
-      // Wrapper: flex:1 + position:relative — bewezen iOS Safari patroon (zelfde als NotePreview)
-      React.createElement("div",{style:{flex:1, position:"relative", minHeight:0, overflow:"hidden"}},
+      // ── Scroll area: alle pagina's doorlopend (alleen als PDF open is) ────────
+      pdfDoc && React.createElement("div",{style:{flex:1, position:"relative", minHeight:0, overflow:"hidden"}},
       React.createElement("div",{
         ref:scrollRef,
         style:{
@@ -1376,11 +1187,7 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
           justifyContent:"center",height:"200px"}},
           React.createElement("span",{style:{color:W.blue,fontSize:"14px"}},"laden…")
         ),
-        !pdfDoc&&!isLoading&&React.createElement("div",{style:{display:"flex",flexDirection:"column",
-          alignItems:"center",justifyContent:"center",height:"100%",gap:"16px",color:W.fgMuted}},
-          React.createElement("div",{style:{fontSize:"56px"}},"📄"),
-          React.createElement("div",{style:{fontSize:"14px",color:W.fgDim}},"PDF laden…"),
-        ),
+
 
         // Alle pagina's als doorlopende kolom
         pdfDoc && React.createElement("div",{
@@ -1674,3 +1481,5 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
   );
 };
 
+
+// ── Vault Settings Panel ───────────────────────────────────────────────────────
