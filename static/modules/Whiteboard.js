@@ -485,60 +485,72 @@ const Whiteboard = ({ notes = [], onCreateNote, llmModel = "", serverImages = []
   };
 
   // ── AI: analyseer canvas ──────────────────────────────────────────────────
-  const runAiAnalyse = async () => {
-    if (!llmModel || cards.length < 2) return;
+  // ── SSE streaming helper voor canvas AI ─────────────────────────────────
+  const streamAiChat = async (messages, system) => {
     setAiStreaming(true); setAiResult("");
-    const context = buildCanvasContext();
     try {
       const resp = await fetch("/api/llm/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: llmModel,
-          messages: [{ role: "user", content:
-            `Analyseer dit canvas en geef een scherpe analyse:\n\n${context}\n\n` +
-            `Beantwoord kort:\n` +
-            `1. Wat is het centrale thema of de kernvraag?\n` +
-            `2. Welke clusters of spanningsvelden zie je?\n` +
-            `3. Welke verbindingen ontbreken of zijn verrassend?\n` +
-            `4. Wat is de volgende logische stap in dit denken?`
-          }],
-          system: "Je bent een Socratische onderzoekspartner. Denk hardop mee. Maximaal 200 woorden. Schrijf in lopende tekst, geen genummerde lijsten."
-        }),
+        body: JSON.stringify({ model: llmModel, messages, system }),
       });
-      const data = await resp.json();
-      setAiResult(data.content || data.response || "Geen analyse ontvangen.");
-    } catch(e) { setAiResult("Fout bij AI-analyse."); }
+      if (!resp.ok) throw new Error(`Server fout: ${resp.status}`);
+      const reader = resp.body.getReader();
+      const dec = new TextDecoder();
+      let buf = "", result = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        const lines = buf.split("\n");
+        buf = lines.pop();
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          try {
+            const ev = JSON.parse(line.slice(6));
+            if (ev.error) { setAiResult("Fout: " + ev.error); setAiStreaming(false); return; }
+            if (ev.delta) { result += ev.delta; setAiResult(result); }
+            if (ev.done) { setAiStreaming(false); return; }
+          } catch {}
+        }
+      }
+    } catch(e) {
+      setAiResult("Fout: " + (e.message || "Verbinding mislukt"));
+    }
     setAiStreaming(false);
   };
 
-  // ── AI: synthese → notitie ────────────────────────────────────────────────
-  const runAiSynthese = async () => {
+  const runAiAnalyse = () => {
     if (!llmModel || cards.length < 2) return;
-    setAiStreaming(true); setAiResult("");
     const context = buildCanvasContext();
-    try {
-      const resp = await fetch("/api/llm/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: llmModel,
-          messages: [{ role: "user", content:
-            `Schrijf een samenhangende notitie op basis van dit canvas.\n\n${context}\n\n` +
-            `De notitie moet:\n` +
-            `- Beginnen met een sterke openingszin die de kerngedachte vat\n` +
-            `- De verbanden tussen de kaarten uitleggen in lopende tekst\n` +
-            `- Eindigen met een open vraag of vervolgrichting\n` +
-            `- Maximaal 300 woorden zijn\n` +
-            `- In markdown geschreven zijn (# voor titel, ## voor secties indien nodig)`
-          }],
-          system: "Je schrijft helder, compact en in eigen woorden. Geen bullet-lijsten — alleen lopende tekst."
-        }),
-      });
-      const data = await resp.json();
-      setAiResult(data.content || data.response || "Geen synthese ontvangen.");
-    } catch(e) { setAiResult("Fout bij synthese."); }
-    setAiStreaming(false);
+    streamAiChat(
+      [{ role: "user", content:
+        `Analyseer dit canvas en geef een scherpe analyse:\n\n${context}\n\n` +
+        `Beantwoord kort:\n` +
+        `1. Wat is het centrale thema of de kernvraag?\n` +
+        `2. Welke clusters of spanningsvelden zie je?\n` +
+        `3. Welke verbindingen ontbreken of zijn verrassend?\n` +
+        `4. Wat is de volgende logische stap in dit denken?`
+      }],
+      "Je bent een Socratische onderzoekspartner. Denk hardop mee. Maximaal 200 woorden. Schrijf in lopende tekst, geen genummerde lijsten."
+    );
+  };
+
+  const runAiSynthese = () => {
+    if (!llmModel || cards.length < 2) return;
+    const context = buildCanvasContext();
+    streamAiChat(
+      [{ role: "user", content:
+        `Schrijf een samenhangende notitie op basis van dit canvas.\n\n${context}\n\n` +
+        `De notitie moet:\n` +
+        `- Beginnen met een sterke openingszin die de kerngedachte vat\n` +
+        `- De verbanden tussen de kaarten uitleggen in lopende tekst\n` +
+        `- Eindigen met een open vraag of vervolgrichting\n` +
+        `- Maximaal 300 woorden zijn\n` +
+        `- In markdown geschreven zijn (# voor titel, ## voor secties indien nodig)`
+      }],
+      "Je schrijft helder, compact en in eigen woorden. Geen bullet-lijsten — alleen lopende tekst."
+    );
   };
 
   // ── AI: stel vraag over canvas ────────────────────────────────────────────
@@ -555,16 +567,32 @@ const Whiteboard = ({ notes = [], onCreateNote, llmModel = "", serverImages = []
       const resp = await fetch("/api/llm/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: llmModel,
-          messages: newHistory,
-          system: systemPrompt,
-        }),
+        body: JSON.stringify({ model: llmModel, messages: newHistory, system: systemPrompt }),
       });
-      const data = await resp.json();
-      const reply = data.content || data.response || "";
-      setAiHistory([...newHistory, { role: "assistant", content: reply }]);
-    } catch(e) { setAiHistory([...newHistory, { role: "assistant", content: "Fout bij verzoek." }]); }
+      if (!resp.ok) throw new Error(`Server fout: ${resp.status}`);
+      const reader = resp.body.getReader();
+      const dec = new TextDecoder();
+      let buf = "", reply = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        const lines = buf.split("\n");
+        buf = lines.pop();
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          try {
+            const ev = JSON.parse(line.slice(6));
+            if (ev.error) { reply = "Fout: " + ev.error; break; }
+            if (ev.delta) reply += ev.delta;
+            if (ev.done) break;
+          } catch {}
+        }
+      }
+      setAiHistory([...newHistory, { role: "assistant", content: reply || "Geen antwoord." }]);
+    } catch(e) {
+      setAiHistory([...newHistory, { role: "assistant", content: "Fout: " + (e.message||"Verbinding mislukt") }]);
+    }
     setAiStreaming(false);
   };
 

@@ -1647,8 +1647,26 @@ class ZKHandler(BaseHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Origin","*")
             self.end_headers()
             self.wfile.write(body)
-        except (BrokenPipeError, ConnectionResetError):
-            pass  # client heeft verbinding verbroken — geen actie nodig
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass  # client heeft verbinding verbroken of buffer vol — geen actie nodig
+
+    def _send_file(self, path, ct):
+        """Verstuur een groot bestand in chunks om buffer-overflow te vermijden."""
+        try:
+            data = path.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", ct)
+            self.send_header("Content-Length", len(data))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            chunk = 65536  # 64KB per keer
+            for i in range(0, len(data), chunk):
+                try:
+                    self.wfile.write(data[i:i+chunk])
+                except (BrokenPipeError, ConnectionResetError, OSError):
+                    return  # client weg
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
 
     def _sse_write(self, data: str) -> bool:
         """Schrijf een SSE-regel. Geeft False terug als de verbinding verbroken is."""
@@ -1793,7 +1811,7 @@ class ZKHandler(BaseHTTPRequestHandler):
         if p.startswith("/api/pdf/"):
             fname=unquote(p[9:])
             fp=self.vault.get_pdf_path(fname)
-            if fp: return self._send(200,fp.read_bytes(),"application/pdf")
+            if fp: return self._send_file(fp, "application/pdf")
             return self._send(404,{"error":"PDF niet gevonden"})
         if p.startswith("/api/image/"):
             fname=unquote(p[11:])
