@@ -73,6 +73,7 @@ const NotesTab = ({
   }, [reviewData]);
   const [search,        setSearch]        = useState("");
   const [tagFilter,     setTagFilter]     = useState(null);
+  const [layerFilter,   setLayerFilter]   = useState(null);
   const [renderMode,    setRenderMode]    = useState("plain");
   const [showMeta,      setShowMeta]      = useState(false);
   const [showLinkMenu,  setShowLinkMenu]  = useState(false);
@@ -393,13 +394,15 @@ const NotesTab = ({
     selectedId,
     search,
     tagFilter,
+    layerFilter,
     dateFilter,
-    onDateFilterChange: setDateFilter,
-    onSelect:          handleSelect,
-    onNew:             handleNew,
-    onDailyNote:       handleDailyNote,
-    onSearchChange:    setSearch,
-    onTagFilterChange: setTagFilter,
+    onDateFilterChange:  setDateFilter,
+    onSelect:            handleSelect,
+    onNew:               handleNew,
+    onDailyNote:         handleDailyNote,
+    onSearchChange:      setSearch,
+    onTagFilterChange:   setTagFilter,
+    onLayerFilterChange: setLayerFilter,
     isMobile,
     onCloseSidebar:    () => onSidebarToggle?.(false),
   });
@@ -491,6 +494,12 @@ const NotesTab = ({
           onNoteTypeChange: async (newType) => {
             if (!selNote) return;
             const updated = { ...selNote, noteType: newType,
+                              modified: new Date().toISOString() };
+            await handleSave(updated);
+          },
+          onLayerChange: async (newLayer) => {
+            if (!selNote) return;
+            const updated = { ...selNote, layer: newLayer,
                               modified: new Date().toISOString() };
             await handleSave(updated);
           },

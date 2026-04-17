@@ -154,6 +154,7 @@ class VaultManager:
                     elif line.startswith("importedAt:"): note["importedAt"] = line[11:].strip()
                     elif line.startswith("isRead:"):     note["isRead"]     = line[7:].strip().lower() == "true"
                     elif line.startswith("noteType:"):   note["noteType"]   = line[9:].strip()
+                    elif line.startswith("layer:"):      note["layer"]      = line[6:].strip()
         else: note["content"] = text
         # Fallback: gebruik bestandsdatum als modified/created ontbreekt
         if not note["modified"] or not note["created"]:
@@ -2496,11 +2497,14 @@ class ZKHandler(BaseHTTPRequestHandler):
         """GraphRAG: beantwoordt een vraag met graaf-context (notitie + buren + communities).
         Gebruikt het geselecteerde model (Anthropic/Google/OpenAI/OpenRouter/Ollama)."""
         import re as _re, math
-        body     = self._body()
-        question = body.get("question","")
-        model    = body.get("model","")
-        top_n    = int(body.get("top_n", 5))
-        notes    = self.vault.load_notes()
+        body            = self._body()
+        question        = body.get("question","")
+        model           = body.get("model","")
+        top_n           = int(body.get("top_n", 5))
+        selected_ids    = body.get("selected_ids", [])    # vanuit graaf geselecteerde nodes
+        path_ids        = body.get("path_ids", [])        # pad tussen twee nodes
+        focus_community = body.get("focus_community", None)  # community label
+        notes           = self.vault.load_notes()
         if not notes or not question:
             return self._send(400, {"error":"Geen vraag of notities"})
 
@@ -2561,6 +2565,35 @@ class ZKHandler(BaseHTTPRequestHandler):
         # 4. Stel systeem-prompt samen met graaf-context
         parts = []
         parts.append(f"## Vraag van de gebruiker\n{question}")
+
+        # Geselecteerde nodes vanuit de graaf — hoogste prioriteit
+        if selected_ids:
+            sel_notes = [note_map[nid] for nid in selected_ids if nid in note_map]
+            if sel_notes:
+                sel_section = "## Door gebruiker geselecteerde notities (graaf-context)\n"
+                for n in sel_notes:
+                    links_out = extract_links(n.get("content",""))
+                    link_titles = [note_map[l]["title"] for l in links_out if l in note_map]
+                    backlinks   = [x["title"] for x in notes if n["id"] in extract_links(x.get("content",""))]
+                    sel_section += (
+                        f"### {n['title']}\n"
+                        f"Type: {n.get('noteType','–')} | Tags: {', '.join(n.get('tags',[]) or ['–'])}\n"
+                        f"Links → {', '.join(link_titles[:6]) or '–'} | Backlinks ← {', '.join(backlinks[:4]) or '–'}\n\n"
+                        f"{(n.get('content') or '')[:3000]}\n"
+                    )
+                parts.append(sel_section)
+
+        # Pad tussen nodes — toon als narratief
+        if path_ids and len(path_ids) >= 2:
+            path_notes = [note_map[nid] for nid in path_ids if nid in note_map]
+            path_titles = [n["title"] for n in path_notes]
+            parts.append(
+                f"## Kennis-pad (verbindingsketen in graaf)\n"
+                f"{'  →  '.join(path_titles)}\n\n"
+                f"Dit is het kortste pad tussen twee nodes in het kennisnetwerk. "
+                f"Analyseer hoe de concepten op dit pad met elkaar samenhangen."
+            )
+
         parts.append(f"## Graaf-context ({len(context_notes)} notities, {len(comm_groups)} communities)")
 
         for lbl, members in sorted(comm_groups.items(), key=lambda x:-len(x[1]))[:6]:
@@ -2606,6 +2639,17 @@ class ZKHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control","no-cache")
         self.send_header("Access-Control-Allow-Origin","*")
         self.end_headers()
+
+        # Stuur metadata event: welke notities werden gebruikt
+        sources = [
+            {"id": n.get("id",""), "title": n.get("title","") or n.get("id","")}
+            for n in context_notes[:12]
+        ]
+        try:
+            self.wfile.write(("data: " + json.dumps({"sources": sources}) + "\n\n").encode("utf-8"))
+            self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            return
 
         if model.startswith("claude"):
             self._stream_anthropic(model, system, messages)
@@ -4575,21 +4619,62 @@ class ZKHandler(BaseHTTPRequestHandler):
         parsed_base = urlparse(url)
         base_url    = f"{parsed_base.scheme}://{parsed_base.netloc}"
 
+        # ── Substack JSON API: geeft schone artikeltekst zonder JS-overhead ─────
+        substack_text = ""
+        is_substack   = any(x in url for x in ["substack.com", ".substack.com"])
+        # Detecteer ook custom domeinen die Substack gebruiken
+        # door te kijken of de URL het /p/ patroon heeft (Substack posts)
+        is_substack_post = bool(__import__("re").search(r"/p/[a-z0-9-]+", url))
+
+        if is_substack or is_substack_post:
+            json_url = url.split("?")[0].rstrip("/") + "?format=json"
+            try:
+                jreq = urllib.request.Request(json_url, headers={
+                    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                                  "AppleWebKit/537.36 (KHTML, like Gecko) "
+                                  "Chrome/124.0.0.0 Safari/537.36",
+                    "Accept": "application/json, text/javascript, */*",
+                    "Accept-Language": "nl,en;q=0.9",
+                    "Referer": url,
+                })
+                with urllib.request.urlopen(jreq, timeout=15) as jr:
+                    jdata = json.loads(jr.read().decode("utf-8", errors="replace"))
+                # Substack JSON bevat "post" object met "body_html" of "body_text"
+                post = jdata if "body_html" in jdata else jdata.get("post", {})
+                body_html = post.get("body_html", "")
+                if not body_html:
+                    body_html = post.get("body", "")
+                if body_html:
+                    # Strip HTML tags voor schone tekst
+                    import re as _re_html
+                    substack_text = _re_html.sub(r"<[^>]+>", " ", body_html)
+                    substack_text = _re_html.sub(r"\s{2,}", "\n", substack_text).strip()
+                    print(f"[import-url] Substack JSON: {len(substack_text)} tekens", flush=True)
+            except Exception as e:
+                print(f"[import-url] Substack JSON mislukt: {e}", flush=True)
+
         try:
             req = urllib.request.Request(url, headers={
-                "User-Agent": "Mozilla/5.0 (compatible; Zettelkasten/1.0)",
-                "Accept": "text/html,application/xhtml+xml",
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                              "AppleWebKit/537.36 (KHTML, like Gecko) "
+                              "Chrome/124.0.0.0 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                 "Accept-Language": "nl,en;q=0.9",
+                "Accept-Encoding": "identity",
+                "Cache-Control": "no-cache",
             })
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                raw_bytes = resp.read(500_000)
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                raw_bytes = resp.read(1_000_000)
                 charset   = "utf-8"
                 ct = resp.headers.get("Content-Type","")
                 if "charset=" in ct:
                     charset = ct.split("charset=")[-1].split(";")[0].strip()
                 html = raw_bytes.decode(charset, errors="replace")
         except Exception as e:
-            return {"ok":False,"error":"URL ophalen mislukt: "+str(e)}
+            if substack_text:
+                html = ""   # we hebben JSON-tekst, HTML niet nodig
+            else:
+                return {"ok":False,"error":"URL ophalen mislukt: "+str(e)}
 
         # ── HTML → tekst + afbeelding-URLs via stdlib html.parser ────────────
         from html.parser import HTMLParser
@@ -4699,7 +4784,13 @@ class ZKHandler(BaseHTTPRequestHandler):
         raw_text = re.sub(r'([^\n])(#{1,4} )', r'\1\n\n\2', raw_text)
         # Lege regel na elke kop
         raw_text = re.sub(r'(#{1,4} [^\n]+)\n([^\n#\-])', r'\1\n\n\2', raw_text)
-        raw_text = raw_text.strip()[:14000]
+
+        # Gebruik Substack JSON-tekst als die beschikbaar is (betrouwbaarder dan HTML-parser)
+        if substack_text and len(substack_text) > len(raw_text):
+            raw_text = substack_text
+            print(f"[import-url] Substack JSON wint: {len(raw_text)} tekens", flush=True)
+
+        raw_text = raw_text.strip()  # geen vroege afkapping meer
 
         if len(raw_text) < 100:
             return self._send(200,{"ok":False,
@@ -4867,11 +4958,124 @@ class ZKHandler(BaseHTTPRequestHandler):
         detected_lang = "Nederlands" if nl_words > en_words else "Engels"
         lang_instruction = f"Gebruik UITSLUITEND {detected_lang} — vertaal NOOIT naar een andere taal."
 
-        # Stuur zoveel mogelijk tekst mee (max 20000 tekens)
-        article_text = clean_text[:20000]
-        # Als tekst langer is: voeg ook het laatste stuk toe (begin + einde)
-        if len(clean_text) > 20000:
-            article_text = clean_text[:16000] + "\n\n[...artikel ingekort...]\n\n" + clean_text[-2000:]
+        # Bepaal tekstlimiet op basis van model
+        is_local_model = not any(model.startswith(p) for p in
+            ("claude","gpt","o1","o3","o4","gemini","mistral","meta/","qwen/","google/",
+             "anthropic/","openai/","deepseek/","kimi","nvidia/","microsoft/"))
+        # Lokale modellen: max 6000 tekens — anders te langzaam en kwaliteit daalt
+        # Cloud modellen: max 20000 tekens
+        local_max  = 6000
+        cloud_max  = 20000
+        text_limit = local_max if is_local_model else cloud_max
+
+        article_text = clean_text[:text_limit]
+        if len(clean_text) > text_limit:
+            # Begin + einde meesturen
+            article_text = clean_text[:int(text_limit*0.85)] + "\n\n[...artikel ingekort...]\n\n" + clean_text[-int(text_limit*0.1):]
+
+        print(f"[import-url] Tekst naar AI: {len(article_text)} tekens (model={model}, local={is_local_model})", flush=True)
+
+        # ── Substack / schone JSON: bij lokaal model sla AI-stap over ────────
+        # De tekst is al schoon genoeg; maak direct een notitie van de volledige inhoud
+        if is_local_model:
+            # Lokaal model: chunk-samenvatting
+            # Splits tekst in stukken van 4000 tekens, vat elk stuk samen,
+            # combineer deelsamenvatingen tot eindresultaat
+            CHUNK_SIZE = 4000
+            chunks = []
+            text_for_chunks = clean_text
+            while text_for_chunks:
+                # Kap af op zinseinde binnen chunk
+                chunk = text_for_chunks[:CHUNK_SIZE]
+                if len(text_for_chunks) > CHUNK_SIZE:
+                    last_dot = max(chunk.rfind(". "), chunk.rfind("\n"))
+                    if last_dot > CHUNK_SIZE // 2:
+                        chunk = text_for_chunks[:last_dot + 1]
+                chunks.append(chunk.strip())
+                text_for_chunks = text_for_chunks[len(chunk):]
+            chunks = [c for c in chunks if len(c) > 100]
+
+            print(f"[import-url] Lokaal model: {len(chunks)} chunks van ~{CHUNK_SIZE} tekens", flush=True)
+
+            local_model = self._best_local_model(model)
+
+            # Stap 1: vat elk chunk samen
+            chunk_summaries = []
+            for i, chunk in enumerate(chunks):
+                print(f"[import-url] Chunk {i+1}/{len(chunks)}...", flush=True)
+                chunk_prompt = (
+                    f"Vat de volgende tekst samen in 3-5 zinnen. "
+                    f"Behoud alle kernpunten en concrete details. Schrijf in {detected_lang}.\n\n"
+                    f"Tekst:\n{chunk}"
+                )
+                try:
+                    r = self._ollama_post("/api/generate",
+                        {"model": local_model, "prompt": chunk_prompt, "stream": False}, 120)
+                    chunk_sum = r.get("response", "").strip()
+                    if chunk_sum:
+                        chunk_summaries.append(chunk_sum)
+                except Exception as e:
+                    print(f"[import-url] Chunk {i+1} fout: {e}", flush=True)
+
+            if not chunk_summaries:
+                # Fallback: tekst direct teruggeven
+                return {
+                    "ok": True, "url": url, "title": page_title,
+                    "markdown": clean_text,
+                    "summary": f"Geïmporteerd van {url} — {len(clean_text.split())} woorden.",
+                    "tags": [], "images": saved_images,
+                }
+
+            # Stap 2: combineer deelsamenvatingen tot eindnotitie
+            combined_summaries = "\n\n".join(
+                f"Deel {i+1}:\n{s}" for i, s in enumerate(chunk_summaries)
+            )
+            print(f"[import-url] Eindcombinatie van {len(chunk_summaries)} deelsamenvatingen", flush=True)
+
+            final_prompt = (
+                f"Hieronder staan samenvattingen van opeenvolgende delen van een artikel. "
+                f"Schrijf op basis hiervan:\n"
+                f"1. Een samenvatting van 5-7 zinnen die het hele artikel dekt\n"
+                f"2. Een nette Markdown-notitie met ## koppen per hoofdthema\n\n"
+                f"Geef je antwoord in dit formaat:\n"
+                f"===SAMENVATTING===\n<samenvatting>\n===ARTIKEL===\n<markdown>\n\n"
+                f"Schrijf in {detected_lang}. Titel: {page_title}\n\n"
+                f"{combined_summaries}"
+            )
+            try:
+                r_final = self._ollama_post("/api/generate",
+                    {"model": local_model, "prompt": final_prompt, "stream": False}, 180)
+                response_text = r_final.get("response", "").strip()
+            except Exception as e:
+                # Als combinatie mislukt: stuur de deelsamenvatingen terug
+                response_text = (
+                    f"===SAMENVATTING===\n"
+                    f"{chunk_summaries[0]}\n"
+                    f"===ARTIKEL===\n"
+                    f"{clean_text}"
+                )
+
+            # Parseer de response via de bestaande _extract functie
+            import re as _re_local
+            def _extract_local(text):
+                t = text.strip()
+                m1s = _re_local.search(r'={2,}\s*SAMENVATTING\s*={2,}\s*(.*?)\s*(?=={2,}\s*ARTIKEL)', t, _re_local.S|_re_local.I)
+                m1a = _re_local.search(r'={2,}\s*ARTIKEL\s*={2,}\s*(.*?)(?:\s*={2,}|$)', t, _re_local.S|_re_local.I)
+                if m1s and m1a:
+                    return m1s.group(1).strip(), m1a.group(1).strip()
+                return "", t
+
+            summary_out, _ = _extract_local(response_text)
+            if not summary_out:
+                summary_out = "\n\n".join(chunk_summaries[:3])
+
+            # Altijd de volledige originele tekst als markdown teruggeven
+            return {
+                "ok": True, "url": url, "title": page_title,
+                "markdown": clean_text,   # volledige artikel
+                "summary": summary_out,   # AI-samenvatting van chunks
+                "tags": [], "images": saved_images,
+            }
 
         combined_prompt = (
             "Verwerk de onderstaande webpagina-tekst tot een nette notitie.\n\n"

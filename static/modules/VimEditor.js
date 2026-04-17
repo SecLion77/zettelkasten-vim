@@ -1120,6 +1120,42 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
 
 
   // ── Keyboard handler — ALLES hier, geen browser-escape meer ──────────────
+  // ── Drie-lagen annotatie helper ────────────────────────────────────────────
+  const insertLayerMark = useCallback((laag) => {
+    const s = S.current;
+    const row = s.cur.row;
+    const col = s.cur.col;
+    const line = s.lines[row] || "";
+
+    // Bepaal woord onder cursor als geen visuele selectie
+    if (s.visual) {
+      // Visuele selectie: wrap de geselecteerde tekst
+      const vr = s.visual.row, vc = s.visual.col;
+      const startRow = Math.min(row, vr), endRow = Math.max(row, vr);
+      if (startRow === endRow) {
+        const startCol = Math.min(col, vc), endCol = Math.max(col, vc);
+        const selected = line.slice(startCol, endCol + 1);
+        s.lines[row] = line.slice(0, startCol) + '[' + selected + ']{.' + laag + '}' + line.slice(endCol + 1);
+        s.cur.col = startCol + selected.length + laag.length + 4;
+      }
+      s.visual = null;
+      setMode("NORMAL");
+    } else {
+      // Geen selectie: wrap het huidige woord
+      const wordStart = line.slice(0, col).search(/\w+$/);
+      const wordEnd   = col + (line.slice(col).match(/^\w+/) || [""])[0].length;
+      const start     = wordStart >= 0 ? wordStart : col;
+      const word      = line.slice(start, wordEnd) || "tekst";
+      const marked    = '[' + word + ']{.' + laag + '}';
+      s.lines[row]    = line.slice(0, start) + marked + line.slice(wordEnd);
+      s.cur.col       = start + marked.length - 1;
+    }
+    pushUndo(s);
+    emit(s);
+    draw();
+    setStatus('Laag [' + laag + '] toegevoegd');
+  }, []);
+
   const handleKey = useCallback((e) => {
     const s = S.current;
     const m = s.mode;
@@ -1537,6 +1573,15 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
       } else { setStatus(''); }
       clamp(); draw(); return;
     }
+    // ── Leader key (\) — laag-annotaties ────────────────────────────────────
+    if (s._leaderPending) {
+      s._leaderPending = false;
+      if (e.key === 'b') { insertLayerMark('bron');     clamp(); return; }
+      if (e.key === 'k') { insertLayerMark('kritisch');  clamp(); return; }
+      if (e.key === 'e') { insertLayerMark('eigen');     clamp(); return; }
+      setStatus(''); draw(); return;
+    }
+
     // ── Macro start/stop ──────────────────────────────────────────────────
     if (s._qPending) {
       s._qPending = false;
@@ -1769,6 +1814,8 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
       // ── Marks: m{a-z} zet mark, '{a-z} spring naar mark ──────────────
       case "m":
         s._markPending = true; setStatus("m..."); break;
+      case "\\": // Leader key → laag-annotatie
+        s._leaderPending = true; setStatus("\\bron  \\kritisch  \\eigen"); break;
       case "'":
       case "`":
         s._jumpMarkPending = true; setStatus(`${e.key}...`); break;

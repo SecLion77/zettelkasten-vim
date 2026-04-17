@@ -253,6 +253,36 @@ const renderMd = (text, notes=[]) => {
   // Strip ook losse label-regels "📋 SAMENVATTING" op eigen regel
   h = h.replace(/^[📋🗒️✍️\s]*(?:SAMENVATTING|SUMMARY)\s*$/gim, '');
 
+  // Blok laag-markeringen: :::bron/kritisch/eigen ... :::
+  // Verwerkt vóór code blocks zodat ``` binnen blokken niet interfereert
+  h = h.replace(/^:::bron\s*\n([\s\S]*?)^:::\s*$/gm, (_, body) => {
+    const i = mediaBlocks.length;
+    mediaBlocks.push(
+      '<div class="laag-blok laag-blok-bron">' +
+      '<span class="laag-blok-label">BRON</span>' +
+      '<div class="laag-blok-body">' + body.trim() + '</div></div>'
+    );
+    return '%%MEDIA' + i + '%%';
+  });
+  h = h.replace(/^:::kritisch\s*\n([\s\S]*?)^:::\s*$/gm, (_, body) => {
+    const i = mediaBlocks.length;
+    mediaBlocks.push(
+      '<div class="laag-blok laag-blok-kritisch">' +
+      '<span class="laag-blok-label">KRITISCH</span>' +
+      '<div class="laag-blok-body">' + body.trim() + '</div></div>'
+    );
+    return '%%MEDIA' + i + '%%';
+  });
+  h = h.replace(/^:::eigen\s*\n([\s\S]*?)^:::\s*$/gm, (_, body) => {
+    const i = mediaBlocks.length;
+    mediaBlocks.push(
+      '<div class="laag-blok laag-blok-eigen">' +
+      '<span class="laag-blok-label">EIGEN</span>' +
+      '<div class="laag-blok-body">' + body.trim() + '</div></div>'
+    );
+    return '%%MEDIA' + i + '%%';
+  });
+
   // Code blocks first (prevent interference) — mermaid mindmap apart behandelen
   const codeBlocks = [];
   h = h.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
@@ -348,6 +378,10 @@ const renderMd = (text, notes=[]) => {
   h = h.replace(/\*(.+?)\*/g,"<em>$1</em>");
   h = h.replace(/`(.+?)`/g,"<code>$1</code>");
   h = h.replace(/~~(.+?)~~/g,"<del>$1</del>");
+  // Inline laag-markeringen: [tekst]{.bron}, [tekst]{.kritisch}, [tekst]{.eigen}
+  h = h.replace(/\[([^\]]+)\]\{\.bron\}/g,    '<span class="laag-bron">$1</span>');
+  h = h.replace(/\[([^\]]+)\]\{\.kritisch\}/g, '<span class="laag-kritisch">$1</span>');
+  h = h.replace(/\[([^\]]+)\]\{\.eigen\}/g,   '<span class="laag-eigen">$1</span>');
 
   // Checkboxes
   h = h.replace(/^- \[ \] (.+)$/gm,'<li class="todo">☐ $1</li>');
@@ -799,10 +833,21 @@ const App = () => {
     return mt?.sub || null;
   }, [activeMain]);
 
-  // Globale refresh hook voor TasksPanel — moet vóór conditionele return staan
+  // Globale hooks — moeten vóór conditionele return staan
   React.useEffect(() => {
     window._zkRefreshNotes = () => setNotes([...NoteStore.getAll()]);
-    return () => { window._zkRefreshNotes = null; };
+    // _switchToTab: vanuit Whiteboard/Graph naar een tab navigeren
+    window._switchToTab = (tabId) => setTab(tabId);
+    // _graphToNotebook: vanuit Graaf een context-bericht naar Notebook sturen
+    window._graphToNotebook = (msg) => {
+      window._notebookPrefill = msg;
+      setTab("llm");
+    };
+    return () => {
+      window._zkRefreshNotes  = null;
+      window._switchToTab     = null;
+      window._graphToNotebook = null;
+    };
   }, []);
 
   if (!loaded) return React.createElement("div", {
@@ -1462,7 +1507,9 @@ const App = () => {
                 const saved=await NoteStore.save(note);
                 setNotes([...NoteStore.getAll()]); setSelId(saved.id); setTab("notes");
               },
-              onPasteToNote: selId ? handlePasteToNote : null}));
+              onPasteToNote: selId ? handlePasteToNote : null,
+              prefillMsg: window._notebookPrefill || null,
+            }));
           if(t==="tags") return React.createElement("div",{style:{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",minHeight:0}},
             React.createElement(TagManagerPanel,{
               allTags, notes,

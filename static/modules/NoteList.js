@@ -10,6 +10,8 @@ const NoteList = ({
   tagFilter = null,
   typeFilter = null,
   onTypeFilterChange,
+  layerFilter = null,
+  onLayerFilterChange,
   onSelect,
   onNew,
   onDailyNote,
@@ -81,6 +83,8 @@ const NoteList = ({
       if (tagFilter && !(n.tags || []).includes(tagFilter)) return false;
       // 4. Type filter
       if (typeFilter && (n.noteType || "") !== typeFilter) return false;
+      // 5. Layer filter
+      if (layerFilter && (n.layer || "") !== layerFilter) return false;
       return true;
     });
 
@@ -91,7 +95,7 @@ const NoteList = ({
         return new Date(b.created || 0) - new Date(a.created || 0);
       return new Date(b.modified || b.created || 0) - new Date(a.modified || a.created || 0);
     });
-  }, [notes, search, tagFilter, typeFilter, sortBy, dateFilter]);
+  }, [notes, search, tagFilter, typeFilter, layerFilter, sortBy, dateFilter]);
 
   // Gepinde notities bovenaan
   const displayNotes = React.useMemo(() => {
@@ -296,7 +300,7 @@ const NoteList = ({
     ),
 
     // ── Actieve filter badge ────────────────────────────────────────────────
-    (tagFilter || typeFilter || search) && React.createElement("div", {
+    (tagFilter || typeFilter || layerFilter || search) && React.createElement("div", {
       style: { padding: "3px 8px", borderBottom: `1px solid ${W.splitBg}`,
                background: "rgba(159,202,86,0.04)", flexShrink: 0,
                display: "flex", gap: "5px", alignItems: "center", flexWrap: "wrap" }
@@ -315,8 +319,20 @@ const NoteList = ({
                  border: "1px solid rgba(138,198,242,0.3)", borderRadius: "3px",
                  padding: "1px 6px", cursor: "pointer" }
       }, typeFilter, " ×"),
+      layerFilter && React.createElement("button", {
+        onClick: () => onLayerFilterChange?.(null),
+        style: { fontSize: "9px",
+                 background: layerFilter==="bron" ? "rgba(138,198,242,0.12)"
+                           : layerFilter==="kritisch" ? "rgba(229,120,109,0.12)"
+                           : "rgba(159,202,86,0.12)",
+                 color: layerFilter==="bron" ? "#8ac6f2"
+                      : layerFilter==="kritisch" ? "#e5786d" : "#9fca56",
+                 border: "1px solid currentColor", borderRadius: "3px",
+                 padding: "1px 6px", cursor: "pointer" }
+      }, layerFilter==="bron" ? "🔵" : layerFilter==="kritisch" ? "🔴" : "🟢",
+         " ", layerFilter, " ×"),
       React.createElement("button", {
-        onClick: () => { onSearchChange?.(""); onTagFilterChange?.(null); onTypeFilterChange?.(null); },
+        onClick: () => { onSearchChange?.(""); onTagFilterChange?.(null); onTypeFilterChange?.(null); onLayerFilterChange?.(null); },
         style: { fontSize: "9px", background: "none", color: W.fgMuted,
                  border: "none", cursor: "pointer", marginLeft: "auto", padding: "1px 4px" }
       }, "× wis")

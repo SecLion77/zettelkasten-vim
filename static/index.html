@@ -224,6 +224,50 @@
     }
 
     .scroll-ios { -webkit-overflow-scrolling: touch; overflow-y: auto; }
+
+    /* ── Drie-lagen annotatie ─────────────────────────────────────────── */
+    .laag-bron {
+      color: #8ac6f2;
+      background: rgba(138,198,242,0.10);
+      border-bottom: 1px solid rgba(138,198,242,0.35);
+      border-radius: 2px; padding: 0 3px; font-size: 0.97em;
+    }
+    .laag-kritisch {
+      color: #e5786d;
+      background: rgba(229,120,109,0.10);
+      border-bottom: 1px solid rgba(229,120,109,0.40);
+      border-radius: 2px; padding: 0 3px; font-size: 0.97em;
+    }
+    .laag-eigen {
+      color: #9fca56;
+      background: rgba(159,202,86,0.10);
+      border-bottom: 1px solid rgba(159,202,86,0.35);
+      border-radius: 2px; padding: 0 3px; font-size: 0.97em;
+    }
+    .laag-blok {
+      border-radius: 0 6px 6px 0; padding: 10px 14px;
+      margin: 12px 0; font-size: 14px; line-height: 1.7;
+    }
+    .laag-blok-label {
+      display: block; font-size: 10px; font-weight: 700;
+      letter-spacing: 0.8px; margin-bottom: 6px; opacity: 0.7;
+    }
+    .laag-blok-body { color: #e3e0d7; }
+    .laag-blok-bron {
+      border-left: 3px solid rgba(138,198,242,0.45);
+      background: rgba(138,198,242,0.06);
+    }
+    .laag-blok-bron .laag-blok-label { color: #8ac6f2; }
+    .laag-blok-kritisch {
+      border-left: 3px solid rgba(229,120,109,0.50);
+      background: rgba(229,120,109,0.06);
+    }
+    .laag-blok-kritisch .laag-blok-label { color: #e5786d; }
+    .laag-blok-eigen {
+      border-left: 3px solid rgba(159,202,86,0.45);
+      background: rgba(159,202,86,0.06);
+    }
+    .laag-blok-eigen .laag-blok-label { color: #9fca56; }
   </style>
 
   <meta name="mobile-web-app-capable" content="yes">

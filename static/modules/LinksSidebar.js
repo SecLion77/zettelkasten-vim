@@ -14,6 +14,7 @@ const LinksSidebar = ({
   onTagRemove,
   onTagsChange,
   onNoteTypeChange,
+  onLayerChange,
   isTablet = false,
   splitMode = false,
   externalOpen = null,
@@ -386,6 +387,34 @@ const LinksSidebar = ({
             content:  note.content || "",
             llmModel,
           })
+        ),
+
+        // ── Laag selector ─────────────────────────────────────────────────
+        React.createElement("div", null,
+          React.createElement("div", {
+            style: { fontSize: "9px", color: W.fgMuted, letterSpacing: "1px",
+                     marginBottom: "6px", textTransform: "uppercase" }
+          }, "Laag"),
+          React.createElement("div", { style: { display: "flex", gap: "5px", flexWrap: "wrap" } },
+            ...[
+              { id: "",         label: "—",          color: W.fgDim },
+              { id: "bron",     label: "🔵 Bron",     color: "#8ac6f2" },
+              { id: "kritisch", label: "🔴 Kritisch",  color: "#e5786d" },
+              { id: "eigen",    label: "🟢 Eigen",     color: "#9fca56" },
+            ].map(({ id, label, color }) => {
+              const isActive = (note.layer || "") === id;
+              return React.createElement("button", {
+                key: id, onClick: () => onLayerChange?.(id),
+                style: {
+                  padding: "3px 8px", borderRadius: "4px", fontSize: "11px",
+                  cursor: "pointer", transition: "all 0.1s",
+                  background: isActive ? color + "22" : "transparent",
+                  border: `1px solid ${isActive ? color : W.splitBg}`,
+                  color: isActive ? color : W.fgMuted,
+                }
+              }, label);
+            })
+          )
         ),
 
         // Metadata

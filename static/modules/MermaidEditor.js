@@ -2317,7 +2317,7 @@ const SUGGESTED_MODELS = [
   { id:"gemma2",          label:"Gemma 2 9B",             desc:"Google · modern, goed voor lange context" },
 ];
 
-const LLMNotebook = ({notes, pdfNotes, serverPdfs, serverImages, allTags, onAddNote, llmModel, setLlmModel, onMindmapReady, onPasteToNote=null}) => {
+const LLMNotebook = ({notes, pdfNotes, serverPdfs, serverImages, allTags, onAddNote, llmModel, setLlmModel, onMindmapReady, onPasteToNote=null, prefillMsg=null}) => {
   const { useState, useEffect, useRef, useCallback, useMemo } = React;
 
   // ── State ─────────────────────────────────────────────────────────────────
@@ -2339,6 +2339,7 @@ const LLMNotebook = ({notes, pdfNotes, serverPdfs, serverImages, allTags, onAddN
   const [mmPending,     setMmPending]    = useState(false);   // mindmap genereren
   const [graphRagMode,  setGraphRagMode] = useState(true);   // GraphRAG standaard aan
   const [graphRagInfo,  setGraphRagInfo] = useState(null);   // info over de query
+  const [graphRagSources, setGraphRagSources] = useState([]); // gebruikte notities
   const [socraticMode,  setSocraticMode] = useState(false);  // Socratische vragen i.p.v. antwoorden
 
   const [ctxExtPdfs,    setCtxExtPdfs]   = useState([]);   // absolute paden
@@ -2397,9 +2398,20 @@ const LLMNotebook = ({notes, pdfNotes, serverPdfs, serverImages, allTags, onAddN
   }, [onPasteToNote]);
 
   // ── Model sync: statusbalk → Notebook (eenrichtingsverkeer) ─────────────────
-  // llmModel is de bron van waarheid (statusbalk ModelPicker).
-  // Notebook toont het actieve model, wijzigen gaat via de statusbalk.
   useEffect(()=>{ if(llmModel) setModel(llmModel); },[llmModel]);
+
+  // ── Prefill vanuit Graaf of Whiteboard ────────────────────────────────────
+  // Als er een prefillMsg binnenkomt, zet die in het inputveld
+  // De gebruiker ziet de vraag en kan hem aanpassen of direct verzenden
+  const prefillSentRef = useRef(null);
+  useEffect(() => {
+    if (!prefillMsg || prefillMsg === prefillSentRef.current) return;
+    prefillSentRef.current = prefillMsg;
+    // Zet in input — gebruiker kan nog aanpassen of direct Enter drukken
+    setInput(prefillMsg);
+    // Focus het inputveld
+    setTimeout(() => inputRef.current?.focus(), 200);
+  }, [prefillMsg]);
 
   const checkOllama = useCallback(async () => {
     setOllamaStatus("laden");
@@ -2548,9 +2560,15 @@ const LLMNotebook = ({notes, pdfNotes, serverPdfs, serverImages, allTags, onAddN
     try {
       let endpoint, body;
       if (graphRagMode) {
-        // GraphRAG: stuur vraag + model → server bouwt graaf-context
+        // GraphRAG: stuur vraag + model + graaf-context → server bouwt uitgebreide context
         endpoint = "/api/llm/graphrag";
-        body = JSON.stringify({ question: text, model, top_n: 5 });
+        // Extraheer eventuele selected_ids uit de prefillMsg (via window globals)
+        const selIds   = window._graphSelectedIds   || [];
+        const pathIds  = window._graphPathIds       || [];
+        window._graphSelectedIds = null;
+        window._graphPathIds     = null;
+        body = JSON.stringify({ question: text, model, top_n: 8,
+          selected_ids: selIds, path_ids: pathIds });
       } else {
         endpoint = "/api/llm/chat";
         const socraticSystem = socraticMode
@@ -2599,6 +2617,10 @@ REGELS:
           try {
             const evt = JSON.parse(line.slice(6));
             if (evt.error) throw new Error(evt.error);
+            if (evt.sources) {
+              // Server stuurt gebruikte notities als metadata event
+              setGraphRagSources(evt.sources);
+            }
             if (evt.delta) {
               full += evt.delta;
               setMessages(prev => {
@@ -3400,6 +3422,36 @@ REGELS:
         React.createElement("div",{ref:chatEndRef})
       ),
 
+      // GraphRAG bronnen — toon welke notities gebruikt werden
+      graphRagMode && graphRagSources.length > 0 && React.createElement("div",{
+        style:{
+          borderTop:`1px solid rgba(234,231,136,0.15)`,
+          padding:"6px 12px",
+          background:"rgba(234,231,136,0.04)",
+          flexShrink:0,
+        }
+      },
+        React.createElement("div",{style:{
+          fontSize:"10px",color:"rgba(234,231,136,0.6)",
+          letterSpacing:"0.5px",marginBottom:"4px"
+        }},`🕸 GEBRUIKTE NOTITIES (${graphRagSources.length})`),
+        React.createElement("div",{style:{display:"flex",flexWrap:"wrap",gap:"4px"}},
+          graphRagSources.map(s => React.createElement("span",{
+            key:s.id||s.title,
+            title:s.title,
+            style:{
+              fontSize:"10px",
+              background:"rgba(234,231,136,0.08)",
+              border:"1px solid rgba(234,231,136,0.2)",
+              borderRadius:"3px",padding:"1px 6px",
+              color:"rgba(234,231,136,0.7)",
+              maxWidth:"160px",overflow:"hidden",
+              textOverflow:"ellipsis",whiteSpace:"nowrap",
+            }
+          }, s.title))
+        )
+      ),
+
       // ── Invoerbalk ─────────────────────────────────────────────────────────
       React.createElement("div", {
         style:{borderTop:`1px solid ${graphRagMode?"rgba(234,231,136,0.3)":W.splitBg}`,
@@ -3407,22 +3459,46 @@ REGELS:
                boxShadow: graphRagMode?"0 -2px 12px rgba(234,231,136,0.06)":"none",
                transition:"all 0.2s"}
       },
-        // GraphRAG actief-banner
-        graphRagMode && React.createElement("div",{
-          style:{display:"flex",alignItems:"center",gap:"8px",
-                 marginBottom:"8px",padding:"6px 10px",
-                 background:"rgba(234,231,136,0.07)",
-                 border:"1px solid rgba(234,231,136,0.2)",
-                 borderRadius:"6px",fontSize:"12px",color:W.yellow}
-        },
-          React.createElement("span",null,"🕸"),
-          React.createElement("span",null,
-            "GraphRAG actief — je vraag gebruikt de volledige kennisgraaf als context"
+        // GraphRAG actief-banner + snelknoppen
+        graphRagMode && React.createElement("div",{style:{marginBottom:"8px"}},
+          React.createElement("div",{
+            style:{display:"flex",alignItems:"center",gap:"8px",
+                   marginBottom:"6px",padding:"6px 10px",
+                   background:"rgba(234,231,136,0.07)",
+                   border:"1px solid rgba(234,231,136,0.2)",
+                   borderRadius:"6px",fontSize:"12px",color:W.yellow}
+          },
+            React.createElement("span",null,"🕸"),
+            React.createElement("span",null,
+              `GraphRAG actief — ${notes.length} notities beschikbaar als kennisgraaf`
+            ),
+            React.createElement("span",{
+              onClick:()=>setGraphRagMode(false),
+              style:{marginLeft:"auto",cursor:"pointer",color:W.fgDim,fontSize:"14px"}
+            },"✕")
           ),
-          React.createElement("span",{
-            onClick:()=>setGraphRagMode(false),
-            style:{marginLeft:"auto",cursor:"pointer",color:W.fgDim,fontSize:"14px"}
-          },"✕")
+          // Snelknoppen voor veelgebruikte analyses
+          React.createElement("div",{style:{display:"flex",gap:"5px",flexWrap:"wrap"}},
+            ...[
+              {label:"🗺 Overzicht vault",    q:"Geef een overzicht van mijn kennisbasis. Welke thema's domineren? Welke clusters zie je? Wat zijn de centrale notities?"},
+              {label:"🔍 Kennishiaten",        q:"Welke kennishiaten of ontbrekende verbanden zie je in mijn notities? Wat zou ik nog moeten uitwerken?"},
+              {label:"💡 Verrassende links",   q:"Welke onverwachte verbindingen zie je tussen mijn notities die ik zelf nog niet heb gelegd?"},
+              {label:"📈 Sterke notities",     q:"Welke notities zijn het meest verbonden en inhoudelijk het rijkst? Waarom zijn dit de kernnotities van mijn vault?"},
+              {label:"⚡ Vluchtig → Permanent",q:"Welke vluchtige of literatuurnotities zijn rijp om te promoveren naar permanente notities? Leg uit waarom."},
+            ].map(({label,q}) => React.createElement("button",{
+              key:label,
+              onClick:()=>setInput(q),
+              style:{
+                background:"rgba(234,231,136,0.06)",
+                border:"1px solid rgba(234,231,136,0.2)",
+                color:W.fgMuted, borderRadius:"4px",
+                padding:"3px 8px", fontSize:"11px", cursor:"pointer",
+                transition:"all 0.12s",
+              },
+              onMouseEnter:e=>{e.currentTarget.style.color=W.yellow;e.currentTarget.style.background="rgba(234,231,136,0.12)";},
+              onMouseLeave:e=>{e.currentTarget.style.color=W.fgMuted;e.currentTarget.style.background="rgba(234,231,136,0.06)";}
+            }, label))
+          )
         ),
         React.createElement("div",{style:{display:"flex",gap:"8px",alignItems:"flex-end"}},
           React.createElement("textarea",{

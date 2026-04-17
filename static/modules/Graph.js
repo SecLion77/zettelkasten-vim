@@ -606,10 +606,16 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
       const ex=nodesRef.current.find(x=>x.id===n.id);
       if (ex) return {...ex,...n, pinned:pinnedRef.current.has(n.id)};
       const angle=(all.indexOf(n)/all.length)*Math.PI*2;
-      // Fallback radius als canvas nog geen grootte heeft (tab nog niet zichtbaar)
       const r=Math.min(CW||600, CH||600)*0.28 || 300;
-      return {...n, x:r*Math.cos(angle)+(Math.random()-.5)*60,
-                    y:r*Math.sin(angle)+(Math.random()-.5)*60,
+      // Community-gebaseerde initiële positie: nodes van zelfde community starten bij elkaar
+      const commAngle = n.community
+        ? (([...new Set(all.filter(x=>x.type==="note").map(x=>x.community))].indexOf(n.community))
+           / Math.max(1,[...new Set(all.filter(x=>x.type==="note").map(x=>x.community))].length))
+           * Math.PI * 2
+        : angle;
+      const rx = n.type==="tag" ? r*1.5 : r*0.75;
+      return {...n, x:rx*Math.cos(commAngle)+(Math.random()-.5)*80,
+                    y:rx*Math.sin(commAngle)+(Math.random()-.5)*80,
                     vx:0, vy:0, pinned:false};
     });
 
@@ -663,7 +669,12 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
     noteNodes.forEach(n=>{ n.communityIdx=commIds.indexOf(n.community); });
     const commPal=["#8ac6f2","#9fca56","#e5786d","#d787ff","#eae788",
                    "#cae682","#e99a5a","#92b5dc","#5fd7ff","#87d787"];
-    noteNodes.forEach(n=>{ n.communityColor=commPal[n.communityIdx%commPal.length]; });
+    // Consistente kleur via hash van de community-ID (stabiel over rebuilds)
+    const hashStr = (s) => { let h=0; for(let i=0;i<s.length;i++) h=(h*31+s.charCodeAt(i))>>>0; return h; };
+    noteNodes.forEach(n=>{
+      const idx = hashStr(n.community) % commPal.length;
+      n.communityColor = commPal[idx];
+    });
 
   },[notes,selectedId,showLocal,orphansOnly,tagColors,filterTag,depthLimit]);
 
@@ -758,12 +769,16 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
       const simActive = alpha > 0.005;
 
       if (simActive) {
-        // Repulsie
+        // Repulsie — tag-nodes hebben minder repulsie om layout te verbeteren
         for(let i=0;i<nodes.length;i++){
           for(let j=i+1;j<nodes.length;j++){
             const dx=nodes[j].x-nodes[i].x, dy=nodes[j].y-nodes[i].y;
             const d=Math.sqrt(dx*dx+dy*dy)||1;
-            const f=(d < 50 ? 3600 : 1600)/(d*d);
+            // Note-note repulsie sterker, tag-nodes zwakker
+            const isTagI=nodes[i].type==="tag", isTagJ=nodes[j].type==="tag";
+            const base = (isTagI||isTagJ) ? 800 : 1800;
+            const close = (isTagI||isTagJ) ? 1200 : 4000;
+            const f=(d < 50 ? close : base)/(d*d);
             nodes[i].vx-=(dx/d)*f*alpha; nodes[i].vy-=(dy/d)*f*alpha;
             nodes[j].vx+=(dx/d)*f*alpha; nodes[j].vy+=(dy/d)*f*alpha;
           }
@@ -776,12 +791,13 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
             n.vx+=(dx/d)*f; n.vy+=(dy/d)*f;
             t.vx-=(dx/d)*f; t.vy-=(dy/d)*f;
           };
-          n.links.forEach(l=>{ const w=(n.edgeWeights||{})[l]||1; att(l,0.018+w*0.007); });
-          (n.tagLinks||[]).forEach(l=>att(l,0.012));
+          n.links.forEach(l=>{ const w=(n.edgeWeights||{})[l]||1; att(l,0.022+w*0.008); });
+          // Tag-nodes zwakker aantrekken (waren te dominant)
+          (n.tagLinks||[]).forEach(l=>att(l,0.005));
           if(n===dragging.current||n.pinned) return;
-          n.vx+=(0-n.x)*0.006*alpha; n.vy+=(0-n.y)*0.006*alpha;
-          // Sterke damping: 0.65 ipv 0.72 — nodes stoppen sneller
-          n.vx*=0.65; n.vy*=0.65;
+          // Zwakke centripetale kracht — nodes blijven bij elkaar
+          n.vx+=(0-n.x)*0.004*alpha; n.vy+=(0-n.y)*0.004*alpha;
+          n.vx*=0.68; n.vy*=0.68;
           n.x+=n.vx; n.y+=n.vy;
         });
         // Alpha sneller afkoelen: 0.91 ipv 0.94
@@ -1065,9 +1081,10 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
 
         // Label
         ctx.globalAlpha=dimmed?0.18:1;
-        const label=(n.title?.length>24?n.title.substring(0,22)+"…":n.title)||"";
+        const maxChars=v.scale>1.2?36:v.scale>0.7?24:18;
+        const label=(n.title?.length>maxChars?n.title.substring(0,maxChars-2)+"…":n.title)||"";
         ctx.fillStyle=sel?W.statusFg:hov?W.fg:isSearchHit?"#ffd700":isTag?"#a8d8f0":W.fgDim;
-        ctx.font=`${sel||hov||isSearchHit?"bold ":""}${Math.max(9,(isTag?11:12)/Math.sqrt(v.scale))}px 'Courier New'`;
+        ctx.font=`${sel||hov||isSearchHit?"600 ":""}${Math.max(8,(isTag?10:11)/Math.max(0.5,Math.sqrt(v.scale)))}px 'DM Sans', system-ui, sans-serif`;
         ctx.textAlign="center";
         ctx.fillText(label,n.x,n.y+r+15/v.scale);
         ctx.globalAlpha=1;
@@ -1095,7 +1112,7 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
           ctx.strokeStyle="rgba(255,255,255,0.1)";ctx.lineWidth=0.5;ctx.stroke();
           lines.forEach((line,i)=>{
             ctx.fillStyle=i===0?W.statusFg:i===1?"#a8d8f0":W.fgDim;
-            ctx.font=`${i===0?"bold ":""}11px 'Courier New'`;
+            ctx.font=`${i===0?"600 ":""}11px 'DM Sans', system-ui, sans-serif`;
             ctx.textAlign="center";
             ctx.fillText(line,tx+ttW/2,ty+14+i*16);
           });
@@ -1288,6 +1305,35 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
             ? `Nodes ≤${depthLimit} stap${depthLimit>1?"pen":"je"} van #${filterTag}`
             : "Selecteer een node of tag als anker"
         ),
+      ),
+
+      React.createElement("div",{style:{height:"1px",background:"rgba(255,255,255,0.06)",margin:"2px 0"}}),
+
+      // Graaf-statistieken
+      React.createElement("div",{style:{fontSize:"10px",color:W.fgMuted,
+        letterSpacing:"0.5px",marginBottom:"4px",lineHeight:"1.7"}},
+        (() => {
+          const visNodes = nodesRef.current;
+          const noteCount  = visNodes.filter(n=>n.type==="note").length;
+          const tagCount   = visNodes.filter(n=>n.type==="tag").length;
+          const linkCount  = visNodes.reduce((s,n)=>(s+(n.links||[]).length),0);
+          const orphanCount= visNodes.filter(n=>n.type==="note"&&(n.links||[]).length===0&&(n.backCount||0)===0).length;
+          const commCount  = new Set(visNodes.filter(n=>n.type==="note"&&n.community).map(n=>n.community)).size;
+          const hubNode    = visNodes.filter(n=>n.type==="note").sort((a,b)=>(b.hubScore||0)-(a.hubScore||0))[0];
+          return React.createElement("div",null,
+            React.createElement("div",{style:{display:"flex",gap:"8px",flexWrap:"wrap",marginBottom:"3px"}},
+              React.createElement("span",{style:{color:W.blue}},`📝 ${noteCount} notities`),
+              React.createElement("span",{style:{color:W.comment}},`🏷 ${tagCount} tags`),
+              React.createElement("span",null,`🔗 ${linkCount} links`),
+              orphanCount>0&&React.createElement("span",{style:{color:W.orange}},`○ ${orphanCount} wees`),
+            ),
+            React.createElement("div",{style:{display:"flex",gap:"8px",flexWrap:"wrap"}},
+              commCount>1&&React.createElement("span",{style:{color:"#d787ff"}},`◉ ${commCount} clusters`),
+              hubNode&&React.createElement("span",{title:`Hub: ${hubNode.title}`},
+                `⭐ ${(hubNode.title||hubNode.id).substring(0,18)}${(hubNode.title||hubNode.id).length>18?"…":""}`),
+            )
+          );
+        })()
       ),
 
       React.createElement("div",{style:{height:"1px",background:"rgba(255,255,255,0.06)",margin:"2px 0"}}),
@@ -1830,7 +1876,33 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
                          borderRadius: "5px", color: W.blue,
                          padding: "5px 0", fontSize: "12px",
                          cursor: "pointer", fontWeight: "600" }
-              }, "📖 Bekijk")
+              }, "📖 Bekijk"),
+              React.createElement("button", {
+                title: "Stuur deze verbinding naar Notebook voor GraphRAG analyse",
+                onClick: () => {
+                  const nA = surpriseNote.a, nB = surpriseNote.b;
+                  const reasons = (surpriseNote.reasons||[]).map(r=>"• "+r.label+(r.detail?` — ${r.detail}`:"")).join("\n");
+                  const tags = (surpriseNote.sharedTags||[]).map(t=>"#"+t).join(", ");
+                  const msg = [
+                    `## Verrassende verbinding in de kennisgraaf`,
+                    `**"${nA.label||nA.id}"** ↔ **"${nB.label||nB.id}"**`,
+                    tags ? `Gedeelde tags: ${tags}` : "",
+                    reasons ? `Verbindingsredenen:\n${reasons}` : "",
+                    aiInsight ? `AI-inzicht: ${aiInsight}` : "",
+                    ``,
+                    `Analyseer de diepere conceptuele verbinding. Welk nieuw inzicht ontstaat? Wat is een goede synthese-notitie die beide verbindt?`,
+                  ].filter(Boolean).join("\n");
+                  setSurpriseNote(null);
+                  window._graphSelectedIds = [nA.id, nB.id];
+                  if (window._graphToNotebook) window._graphToNotebook(msg);
+                  else if (window._switchToTab) { window._notebookPrefill=msg; window._switchToTab("llm"); }
+                },
+                style: { flex: 1, background: "rgba(234,231,136,0.12)",
+                         border: `1px solid rgba(234,231,136,0.35)`,
+                         borderRadius: "5px", color: W.yellow,
+                         padding: "5px 0", fontSize: "12px",
+                         cursor: "pointer", fontWeight: "600" }
+              }, "🕸 Notebook")
             )
           )
     ),
@@ -1974,7 +2046,48 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
               padding: "4px 12px", fontSize: "11px",
               cursor: "pointer", fontWeight: "600",
             }
-          }, "📖 Open →")
+          }, "📖 Open →"),
+          // Stuur naar Notebook voor GraphRAG analyse
+          React.createElement("button", {
+            onClick: () => {
+              const n = peekNote;
+              if (!n) return;
+              const allLinks = nodesRef.current
+                .filter(x => (x.links||[]).includes(n.id) || (n.links||[]).includes(x.id))
+                .slice(0, 10).map(x => x.title || x.id);
+              const myNode = nodesRef.current.find(y => y.id === n.id);
+              const communityMembers = myNode?.community
+                ? nodesRef.current
+                    .filter(x => x.type==="note" && x.community === myNode.community && x.id !== n.id)
+                    .slice(0, 6).map(x => x.title || x.id)
+                : [];
+              const msg = [
+                `## Graaf-context voor notitie: "${n.title || n.id}"`,
+                allLinks.length ? `**Verbonden notities (${allLinks.length}):** ${allLinks.join(", ")}` : "",
+                communityMembers.length ? `**Community:** ${communityMembers.join(", ")}` : "",
+                myNode ? `**Hub-score:** ${myNode.hubScore||0} (in: ${myNode.inDegree||0}, uit: ${myNode.outDegree||0})` : "",
+                ``,
+                `Analyseer deze notitie in het kennisnetwerk. Welke rol speelt ze? Welke verbindingen zijn opvallend of ontbreken? Wat suggereert de graafstructuur als vervolgstap?`,
+              ].filter(Boolean).join("\n");
+              setPeekNoteId(null);
+              // Stuur node IDs mee zodat GraphRAG de volledige inhoud kan ophalen
+              window._graphSelectedIds = [n.id,
+                ...nodesRef.current
+                  .filter(x => (x.links||[]).includes(n.id) || (n.links||[]).includes(x.id))
+                  .slice(0, 6).map(x => x.id)
+              ];
+              if (window._graphToNotebook) window._graphToNotebook(msg);
+              else if (window._switchToTab) { window._notebookPrefill = msg; window._switchToTab("llm"); }
+            },
+            title: "Analyseer in Notebook met GraphRAG",
+            style: {
+              background: "rgba(234,231,136,0.12)",
+              border: "1px solid rgba(234,231,136,0.35)",
+              borderRadius: "5px", color: W.yellow,
+              padding: "4px 10px", fontSize: "11px",
+              cursor: "pointer", fontWeight: "600",
+            }
+          }, "🕸 Notebook")
         )
       );
     })(),
