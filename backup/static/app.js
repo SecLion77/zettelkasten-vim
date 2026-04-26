@@ -797,8 +797,7 @@ const App = () => {
         {id:"images",  icon:"🖼",  label:"Plaatjes"},
         {id:"reading", icon:"📖", label:"Leeslijst"},
         {id:"review",  icon:"🔁", label:"Review"},
-        {id:"tasks",       icon:"✓",  label:"Taken"},
-        {id:"annotations",  icon:"✦",  label:"Annotaties"},
+        {id:"tasks",   icon:"✓",   label:"Taken"},
       ]},
     { id:"discover",  icon:"🔍", label:"Ontdekken",  sub: [
         {id:"search",     icon:"🔍", label:"Zoeken"},
@@ -1523,10 +1522,6 @@ const App = () => {
             notes,
             onOpenNote: id => { setSelId(id); setTab("notes"); },
           });
-          if(t==="annotations") return React.createElement(AnnotationsPanel,{
-            notes,
-            onOpenNote: id => { setSelId(id); setTab("notes"); },
-          });
           if(t==="query") return React.createElement(QueryPanel,{
             notes, allTags,
             onOpenNote: id => { setSelId(id); setTab("notes"); },
@@ -1615,9 +1610,8 @@ const App = () => {
                  {id:"mindmap",    icon:"🗺",  label:"Mindmap"},
                  {id:"llm",        icon:"🧠", label:"Notebook"},
                  {id:"whiteboard", icon:"🎨", label:"Canvas"},
-                 {id:"tasks",       icon:"✓",  label:"Taken"},
-                 {id:"annotations", icon:"✦",  label:"Annotaties"},
-                 {id:"query",       icon:"🔎", label:"Query"},
+                 {id:"tasks",      icon:"✓",   label:"Taken"},
+                 {id:"query",      icon:"🔎", label:"Query"},
                  {id:"pdf",        icon:"📄", label:"PDF"},
                  {id:"images",     icon:"🖼",  label:"Plaatjes"},
                 ].map(({id,icon,label})=>React.createElement("button",{

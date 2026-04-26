@@ -15,7 +15,6 @@ const LinksSidebar = ({
   onTagsChange,
   onNoteTypeChange,
   onLayerChange,
-  onSaveNote,
   isTablet = false,
   splitMode = false,
   externalOpen = null,
@@ -389,12 +388,6 @@ const LinksSidebar = ({
             llmModel: "",  // AI-knop niet tonen in sidebar — gebruik editor toolbar
           })
         ),
-
-        // Gestructureerde objectvelden (type-specifiek)
-        React.createElement(ObjectFields, {
-          note: note,
-          onSave: onSaveNote,
-        }),
 
         // ── Laag selector ─────────────────────────────────────────────────
         React.createElement("div", null,

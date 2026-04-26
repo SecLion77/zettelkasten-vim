@@ -506,9 +506,6 @@ const NotesTab = ({
                               modified: new Date().toISOString() };
             await handleSave(updated);
           },
-          onSaveNote: async (updatedNote) => {
-            await handleSave(updatedNote);
-          },
           onTagRemove: handleTagRemove,
           onTagsChange: async (newTags) => {
             if (!selNote) return;

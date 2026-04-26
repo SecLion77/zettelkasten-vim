@@ -130,8 +130,6 @@ class VaultManager:
         if note.get("importedAt"):  fm += f"importedAt: {note['importedAt']}\n"
         if note.get("isRead"):      fm += f"isRead: true\n"
         if note.get("noteType"):    fm += f"noteType: {note['noteType']}\n"
-        if note.get("layer"):       fm += f"layer: {note['layer']}\n"
-        if note.get("fields"):      fm += "fields: " + json.dumps(note['fields'], ensure_ascii=False) + "\n"
         fm += "---\n\n"
         return fm + note.get("content","")
 
@@ -139,7 +137,7 @@ class VaultManager:
         try: text = path.read_text(encoding="utf-8")
         except: return None
         note = {"id":path.stem,"title":path.stem,"tags":[],"content":"",
-                "created":"","modified":"","sourceUrl":"","importedAt":"","isRead":False,"noteType":"","layer":"","fields":{}}
+                "created":"","modified":"","sourceUrl":"","importedAt":"","isRead":False,"noteType":""}
         if text.startswith("---"):
             parts = text.split("---",2)
             if len(parts)>=3:
