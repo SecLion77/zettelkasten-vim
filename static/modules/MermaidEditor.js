@@ -4332,6 +4332,39 @@ const FuzzySearch = ({ notes, allTags, onOpenNote, onAddNote, onUpdateNote, onPa
   const [tagInput,   setTagInput]   = useState({});     // {id → string}
   const [typeFilter, setTypeFilter] = useState("all"); // "all" | "note" | "pdf"
   const [searchMode, setSearchMode] = useState("fuzzy"); // "fuzzy" | "fulltext"
+  const [notesOnly, setNotesOnly]       = useState(true);
+  const [pdfIndexStatus, setPdfIndexStatus] = useState(null); // {indexed, pdfs}
+  const [pdfIndexing,   setPdfIndexing]     = useState(false);
+
+  // Laad PDF index status bij mount + poll terwijl bezig
+  React.useEffect(() => {
+    const check = () => {
+      fetch("/api/pdf-index/status").then(r=>r.json()).then(d=>{
+        if(d.ok) setPdfIndexStatus(d);
+      }).catch(()=>{});
+    };
+    check();
+    // Poll elke 3s zolang indexering bezig is
+    const iv = setInterval(() => {
+      fetch("/api/pdf-index/status").then(r=>r.json()).then(d=>{
+        if(d.ok) {
+          setPdfIndexStatus(d);
+          if (!d.building) clearInterval(iv);
+        }
+      }).catch(()=>{});
+    }, 3000);
+    return () => clearInterval(iv);
+  }, []);
+
+  const rebuildPdfIndex = async () => {
+    setPdfIndexing(true);
+    try {
+      const r = await fetch("/api/pdf-index/rebuild", {method:"POST"});
+      const d = await r.json();
+      if(d.ok) setPdfIndexStatus({indexed: d.indexed, pdfs: d.pdfs.map(n=>({name:n}))});
+    } catch(e) {}
+    setPdfIndexing(false);
+  };
   const inputRef = useRef(null);
   const debRef   = useRef(null);
 
@@ -4354,7 +4387,7 @@ const FuzzySearch = ({ notes, allTags, onOpenNote, onAddNote, onUpdateNote, onPa
     fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query: q }),
+      body: JSON.stringify({ query: q, notes_only: notesOnly }),
     })
       .then(r => r.json())
       .then(d => {
@@ -4876,6 +4909,52 @@ const FuzzySearch = ({ notes, allTags, onOpenNote, onAddNote, onUpdateNote, onPa
                     color:       searchMode==="fulltext" ? W.bg     : W.fgMuted }
           }, "🔎 Volledig"),
         ),
+        // Notities-only toggle
+        React.createElement("button",{
+          onClick:()=>{ setNotesOnly(p=>!p); if(query.trim()) setTimeout(()=>doSearch(query,searchMode),50); },
+          title: notesOnly ? "Klik om ook in PDF's te zoeken (langzamer)" : "Klik om alleen in notities te zoeken (sneller)",
+          style:{
+            padding:"3px 9px", borderRadius:"5px", fontSize:"11px",
+            border:`1px solid ${notesOnly ? "rgba(159,202,86,0.4)" : W.splitBg}`,
+            background: notesOnly ? "rgba(159,202,86,0.1)" : "transparent",
+            color: notesOnly ? W.comment : W.fgMuted,
+            cursor:"pointer", flexShrink:0, transition:"all 0.12s",
+          }
+        }, notesOnly ? "📝 Notities" : "📝+📄 Alles"),
+        // PDF-index status + rebuild knop (alleen als PDF zoeken actief)
+        !notesOnly && React.createElement("div",{
+          style:{
+            display:"flex", alignItems:"center", gap:"6px",
+            padding:"4px 10px", marginTop:"4px",
+            background:"rgba(138,198,242,0.05)",
+            border:`1px solid rgba(138,198,242,0.15)`,
+            borderRadius:"6px", fontSize:"11px",
+          }
+        },
+          React.createElement("span",{style:{color:W.fgDim}},
+            pdfIndexStatus
+            ? React.createElement("span",{style:{color:W.fgDim}},
+                pdfIndexStatus.building
+                  ? `⟳ indexeren… (${pdfIndexStatus.indexed} klaar)`
+                  : `📄 ${pdfIndexStatus.indexed} PDF${pdfIndexStatus.indexed!==1?"s":""} geïndexeerd`)
+            : React.createElement("span",{style:{color:W.fgDim}},"📄 laden…")
+          ),
+          React.createElement("button",{
+            onClick: rebuildPdfIndex,
+            disabled: pdfIndexing || pdfIndexStatus?.building,
+            title:"Herindex alle PDFs (na nieuwe PDFs toevoegen)",
+            style:{
+              marginLeft:"auto",
+              background: (pdfIndexing||pdfIndexStatus?.building) ? "transparent" : "rgba(138,198,242,0.1)",
+              border:`1px solid rgba(138,198,242,0.25)`,
+              borderRadius:"4px",
+              color: (pdfIndexing||pdfIndexStatus?.building) ? W.fgDim : W.blue,
+              padding:"2px 8px", fontSize:"10px",
+              cursor: (pdfIndexing||pdfIndexStatus?.building) ? "default" : "pointer",
+            }
+          }, (pdfIndexing||pdfIndexStatus?.building) ? "⟳ bezig…" : "↺ herindex")
+        ),
+
         // Type-filters
         React.createElement("button", { style:filterBtnStyle(typeFilter==="all"), onClick:()=>setTypeFilter("all") },
           `Alles${results.length ? " ("+results.length+")" : ""}`),

@@ -610,6 +610,7 @@ const App = () => {
     setPasteQueue(q => [...q, lines.join("\n")]);
   }, []);
   const [selId,    setSelId]   = useState(null);
+  const [splitSelId, setSplitSelId] = useState(null); // rechter paneel notitie-preview
   const [tab,      setTab]     = useState("notes");
   const [pdfNotes,     setPdfNotes]    = useState([]);
   const [imgNotes,     setImgNotes]    = useState([]);
@@ -797,7 +798,8 @@ const App = () => {
         {id:"images",  icon:"🖼",  label:"Plaatjes"},
         {id:"reading", icon:"📖", label:"Leeslijst"},
         {id:"review",  icon:"🔁", label:"Review"},
-        {id:"tasks",   icon:"✓",   label:"Taken"},
+        {id:"tasks",       icon:"✓",  label:"Taken"},
+        {id:"annotations",  icon:"✦",  label:"Annotaties"},
       ]},
     { id:"discover",  icon:"🔍", label:"Ontdekken",  sub: [
         {id:"search",     icon:"🔍", label:"Zoeken"},
@@ -1278,12 +1280,15 @@ const App = () => {
 
       // Andere tabs: alleen renderen als actief
       (tab!=="notes"||splitMode) && (() => {
-        const renderTab = (t) => {
+        const renderTab = (t, isSplitRight=false) => {
           if(t==="search") return React.createElement("div",{style:{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",minHeight:0}},
             React.createElement(FuzzySearch,{
               onPasteToNote: selId ? handlePasteToNote : null,
               notes, allTags,
-              onOpenNote: (id) => { setSelId(id); setTab("notes"); },
+              onOpenNote: (id) => {
+                if (isSplitRight) { setSplitSelId(id); }
+                else { setSelId(id); setTab("notes"); }
+              },
               onAddNote:  async(note) => {
                 const saved = await NoteStore.save(note);
                 setNotes([...NoteStore.getAll()]); setSelId(saved.id); setTab("notes");
@@ -1520,11 +1525,24 @@ const App = () => {
             }));
           if(t==="tasks") return React.createElement(TasksPanel,{
             notes,
-            onOpenNote: id => { setSelId(id); setTab("notes"); },
+            onOpenNote: id => {
+              if (isSplitRight) { setSplitSelId(id); }
+              else { setSelId(id); setTab("notes"); }
+            },
+          });
+          if(t==="annotations") return React.createElement(AnnotationsPanel,{
+            notes,
+            onOpenNote: id => {
+              if (isSplitRight) { setSplitSelId(id); }
+              else { setSelId(id); setTab("notes"); }
+            },
           });
           if(t==="query") return React.createElement(QueryPanel,{
             notes, allTags,
-            onOpenNote: id => { setSelId(id); setTab("notes"); },
+            onOpenNote: id => {
+              if (isSplitRight) { setSplitSelId(id); }
+              else { setSelId(id); setTab("notes"); }
+            },
           });
           if(t==="whiteboard") return React.createElement("div",{style:{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",minHeight:0}},
             React.createElement(Whiteboard,{notes,
@@ -1598,7 +1616,8 @@ const App = () => {
             React.createElement("div",{
               onClick:()=>setSplitFocus("right"),
               style:{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",
-                borderLeft:bR,minWidth:0,minHeight:0,transition:"border-color 0.15s"}
+                borderLeft:bR,minWidth:0,minHeight:0,transition:"border-color 0.15s",
+                position:"relative"}
             },
               React.createElement("div",{style:{
                 background:W.bg2,borderBottom:`1px solid ${W.splitBg}`,
@@ -1610,13 +1629,14 @@ const App = () => {
                  {id:"mindmap",    icon:"🗺",  label:"Mindmap"},
                  {id:"llm",        icon:"🧠", label:"Notebook"},
                  {id:"whiteboard", icon:"🎨", label:"Canvas"},
-                 {id:"tasks",      icon:"✓",   label:"Taken"},
-                 {id:"query",      icon:"🔎", label:"Query"},
+                 {id:"tasks",       icon:"✓",  label:"Taken"},
+                 {id:"annotations", icon:"✦",  label:"Annotaties"},
+                 {id:"query",       icon:"🔎", label:"Query"},
                  {id:"pdf",        icon:"📄", label:"PDF"},
                  {id:"images",     icon:"🖼",  label:"Plaatjes"},
                 ].map(({id,icon,label})=>React.createElement("button",{
                     key:id,
-                    onClick:e=>{e.stopPropagation();setSplitTab(id);},
+                    onClick:e=>{e.stopPropagation();setSplitTab(id);setSplitSelId(null);},
                     style:{background:splitTab===id?W.bg:"none",
                       border:"none",borderBottom:splitTab===id?`2px solid ${W.yellow}`:"2px solid transparent",
                       color:splitTab===id?W.statusFg:W.fgMuted,
@@ -1628,7 +1648,64 @@ const App = () => {
                     label
                   ))
               ),
-              renderTab(splitTab)
+              renderTab(splitTab, true),
+              // ── Preview overlay in rechter paneel ──────────────────────────
+              // Toont gevonden notitie als preview zonder de linker notitie te verstoren
+              splitSelId && (() => {
+                const previewNote = notes.find(n => n.id === splitSelId);
+                if (!previewNote) return null;
+                return React.createElement("div",{
+                  style:{
+                    position:"absolute", inset:0, zIndex:10,
+                    display:"flex", flexDirection:"column",
+                    background:W.bg, overflow:"hidden",
+                  }
+                },
+                  // Preview header met sluitknop en open-in-editor
+                  React.createElement("div",{
+                    style:{
+                      display:"flex", alignItems:"center", gap:"8px",
+                      padding:"6px 12px", borderBottom:`1px solid ${W.splitBg}`,
+                      background:W.bg2, flexShrink:0,
+                    }
+                  },
+                    React.createElement("button",{
+                      onClick: e => { e.stopPropagation(); setSplitSelId(null); },
+                      title:"Sluit preview",
+                      style:{ background:"none", border:"none", color:W.fgMuted,
+                               cursor:"pointer", fontSize:"16px", lineHeight:1, padding:"0 4px" }
+                    }, "←"),
+                    React.createElement("span",{
+                      style:{ flex:1, fontSize:"13px", fontWeight:"600",
+                               color:W.statusFg, overflow:"hidden",
+                               textOverflow:"ellipsis", whiteSpace:"nowrap" }
+                    }, previewNote.title || "(geen titel)"),
+                    React.createElement("button",{
+                      onClick: e => {
+                        e.stopPropagation();
+                        setSelId(splitSelId);
+                        setSplitSelId(null);
+                      },
+                      title:"Open in linker editor",
+                      style:{ background:"rgba(138,198,242,0.12)",
+                               border:`1px solid rgba(138,198,242,0.3)`,
+                               borderRadius:"5px", color:W.blue,
+                               padding:"3px 10px", fontSize:"11px",
+                               cursor:"pointer", flexShrink:0 }
+                    }, "✏ Open links")
+                  ),
+                  // Preview content
+                  React.createElement("div",{
+                    style:{ flex:1, overflowY:"auto", padding:"16px 20px",
+                             WebkitOverflowScrolling:"touch" }
+                  },
+                    React.createElement("div",{
+                      className:"mdv",
+                      dangerouslySetInnerHTML:{ __html: renderMd(previewNote.content || "", notes) }
+                    })
+                  )
+                );
+              })()
             )
           );
         }

@@ -1,3 +1,4 @@
+import threading
 #!/usr/bin/env python3
 """Zettelkasten VIM — Backend v4"""
 
@@ -843,6 +844,8 @@ class VaultManager:
 
     # ── PDF-tekst cache (per server-sessie) ─────────────────────────────────
     _pdf_page_cache: dict = {}
+    _pdf_search_index_cache: dict = {}   # in-memory index — alleen schrijven in achtergrond-thread
+    _pdf_index_building: bool = False    # True terwijl index gebouwd wordt
 
     def _cached_pdf_pages(self, fname: str) -> list:
         """extract_pdf_pages met mtime-gebaseerde cache."""
@@ -864,6 +867,99 @@ class VaultManager:
                 oldest = next(iter(VaultManager._pdf_page_cache))
                 del VaultManager._pdf_page_cache[oldest]
         return VaultManager._pdf_page_cache[key]
+
+    # ── PDF zoekindex (persistent, incrementeel) ─────────────────────────────
+
+    def _pdf_index_path(self):
+        return self.vault / ".zettelkasten_pdf_index.json"
+
+    def _load_pdf_index(self) -> dict:
+        p = self._pdf_index_path()
+        if p.exists():
+            try:
+                import json as _j
+                return _j.loads(p.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        return {}
+
+    def _save_pdf_index(self, idx: dict):
+        try:
+            import json as _j
+            self._pdf_index_path().write_text(
+                _j.dumps(idx, ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            pass
+
+    def _get_pdf_search_index(self) -> dict:
+        """Geeft de in-memory index terug (nooit blokkerend).
+        Indexering gebeurt alleen in de achtergrond-thread."""
+        return VaultManager._pdf_search_index_cache
+
+    def _start_indexer_process(self, rebuild: bool = False):
+        """Start pdf_indexer.py als apart proces — blokkeert de server nooit."""
+        if VaultManager._pdf_index_building:
+            print("[pdf-index] Indexering al bezig, sla over", flush=True)
+            return
+        VaultManager._pdf_index_building = True
+
+        import subprocess, sys, threading
+
+        # Bepaal pad naar pdf_indexer.py (naast server.py)
+        import pathlib as _pl
+        server_dir = _pl.Path(__file__).parent
+        indexer    = server_dir / "pdf_indexer.py"
+        if not indexer.exists():
+            print(f"[pdf-index] pdf_indexer.py niet gevonden: {indexer}", flush=True)
+            VaultManager._pdf_index_building = False
+            return
+
+        cmd = [sys.executable, str(indexer), "--vault", str(self.vault)]
+        if rebuild:
+            cmd.append("--rebuild")
+
+        def _run():
+            try:
+                print(f"[pdf-index] Start proces: {' '.join(cmd)}", flush=True)
+                proc = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                )
+                # Lees output regel voor regel en log naar server
+                for line in proc.stdout:
+                    print(line.rstrip(), flush=True)
+                    # Na elke PDF: herlaad index in geheugen
+                    if "Klaar:" in line or "Indexeer:" in line:
+                        try:
+                            fresh = self._load_pdf_index()
+                            VaultManager._pdf_search_index_cache = fresh
+                        except Exception:
+                            pass
+                proc.wait()
+                # Eindresultaat laden
+                try:
+                    VaultManager._pdf_search_index_cache = self._load_pdf_index()
+                    print(f"[pdf-index] Index in geheugen: "
+                          f"{len(VaultManager._pdf_search_index_cache)} PDFs", flush=True)
+                except Exception as e:
+                    print(f"[pdf-index] Laad fout: {e}", flush=True)
+            except Exception as e:
+                print(f"[pdf-index] Proces fout: {e}", flush=True)
+            finally:
+                VaultManager._pdf_index_building = False
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def rebuild_pdf_index(self):
+        """Verwijder index, wis cache en start herindexering als apart proces."""
+        p = self._pdf_index_path()
+        if p.exists():
+            p.unlink()
+        VaultManager._pdf_search_index_cache = {}
+        self._start_indexer_process(rebuild=True)
+        return {}
 
     def _tfidf_vectors(self, docs):
         """Berekent TF-IDF vectoren voor een lijst teksten. Geeft (vocab, matrix) terug."""
@@ -991,8 +1087,9 @@ class VaultManager:
         return scored[:top_n]
 
 
-    def fuzzy_search(self, query: str, max_results=80) -> list:
+    def fuzzy_search(self, query: str, max_results=80, notes_only=False) -> list:
         """FZF-stijl fuzzy zoeken over notities én vault-PDFs.
+        notes_only=True slaat PDF-zoekslag over (veel sneller).
 
         Scoring (hoog = beter):
           500+ exacte phrase in titel
@@ -1112,12 +1209,16 @@ class VaultManager:
                     "content": content,
                 })
 
-        # ── 2. Vault PDFs (met cache) ─────────────────────────────────────────
-        for pdf_info in self.list_pdfs():
-            fname = pdf_info["name"]
-            pages = self._cached_pdf_pages(fname)
+        # ── 2. Vault PDFs (met cache) — overgeslagen als notes_only=True ────────
+        if notes_only:
+            results.sort(key=lambda x: -x["score"])
+            return results[:max_results]
 
-            # Beste hit per (bestand, pagina) voor deduplicatie
+        # Gebruik persistente index voor snelle PDF zoekslag
+        pdf_index = self._get_pdf_search_index()
+
+        for fname, entry in pdf_index.items():
+            pages = entry.get("pages", [])
             best_per_page: dict = {}
 
             for pg in pages:
@@ -1134,7 +1235,7 @@ class VaultManager:
                     if pg_key not in best_per_page or sc > best_per_page[pg_key]["score"]:
                         ctx_s   = max(0, ln_idx - 2)
                         ctx_e   = min(len(pg_lines), ln_idx + 2)
-                        excerpt = '\n'.join(
+                        excerpt = "\n".join(
                             l for l in pg_lines[ctx_s:ctx_e] if l.strip()
                         )
                         best_per_page[pg_key] = {
@@ -1156,9 +1257,10 @@ class VaultManager:
     _spell_cache: dict = {}     # {"en": set(...), "nl": set(...)}
     _spell_lock = None
 
-    def fulltext_search(self, query: str, max_results=50) -> list:
+    def fulltext_search(self, query: str, max_results=50, notes_only=False) -> list:
         """Full-text zoeken: alle overeenkomende regels per notitie,
-        met geselecteerde context en gemarkeerde hits."""
+        met geselecteerde context en gemarkeerde hits.
+        notes_only=True slaat PDF-pagina's over."""
         import re as _re
 
         q = query.strip()
@@ -1877,11 +1979,12 @@ class ZKHandler(BaseHTTPRequestHandler):
             return route()
 
         if p=="/api/search":
-            body = self._body()
-            q    = body.get("query","").strip()
+            body       = self._body()
+            q          = body.get("query","").strip()
+            notes_only = body.get("notes_only", False)
             if not q: return self._send(200, {"results":[],"query":q})
             try:
-                results = self.vault.fuzzy_search(q, max_results=80)
+                results = self.vault.fuzzy_search(q, max_results=80, notes_only=notes_only)
                 return self._send(200, {"results": results, "query": q})
             except Exception as e:
                 return self._send(500, {"error": str(e), "results": []})
@@ -1909,11 +2012,12 @@ class ZKHandler(BaseHTTPRequestHandler):
             except Exception as e:
                 return self._send(500, {"error": str(e), "suggestions": []})
         if p=="/api/fulltext":
-            body = self._body()
-            q    = body.get("query","").strip()
+            body       = self._body()
+            q          = body.get("query","").strip()
+            notes_only = body.get("notes_only", False)
             if not q: return self._send(200, {"results":[],"query":q})
             try:
-                results = self.vault.fulltext_search(q, max_results=50)
+                results = self.vault.fulltext_search(q, max_results=50, notes_only=notes_only)
                 return self._send(200, {"results": results, "query": q})
             except Exception as e:
                 return self._send(500, {"error": str(e), "results": []})
@@ -1971,6 +2075,75 @@ class ZKHandler(BaseHTTPRequestHandler):
             dirs = self._body().get("dirs", [])
             self.vault.set_ext_pdf_dirs(dirs)
             return self._send(200, {"ok": True, "dirs": dirs})
+        if p=="/api/pdf-index/status":
+            try:
+                idx = VaultManager._pdf_search_index_cache
+                return self._send(200, {"ok": True,
+                                        "indexed": len(idx),
+                                        "building": VaultManager._pdf_index_building,
+                                        "pdfs": [{"name": k, "pages": len(v.get("pages",[]))}
+                                                  for k,v in idx.items()]})
+            except Exception as e:
+                return self._send(500, {"ok": False, "error": str(e)})
+        if p=="/api/bol-cover":
+            body = self._body()
+            url  = body.get("url","").strip()
+            if not url or "bol.com" not in url:
+                return self._send(400, {"error": "Geen geldige Bol.com URL"})
+            try:
+                import urllib.request, re as _re
+                req = urllib.request.Request(url, headers={
+                    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                                  "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+                    "Accept": "text/html,application/xhtml+xml",
+                    "Accept-Language": "nl-NL,nl;q=0.9",
+                })
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    html = resp.read(300_000).decode("utf-8", errors="replace")
+
+                # Cover afbeelding ophalen
+                cover = None
+                # Probeer og:image
+                m = _re.search(r'<meta[^>]+property="og:image"[^>]+content="([^"]+)"', html)
+                if m: cover = m.group(1)
+                if not cover:
+                    m = _re.search(r'<meta[^>]+content="([^"]+)"[^>]+property="og:image"', html)
+                    if m: cover = m.group(1)
+                # Fallback: product afbeelding
+                if not cover:
+                    m = _re.search(r'"image"\s*:\s*"(https://[^"]+(?:cdn\.bol\.com|media\.bol)[^"]+)"', html)
+                    if m: cover = m.group(1)
+
+                # Titel en auteur ophalen
+                title = ""
+                m = _re.search(r'<meta[^>]+property="og:title"[^>]+content="([^"]+)"', html)
+                if m: title = m.group(1).split("|")[0].strip()
+                if not title:
+                    m = _re.search(r'<h1[^>]*>([^<]+)</h1>', html)
+                    if m: title = m.group(1).strip()
+
+                author = ""
+                m = _re.search(r'"author"\s*:\s*"([^"]+)"', html)
+                if m: author = m.group(1)
+                if not author:
+                    m = _re.search(r'<span[^>]*itemprop="author"[^>]*>([^<]+)<', html)
+                    if m: author = m.group(1).strip()
+
+                if cover:
+                    return self._send(200, {"ok": True, "cover": cover,
+                                            "title": title, "author": author})
+                else:
+                    return self._send(200, {"ok": False, "error": "Geen cover gevonden op deze pagina"})
+            except Exception as e:
+                return self._send(500, {"ok": False, "error": str(e)})
+
+        if p=="/api/pdf-index/rebuild":
+            try:
+                self.vault.rebuild_pdf_index()  # start achtergrond-thread
+                return self._send(200, {"ok": True, "message": "Herindexering gestart op achtergrond",
+                                        "indexed": len(VaultManager._pdf_search_index_cache)})
+            except Exception as e:
+                return self._send(500, {"ok": False, "error": str(e)})
         if p=="/api/api-keys":
             body = self._body()
             for provider in ("anthropic","openai","google","openrouter","mistral","jan"):
@@ -5483,6 +5656,16 @@ def main():
         ]
 
     ZKHandler.vault=VaultManager(vault_path)
+    # Bouw PDF zoekindex bij serverstart (achtergrond-thread — blokkeert niet)
+    # Laad bestaande index direct in geheugen (snel — alleen JSON lezen, <10ms)
+    try:
+        existing = ZKHandler.vault._load_pdf_index()
+        VaultManager._pdf_search_index_cache = existing
+        print(f"[pdf-index] {len(existing)} PDF(s) geladen uit cache", flush=True)
+    except Exception:
+        pass
+    # Start pdf_indexer.py als apart proces — server blijft volledig responsief
+    ZKHandler.vault._start_indexer_process()
     ZKHandler.verbose=args.verbose
     ZKHandler.offline=args.offline
     class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):

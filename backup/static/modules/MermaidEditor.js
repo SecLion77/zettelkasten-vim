@@ -4332,6 +4332,7 @@ const FuzzySearch = ({ notes, allTags, onOpenNote, onAddNote, onUpdateNote, onPa
   const [tagInput,   setTagInput]   = useState({});     // {id → string}
   const [typeFilter, setTypeFilter] = useState("all"); // "all" | "note" | "pdf"
   const [searchMode, setSearchMode] = useState("fuzzy"); // "fuzzy" | "fulltext"
+  const [notesOnly, setNotesOnly]   = useState(true);  // standaard: alleen notities (sneller)
   const inputRef = useRef(null);
   const debRef   = useRef(null);
 
@@ -4354,7 +4355,7 @@ const FuzzySearch = ({ notes, allTags, onOpenNote, onAddNote, onUpdateNote, onPa
     fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query: q }),
+      body: JSON.stringify({ query: q, notes_only: notesOnly }),
     })
       .then(r => r.json())
       .then(d => {
@@ -4876,6 +4877,18 @@ const FuzzySearch = ({ notes, allTags, onOpenNote, onAddNote, onUpdateNote, onPa
                     color:       searchMode==="fulltext" ? W.bg     : W.fgMuted }
           }, "🔎 Volledig"),
         ),
+        // Notities-only toggle
+        React.createElement("button",{
+          onClick:()=>{ setNotesOnly(p=>!p); if(query.trim()) setTimeout(()=>doSearch(query,searchMode),50); },
+          title: notesOnly ? "Klik om ook in PDF's te zoeken (langzamer)" : "Klik om alleen in notities te zoeken (sneller)",
+          style:{
+            padding:"3px 9px", borderRadius:"5px", fontSize:"11px",
+            border:`1px solid ${notesOnly ? "rgba(159,202,86,0.4)" : W.splitBg}`,
+            background: notesOnly ? "rgba(159,202,86,0.1)" : "transparent",
+            color: notesOnly ? W.comment : W.fgMuted,
+            cursor:"pointer", flexShrink:0, transition:"all 0.12s",
+          }
+        }, notesOnly ? "📝 Notities" : "📝+📄 Alles"),
         // Type-filters
         React.createElement("button", { style:filterBtnStyle(typeFilter==="all"), onClick:()=>setTypeFilter("all") },
           `Alles${results.length ? " ("+results.length+")" : ""}`),
