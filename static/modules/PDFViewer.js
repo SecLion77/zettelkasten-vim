@@ -297,6 +297,9 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
   const [libView,       setLibView]       = useState("grid"); // "grid" | "list"
   const [thumbCache,    setThumbCache]    = useState({});  // {pdfName: dataURL}
   const [showAnnotPanel,setShowAnnotPanel]= useState(!isTablet);
+  const [showNotePanel, setShowNotePanel]  = useState(false);  // leesnotitie zijpaneel
+  const [noteContent,   setNoteContent]    = useState("");     // inhoud leesnotitie
+  const [noteSaving,    setNoteSaving]     = useState(false);  // opslaan bezig
   const [summarizing,   setSummarizing]   = useState(false);
   const [summarizeErr,  setSummarizeErr]  = useState(null);
   const [renderedPages, setRenderedPages] = useState([]);  // [{num, canvas, textLayer}]
@@ -722,6 +725,86 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
         scrollRef.current.scrollLeft = savedLeft;
       }
     });
+  };
+
+  // ── Leesnotitie opslaan ─────────────────────────────────────────────────────
+  const saveNotePanel = async () => {
+    if (!pdfFile || !noteContent.trim()) return;
+    setNoteSaving(true);
+    const stem    = pdfFile.name.replace(/\.pdf$/i, "");
+    const existing = notes.find(n =>
+      (n.tags||[]).includes("leesnotitie") && (n.tags||[]).includes(stem)
+    );
+    const note = {
+      id:       existing?.id || genId(),
+      title:    `Leesnotitie: ${stem}`,
+      content:  noteContent,
+      tags:     ["leesnotitie", stem],
+      noteType: "literature",
+      created:  existing?.created || new Date().toISOString(),
+      modified: new Date().toISOString(),
+    };
+    if (onAddNote) await onAddNote(note);
+    setNoteSaving(false);
+  };
+
+  // ── Feature 3: Exporteer alle annotaties als één literatuurnotitie ──────────
+  const exportAllAnnotations = async () => {
+    if (!pdfFile || fileHl.length === 0) return;
+    const stem  = pdfFile.name.replace(/\.pdf$/i, "");
+    const lines = [
+      `# Annotaties: ${stem}`,
+      ``,
+      `📄 **Bron:** [[pdf:${pdfFile.name}]]`,
+      `**Geëxporteerd:** ${new Date().toLocaleDateString("nl-NL")}`,
+      `**Aantal annotaties:** ${fileHl.length}`,
+      ``,
+    ];
+
+    // Groepeer op pagina
+    const byPage = {};
+    for (const h of [...fileHl].sort((a,b)=>a.page-b.page)) {
+      if (!byPage[h.page]) byPage[h.page] = [];
+      byPage[h.page].push(h);
+    }
+
+    for (const [page, annots] of Object.entries(byPage)) {
+      lines.push(`## Pagina ${page}`, ``);
+      for (const h of annots) {
+        const col = HCOLORS.find(c=>c.id===h.colorId)||HCOLORS[0];
+        // Highlight tekst met kleur-label
+        if (h.text) {
+          lines.push(`> ${h.text}`);
+          lines.push(`> — *${col.label}* · p.${h.page}`);
+          // Als kleur een laag-koppeling heeft, voeg inline markering toe
+          if (col.layer) {
+            lines.push(``, `[${h.text.slice(0,120)}]{.${col.layer}}`);
+          }
+        }
+        // Bijbehorende notitie
+        if (h.note?.trim()) {
+          lines.push(``, `**Notitie:** ${h.note}`, ``);
+        } else {
+          lines.push(``);
+        }
+      }
+    }
+
+    // Voeg leesnotitie toe als die bestaat
+    if (noteContent.trim()) {
+      lines.push(`---`, `## Leesnotitie`, ``, noteContent);
+    }
+
+    const note = {
+      id:       genId(),
+      title:    `Annotaties: ${stem}`,
+      content:  lines.join("\n"),
+      tags:     ["annotaties", "pdf", stem],
+      noteType: "literature",
+      created:  new Date().toISOString(),
+      modified: new Date().toISOString(),
+    };
+    if (onAddNote) await onAddNote(note);
   };
 
   const updateHighlight=async(id,patch)=>{
@@ -1223,6 +1306,7 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
                 highlights.filter(h=>h.page===pg.num&&h.file===pdfFile?.name&&h.rects?.length)
                   .flatMap((h,hi)=>{
                     const col=HCOLORS.find(c=>c.id===h.colorId)||HCOLORS[0];
+                    const colLabel = col.label.includes("·") ? col.label.split(" · ")[1] : col.label;
                     const isActive=editingId===h.id;
                     return h.rects.map((r,ri)=>React.createElement("rect",{
                       key:`${hi}-${ri}`,
@@ -1381,12 +1465,31 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
         )
       ))
     ),
+    // Notitie-paneel knop
+    pdfFile && React.createElement("button",{
+      onClick:()=>{ setShowNotePanel(p=>!p); if(showAnnotPanel) setShowAnnotPanel(false); },
+      title: showNotePanel ? "Sluit leesnotitie" : "Leesnotitie openen",
+      style:{
+        position:"absolute",
+        right: showNotePanel ? 322 : (showAnnotPanel && !isTablet) ? 294 : 8,
+        top:"38%",
+        transform:"translateY(-50%)",
+        background: showNotePanel ? "rgba(159,202,86,0.15)" : W.bg2,
+        border:`1px solid ${showNotePanel ? W.comment+"55" : W.splitBg}`,
+        borderRadius:"4px 0 0 4px",
+        color: showNotePanel ? W.comment : W.fgMuted,
+        fontSize:"13px", cursor:"pointer",
+        padding:"7px 5px", zIndex:10, lineHeight:1,
+        writingMode:"vertical-rl", transition:"all 0.15s",
+      }
+    }, showNotePanel ? "✏▶" : "◀✏"),
+
     // Annotatiepaneel — knop om te openen (alleen als PDF open is)
     pdfFile && React.createElement("button",{
-      onClick:()=>setShowAnnotPanel(p=>!p),
+      onClick:()=>{ setShowAnnotPanel(p=>!p); if(showNotePanel) setShowNotePanel(false); },
       title: showAnnotPanel ? "Annotaties verbergen" : "Annotaties tonen",
       style:{
-        position:"absolute", right:(showAnnotPanel && !isTablet)?286:0, top:"50%",
+        position:"absolute", right:(showAnnotPanel && !isTablet)?286:0, top:"62%",
         transform:"translateY(-50%)",
         background:W.bg2, border:`1px solid ${W.splitBg}`,
         borderRight:showAnnotPanel?"none":"1px solid "+W.splitBg,
@@ -1396,6 +1499,97 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
         writingMode:"vertical-rl",
       }
     }, showAnnotPanel ? "▶" : "◀ " + (fileHl.length > 0 ? fileHl.length : "")),
+
+    // ── Notitie-zijpaneel ───────────────────────────────────────────────────
+    pdfFile && showNotePanel && React.createElement("div",{style:{
+      width:"320px", flexShrink:0, background:W.bg2,
+      borderLeft:`1px solid ${W.splitBg}`,
+      display:"flex", flexDirection:"column",
+      ...(isTablet ? { position:"absolute",right:0,top:0,bottom:0,zIndex:20,boxShadow:"-4px 0 20px rgba(0,0,0,0.5)" } : {}),
+    }},
+      // Header
+      React.createElement("div",{style:{
+        padding:"8px 12px", borderBottom:`1px solid ${W.splitBg}`,
+        background:W.bg2, flexShrink:0,
+        display:"flex", alignItems:"center", gap:"8px",
+      }},
+        React.createElement("div",{style:{flex:1}},
+          React.createElement("div",{style:{fontSize:"13px",fontWeight:"700",color:W.statusFg}},
+            "✏ Leesnotitie"),
+          React.createElement("div",{style:{fontSize:"10px",color:W.fgDim,marginTop:"1px",
+            overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:"220px"}},
+            pdfFile?.name)
+        ),
+        React.createElement("button",{
+          onClick:()=>setShowNotePanel(false),
+          style:{background:"none",border:"none",color:W.fgMuted,cursor:"pointer",fontSize:"16px",padding:"0 4px"}
+        },"×")
+      ),
+
+      // Hint: pagina invoegen
+      React.createElement("div",{style:{
+        padding:"5px 12px",
+        borderBottom:`1px solid ${W.splitBg}`,
+        background:"rgba(159,202,86,0.04)",
+        flexShrink:0,
+        display:"flex", gap:"6px", alignItems:"center",
+      }},
+        React.createElement("span",{style:{fontSize:"10px",color:W.fgDim}},
+          `Pagina ${pageNum} open`),
+        React.createElement("button",{
+          onClick:()=>setNoteContent(c => c + (c && !c.endsWith("\n") ? "\n" : "") + `\n## Pagina ${pageNum}\n`),
+          style:{fontSize:"10px",padding:"2px 7px",borderRadius:"4px",cursor:"pointer",
+                 background:"rgba(159,202,86,0.1)",border:`1px solid ${W.comment}44`,
+                 color:W.comment},
+        },"+ p."+pageNum),
+        React.createElement("button",{
+          onClick:()=>{
+            const sel = window.getSelection()?.toString().trim();
+            if (sel) setNoteContent(c => c + (c && !c.endsWith("\n") ? "\n" : "") + `\n> ${sel}\n> — p.${pageNum}\n`);
+          },
+          title:"Voeg geselecteerde tekst in als citaat",
+          style:{fontSize:"10px",padding:"2px 7px",borderRadius:"4px",cursor:"pointer",
+                 background:"rgba(138,198,242,0.1)",border:`1px solid ${W.blue}44`,
+                 color:W.blue},
+        },"+ citaat")
+      ),
+
+      // Textarea
+      React.createElement("textarea",{
+        value:noteContent,
+        onChange:e=>setNoteContent(e.target.value),
+        placeholder:`Notities bij ${pdfFile?.name||"dit PDF"}...\n\nTips:\n- ## voor een sectiekopregel\n- > voor citaat\n- [[link]] voor wiki-link`,
+        style:{
+          flex:1, background:"transparent", border:"none", outline:"none",
+          color:W.fg, fontSize:"13px", lineHeight:"1.7",
+          padding:"12px 14px", resize:"none",
+          fontFamily:"'DM Sans',system-ui,sans-serif",
+          caretColor:W.yellow,
+        }
+      }),
+
+      // Footer: opslaan
+      React.createElement("div",{style:{
+        padding:"8px 12px", borderTop:`1px solid ${W.splitBg}`,
+        background:W.bg2, flexShrink:0,
+        display:"flex", gap:"6px", alignItems:"center",
+      }},
+        React.createElement("span",{style:{flex:1,fontSize:"10px",color:W.fgDim}},
+          noteContent.split("\n").length + " regels · " + noteContent.split(/\s+/).filter(Boolean).length + " woorden"),
+        React.createElement("button",{
+          onClick:saveNotePanel,
+          disabled:noteSaving||!noteContent.trim(),
+          style:{
+            padding:"5px 14px", borderRadius:"5px", fontSize:"12px",
+            cursor:noteContent.trim()?"pointer":"default",
+            background:noteContent.trim()?"rgba(159,202,86,0.15)":"transparent",
+            border:`1px solid ${noteContent.trim()?W.comment+"55":W.splitBg}`,
+            color:noteContent.trim()?W.comment:W.fgDim,
+            fontWeight:"600",
+          }
+        }, noteSaving ? "⟳ Opslaan…" : "✓ Opslaan")
+      )
+    ),
 
     // Annotations panel
     pdfFile && showAnnotPanel&&React.createElement("div",{style:{
@@ -1415,6 +1609,19 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
         ),
         React.createElement("span",{style:{background:W.blue,color:W.bg,borderRadius:"10px",padding:"0 6px",fontSize:"14px"}},fileHl.length),
         React.createElement("div",{style:{flex:1}}),
+        // Export alle annotaties als literatuurnotitie
+        fileHl.length > 0 && React.createElement("button",{
+          onClick: exportAllAnnotations,
+          title: "Exporteer alle annotaties als één literatuurnotitie",
+          style:{
+            background:"rgba(234,231,136,0.1)",
+            border:`1px solid rgba(234,231,136,0.3)`,
+            borderRadius:"4px", color:W.yellow,
+            padding:"3px 8px", fontSize:"10px",
+            cursor:"pointer", fontWeight:"600",
+            display:"flex", alignItems:"center", gap:"4px",
+          }
+        },"⬆ exporteer"),
         filterTag&&React.createElement("button",{
           onClick:()=>setFilterTag(null),
           style:{background:"rgba(159,202,86,0.16)",color:"#b8e06a",
@@ -1468,7 +1675,23 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
                 React.createElement("textarea",{value:h.note||"",onChange:e=>updateHighlight(h.id,{note:e.target.value}),rows:3,style:{width:"100%",background:W.bg,border:`1px solid ${W.splitBg}`,borderRadius:"4px",padding:"6px 8px",color:W.fg,fontSize:"14px",outline:"none",resize:"vertical"},placeholder:"Notitie toevoegen…"}),
                 React.createElement("div",{style:{fontSize:"9px",color:W.fgMuted,margin:"8px 0 4px",letterSpacing:"1px"}},"TAGS"),
                 React.createElement(SmartTagEditor,{tags:h.tags||[],onChange:tags=>updateHighlight(h.id,{tags}),allTags:[...allTags,...allAnnotTags]}),
-                React.createElement("div",{style:{display:"flex",gap:"5px",margin:"8px 0"}},...HCOLORS.map(c=>React.createElement("button",{key:c.id,onClick:()=>updateHighlight(h.id,{colorId:c.id}),style:{width:"18px",height:"18px",borderRadius:"3px",background:c.bg,border:`2px solid ${h.colorId===c.id?c.border:W.splitBg}`,cursor:"pointer",padding:0}}))),
+                React.createElement("div",{style:{display:"flex",gap:"4px",margin:"8px 0",flexWrap:"wrap",alignItems:"center"}},
+                ...HCOLORS.map(c=>React.createElement("button",{
+                  key:c.id,
+                  onClick:()=>updateHighlight(h.id,{colorId:c.id}),
+                  title:c.label + (c.desc ? " — " + c.desc : ""),
+                  style:{
+                    display:"flex",alignItems:"center",gap:"3px",
+                    padding:"2px 6px",borderRadius:"10px",
+                    background:h.colorId===c.id?c.bg:"transparent",
+                    border:`1px solid ${h.colorId===c.id?c.border:W.splitBg}`,
+                    cursor:"pointer",fontSize:"9px",color:h.colorId===c.id?c.border:W.fgDim,
+                    fontWeight:h.colorId===c.id?"700":"400",
+                  }
+                },
+                  React.createElement("span",{style:{width:"8px",height:"8px",borderRadius:"50%",background:c.border,flexShrink:0}}),
+                  c.label.split(" · ")[0]
+                ))),
                 React.createElement("div",{style:{display:"flex",gap:"6px"}},
                   React.createElement("button",{onClick:()=>setEditingId(null),style:{background:W.comment,color:W.bg,border:"none",borderRadius:"3px",padding:"3px 10px",fontSize:"14px",cursor:"pointer",fontWeight:"bold"}},"✓ klaar"),
                   React.createElement("button",{onClick:()=>removeHighlight(h.id),style:{background:"none",color:W.orange,border:`1px solid rgba(229,120,109,0.3)`,borderRadius:"3px",padding:"3px 8px",fontSize:"14px",cursor:"pointer"}},":del")

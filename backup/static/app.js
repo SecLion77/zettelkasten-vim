@@ -800,6 +800,7 @@ const App = () => {
         {id:"review",  icon:"🔁", label:"Review"},
         {id:"tasks",       icon:"✓",  label:"Taken"},
         {id:"annotations",  icon:"✦",  label:"Annotaties"},
+        {id:"books",        icon:"📚", label:"Boeken"},
       ]},
     { id:"discover",  icon:"🔍", label:"Ontdekken",  sub: [
         {id:"search",     icon:"🔍", label:"Zoeken"},
@@ -1532,6 +1533,17 @@ const App = () => {
           });
           if(t==="annotations") return React.createElement(AnnotationsPanel,{
             notes,
+            onOpenNote: id => {
+              if (isSplitRight) { setSplitSelId(id); }
+              else { setSelId(id); setTab("notes"); }
+            },
+          });
+          if(t==="books") return React.createElement(BookLibrary,{
+            notes,
+            onNotesChange: async(updated) => {
+              for(const n of updated) await NoteStore.save(n);
+              setNotes([...NoteStore.getAll()]);
+            },
             onOpenNote: id => {
               if (isSplitRight) { setSplitSelId(id); }
               else { setSelId(id); setTab("notes"); }

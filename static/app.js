@@ -18,11 +18,16 @@ const W = {
 };
 
 const HCOLORS = [
-  {id:"yellow",label:"Geel",  bg:"rgba(234,231,136,0.45)",border:"#eae788"},
-  {id:"green", label:"Groen", bg:"rgba(159,202,86,0.40)", border:"#9fca56"},
-  {id:"blue",  label:"Blauw", bg:"rgba(138,198,242,0.40)",border:"#8ac6f2"},
-  {id:"orange",label:"Oranje",bg:"rgba(229,120,109,0.40)",border:"#e5786d"},
-  {id:"purple",label:"Paars", bg:"rgba(215,135,255,0.40)",border:"#d787ff"},
+  {id:"yellow",  label:"Geel · Citaat",    desc:"Letterlijk citaat",     layer:null,
+   bg:"rgba(234,231,136,0.45)", border:"#eae788"},
+  {id:"blue",    label:"Blauw · Bron",     desc:"Info uit externe bron", layer:"bron",
+   bg:"rgba(138,198,242,0.40)", border:"#8ac6f2"},
+  {id:"orange",  label:"Rood · Kritisch",  desc:"Sleutelbegrip / actie", layer:"kritisch",
+   bg:"rgba(229,120,109,0.40)", border:"#e5786d"},
+  {id:"green",   label:"Groen · Eigen",    desc:"Eigen interpretatie",   layer:"eigen",
+   bg:"rgba(159,202,86,0.40)",  border:"#9fca56"},
+  {id:"purple",  label:"Paars · Vraag",    desc:"Vraag / onduidelijk",   layer:null,
+   bg:"rgba(215,135,255,0.40)", border:"#d787ff"},
 ];
 
 // ── Markdown snippets (UltiSnips-stijl, geactiveerd met Tab) ──────────────────

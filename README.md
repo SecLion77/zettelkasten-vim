@@ -60,6 +60,7 @@
     ├── QueryPanel.js       ← dataview query interface
     ├── CalendarWidget.js   ← mini-kalender bij dagnotities
     ├── pdfService.js       ← PDF API-client
+    ├── BookLibrary.js      ← boeken-bibliotheek met Bol.com cover-ophalen
     ├── noteApi.js          ← notities API-client
     ├── noteStore.js        ← in-memory notities store
     └── annotationStore.js  ← PDF-annotaties store
@@ -162,7 +163,7 @@ isRead: false                              ← leeslijst status
 
 ```
 📝 Schrijven       ← notities schrijven en bekijken
-📚 Bibliotheek     → PDF | Plaatjes | Leeslijst | Review | Taken
+📚 Bibliotheek     → PDF | Plaatjes | Leeslijst | Review | Taken | ✦ Annotaties | 📚 Boeken
 🔍 Ontdekken       → Zoeken | Graaf | Mindmap | Notebook | Canvas | Query
 🌐 Invoer          → URL/Word | PDF
 ⚙  Beheer          → Tags | Statistieken | Opschonen
@@ -264,6 +265,24 @@ Klik **⬇ export md** in de preview toolbar. Het bestand bevat YAML frontmatter
 ### ⚡ Fuzzy zoeken
 FZF-stijl zoeken over notities én vault-PDFs. Tolereert typefouten.
 
+- **📝 Notities** (standaard, groen) — zoekt alleen in notities, direct snel
+- **📝+📄 Alles** — zoekt ook in geïndexeerde PDFs
+
+### PDF-zoekindex
+PDFs worden geïndexeerd via `pdf_indexer.py` als apart proces — de server blijft altijd responsief. De index (`./zettelkasten_pdf_index.json`) wordt incrementeel bijgehouden op basis van bestandsdatum.
+
+```bash
+# Handmatig indexeren (na nieuwe PDFs toevoegen)
+python3 pdf_indexer.py --vault /pad/naar/vault
+
+# Volledige herindexering
+python3 pdf_indexer.py --vault /pad/naar/vault --rebuild
+```
+
+Vereist: `pip3 install pdfminer.six --break-system-packages` (of `pypdf` als fallback).
+
+In de zoekbalk zie je `📄 N PDFs geïndexeerd` en een `↺ herindex` knop als PDF-zoeken actief is.
+
 ### 🔎 Full-text zoeken
 Exacte zoekopdracht door alle notitie-content met regelnummer en context.
 
@@ -280,7 +299,16 @@ Activeer via **⊞ split** knop of `:vs` in de editor.
 - Opent altijd op **🔍 Zoeken**
 - Sidebars klappen automatisch in
 
-**Rechter tabs**: Zoeken · Graaf · Mindmap · Notebook · Canvas · **Taken** · **Query** · PDF · Plaatjes
+**Linker paneel**: 📝 Notities of 🎨 Canvas (wisselbaar via tab-strip)
+
+**Rechter tabs**: Zoeken · Graaf · Mindmap · Notebook · Canvas · Taken · ✦ Annotaties · Query · PDF · Plaatjes
+
+### Workflow: links werken, rechts zoeken
+
+Klik je rechts op een zoekresultaat of notitie uit Query/Taken, dan opent die notitie als **preview-overlay** in het rechter paneel — het linker paneel blijft onaangeraakt. De preview heeft twee knoppen:
+
+- **←** — sluit preview, terug naar zoeken/query
+- **✏ Open links** — laad de notitie in de linker editor
 
 | Toets | Actie |
 |-------|-------|
@@ -335,12 +363,40 @@ Vanuit de graaf kun je direct naar de Notebook navigeren met rijke context:
 ## 📄 PDF-bibliotheek
 
 - Volledig scherm als geen PDF open
-- Zoeken op naam en inhoud
+- Zoeken op naam en inhoud (via PDF-zoekindex)
 - **⬆ PDF importeren** altijd beschikbaar
 
 ### Annotaties
 
-Selecteer tekst → annotatiepopup met notitieveld (schaalbaar), tags (**AI-suggesties**) en kleurkiezer.
+Selecteer tekst → annotatiepopup met notitieveld, tags (**AI-suggesties**) en kleurkiezer.
+
+**Kleurcodering — gekoppeld aan drie-lagen:**
+
+| Kleur | Label | Gebruik |
+|-------|-------|---------|
+| 🟡 Geel | Citaat | Letterlijke aanhalingen |
+| 🔵 Blauw | Bron | Info uit externe bron → `{.bron}` |
+| 🔴 Rood | Kritisch | Sleutelbegrippen / actie → `{.kritisch}` |
+| 🟢 Groen | Eigen | Eigen interpretatie → `{.eigen}` |
+| 🟣 Paars | Vraag | Onduidelijk / open vraag |
+
+### ✏ Leesnotitie-zijpaneel
+
+Klik **◀✏** rechts van de PDF voor een apart notitiepad naast de PDF:
+
+- Schrijf vrijuit in Markdown terwijl je leest
+- **+ p.12** — voegt `## Pagina 12` koptekst in
+- **+ citaat** — voegt geselecteerde tekst in als `> blockquote`
+- **✓ Opslaan** — slaat op als Zettelkasten-notitie met tag `leesnotitie`
+- Bij heropenen van dezelfde PDF laadt de bestaande notitie automatisch
+
+### ⬆ Exporteer alle annotaties
+
+Knop in het annotaties-paneel header. Bundelt alle highlights + notities als één literatuurnotitie:
+- Gegroepeerd per pagina
+- Highlights als `> citaat` blockquotes
+- Blauw/Rood/Groen markeringen automatisch als `{.bron/.kritisch/.eigen}`
+- Leesnotitie wordt onderaan toegevoegd
 
 ### Samenvatting genereren
 
@@ -593,6 +649,31 @@ localStorage.removeItem('zk_debug')
 
 ---
 
+## 📚 Boeken-bibliotheek (Bibliotheek → Boeken)
+
+Persoonlijke boekencollectie met coverafbeeldingen en voortgang bijhouden.
+
+### Nieuw boek toevoegen
+
+1. Klik **+ Boek toevoegen**
+2. Plak een Bol.com URL → klik **Cover ophalen** — haalt cover, titel en auteur automatisch op
+3. Vul type (🌳 Fysiek / 📱 Ebook), taal (🇳🇱 / 🇬🇧) en status in
+4. Optioneel: Bitly URL voor een korte deellink
+
+### Weergave en filters
+
+| Element | Werking |
+|---------|---------|
+| **⊞ Grid** / **☰ Lijst** | Wissel tussen cover-raster en lijstweergave |
+| **Alle / Bezig / Nog lezen / Uit** | Filter op status |
+| Status-badge klikken | Wisselt status door (Nog lezen → Bezig → Uit) |
+| ✏ icoontje | Bewerk boekgegevens |
+
+### Opslag
+Elk boek wordt opgeslagen als gewone notitie met tag `boek` en type `literature` — doorzoekbaar via de graaf en het zoekvenster.
+
+---
+
 ## 💡 Tips
 
 - **Datumfilter** — gebruik vandaag/week/maand om recente notities snel te vinden
@@ -618,3 +699,8 @@ localStorage.removeItem('zk_debug')
 - **GraphRAG snelknoppen** — klik 🗺/🔍/💡/📈/⚡ boven het inputveld voor directe vault-analyse
 - **Graph → Notebook** — klik 🕸 Notebook in het peek-panel om een notitie met graafcontext te analyseren
 - **Laag-filter** — filter notities op 🔵 Bron / 🔴 Kritisch / 🟢 Eigen via de type-filterbalk
+- **Leesnotitie** — ◀✏ knop in PDF-viewer opent notitiepad naast de PDF; automatisch gekoppeld aan de PDF
+- **PDF annotaties exporteren** — ⬆ exporteer in annotaties-paneel maakt één literatuurnotitie van alle highlights
+- **Boeken** — Bibliotheek → Boeken voor je persoonlijke collectie met Bol.com cover-ophalen
+- **PDF zoekindex** — 📝+📄 Alles in de zoekbalk om ook in PDFs te zoeken; ↺ herindex na nieuwe PDFs
+- **Split preview** — klik een resultaat rechts → preview-overlay zonder linker editor te verstoren
