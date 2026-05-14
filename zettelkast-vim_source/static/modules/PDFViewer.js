@@ -276,7 +276,7 @@ const PDFUploadPanel = ({ serverPdfs=[], onRefreshPdfs, onOpenPdf, llmModel,
   );
 };
 
-const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, onAutoSummarize, onDeletePdf, onPasteToNote=null, onAddNote=null, onSaveNote=null, notes=[], isTablet=false, llmModel=""}) => {
+const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, onAutoSummarize, onDeletePdf, onPasteToNote=null, onAddNote=null, notes=[], isTablet=false}) => {
   const [pdfDoc,     setPdfDoc]     = useState(null);
   const [pdfFile,    setPdfFile]    = useState(null);
   const [pageNum,    setPageNum]    = useState(1);   // huidige zichtbare pagina (voor annotaties)
@@ -296,15 +296,11 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
   const [searchHitIdx, setSearchHitIdx] = useState(0);
   const [selectMode,   setSelectMode]   = useState(false);  // A: selectiemodus (vinger)
   const pencilActiveRef  = useRef(false);  // B: Apple Pencil auto-detectie
-  const pendingColorRef  = useRef(null);   // kleur voor directe floatBar opslag
   const dragSelRef       = useRef(null);   // {startX, startY, el} voor sleep-selectie
   const [selRect,        setSelRect]       = useState(null);  // visuele rechthoek
   // highlights gespiegeld vanuit AnnotationStore
   const [highlights, setHighlights] = useState(AnnotationStore.getAll());
   const [pendingSel, setPendingSel] = useState(null);
-  const [floatBar,   setFloatBar]   = useState(null);  // {x,y,text,above} zwevende toolbar
-  const [floatNote,  setFloatNote]  = useState("");    // inline notitie in toolbar
-  const [floatOpen,  setFloatOpen]  = useState(false); // notitie-veld zichtbaar
   const [selPos,     setSelPos]     = useState({x:0,y:0});
   const [editingId,  setEditingId]  = useState(null);
   const [isLoading,  setIsLoading]  = useState(false);
@@ -320,12 +316,7 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
   const [showAnnotPanel,setShowAnnotPanel]= useState(!isTablet);
   const [annotWidth,   setAnnotWidth]    = useState(280);  // min 280px = huidige breedte
   const annotDragRef  = useRef(null);   // {startX, startW} tijdens drag
-  const [showNotePanel,    setShowNotePanel]    = useState(false);  // leesnotitie zijpaneel
-  const [showOutlinePanel, setShowOutlinePanel] = useState(false); // AI outline paneel
-  const [outlineItems,     setOutlineItems]     = useState([]);    // [{level,text,page,anchor}]
-  const [outlineLoading,   setOutlineLoading]   = useState(false); // genereren bezig
-  const [nativeOutline,    setNativeOutline]    = useState([]);    // native PDF outline
-  const [outlineText,      setOutlineText]      = useState("");    // streaming tekst
+  const [showNotePanel, setShowNotePanel]  = useState(false);  // leesnotitie zijpaneel
   const [noteContent,   setNoteContent]    = useState("");     // inhoud leesnotitie
   const [noteSaving,    setNoteSaving]     = useState(false);  // opslaan bezig
   const [summarizing,   setSummarizing]   = useState(false);
@@ -787,18 +778,10 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
         return;
       }
 
-      // Bereken positie van de selectie voor de zwevende toolbar
-      // Gebruik de al bestaande `sel` variabele van boven in de functie
-      let bx = 0, by = 0, above = true;
-      if (sel && sel.rangeCount > 0) {
-        const br = sel.getRangeAt(0).getBoundingClientRect();
-        bx = br.left + br.width / 2;
-        by = br.top - 12;
-        if (by < 80) { by = br.bottom + 12; above = false; }
-      }
-      setFloatNote("");
-      setFloatOpen(false);
-      setFloatBar({ x: bx, y: by, text: txt, above });
+      // "hl+annot" of "annot": toon de popup
+      setQuickNote('');
+      setQuickTags([]);
+      setPendingSel(txt);
 
       // Herstel scroll-positie na React re-render (rAF = na paint)
       requestAnimationFrame(() => {
@@ -867,11 +850,7 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
       setHighlights(AnnotationStore.getAll());
     } else {
       // Toon popup voor annotatie
-      // Bereken toolbar-positie vanuit dragSelRect
-      const cx = (Math.min(selRect?.x1||0,selRect?.x2||0) + Math.abs((selRect?.x2||0)-(selRect?.x1||0))/2) || window.innerWidth/2;
-      const cy = Math.min(selRect?.y1||0,selRect?.y2||0) - 12;
-      setFloatNote(""); setFloatOpen(false);
-      setFloatBar({ x: cx, y: Math.max(80, cy), text: result.text, above: cy > 80 });
+      setQuickNote(""); setQuickTags([]); setPendingSel(result.text);
     }
   }, [hlMode, pdfFile, activeColor, collectTextInRect, renderedPages]);
 
@@ -980,8 +959,7 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
   }, []);
 
   const saveHighlight=async()=>{
-    const _pendingTxt = floatBar?.text || pendingSel;
-    if(!_pendingTxt)return;
+    if(!pendingSel)return;
     // Gebruik de pagina van de selectie (ref), niet de huidige scroll-pagina
     const hlPage = pendingPageRef.current;
     zklog("[PDF] saveHighlight: page=",hlPage,"rects=",pendingRectsRef.current.length);
@@ -993,26 +971,25 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
     })).filter(r => r.w>0 && r.h>0);
     const fname = pdfFile?.name||"PDF";
     const hid = genId();
-    const chosenColor = pendingColorRef.current || activeColor;
-    const h={id:hid, text:_pendingTxt, note:floatNote, tags:quickTags,
+    const h={id:hid, text:pendingSel, note:quickNote, tags:quickTags,
              page:hlPage, file:fname,
-             colorId:chosenColor.id, rects,
+             colorId:activeColor.id, rects,
              created:new Date().toISOString()};
     await AnnotationStore.add(h);
     // Maak ook een Zettelkasten-notitie aan
     if (onAddNote) {
       const stem = fname.replace(/\.pdf$/i,"");
       const lines = [
-        `> ${_pendingTxt}`,
+        `> ${pendingSel}`,
         "",
-        ...(floatNote ? [floatNote, ""] : []),
+        ...(quickNote ? [quickNote, ""] : []),
         `---`,
         `📄 **Bron:** [[pdf:${fname}]] · pagina ${hlPage}`,
         `🏷 annotatie-id: ${hid}`,
       ];
       await onAddNote({
         id: genId(),
-        title: `📌 ${_pendingTxt.slice(0,60)}${_pendingTxt.length>60?"…":""}`,
+        title: `📌 ${pendingSel.slice(0,60)}${pendingSel.length>60?"…":""}`,
         content: lines.join("\n"),
         tags: [...new Set(["highlight","pdf",stem,...(quickTags||[])])],
         created: new Date().toISOString(),
@@ -1022,7 +999,7 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
     const savedTop  = scrollRef.current?.scrollTop  || 0;
     const savedLeft = scrollRef.current?.scrollLeft || 0;
 
-    setPendingSel(null); setFloatBar(null); setFloatNote(""); setFloatOpen(false); setQuickNote(""); setQuickTags([]);
+    setPendingSel(null); setQuickNote(""); setQuickTags([]);
     pendingRectsRef.current=[];
     pendingPageRef.current=1;
     window.getSelection()?.removeAllRanges();
@@ -1055,104 +1032,6 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
     };
     if (onAddNote) await onAddNote(note);
     setNoteSaving(false);
-  };
-
-  // ── AI Outline genereren ─────────────────────────────────────────────────────
-  const generateOutline = React.useCallback(async () => {
-    if (!pdfDoc || !pdfFile) return;
-    const stem = pdfFile.name.replace(/\.pdf$/i, "");
-    // 1. Bestaande notitie-outline → direct tonen
-    const stemTag = stem.toLowerCase().replace(/\s+/g,"-");
-    const existing = notes && notes.find(n =>
-      (n.tags||[]).includes("outline") &&
-      ((n.tags||[]).includes(stemTag) || (n.tags||[]).includes(stem)));
-    if (existing) {
-      setOutlineText(existing.content);
-      setShowOutlinePanel(true); return;
-    }
-    // 2. Native PDF outline aanwezig → direct tonen, geen AI nodig
-    if (nativeOutline && nativeOutline.length > 0) {
-      setShowOutlinePanel(true); return;
-    }
-    // 3. Geen van beide → AI genereren
-    setOutlineLoading(true); setOutlineText(""); setOutlineItems([]); setShowOutlinePanel(true);
-    const maxPg = pdfDoc.numPages;  // volledig document
-    let fullText = "";
-    for (let p=1; p<=maxPg; p++) {
-      try {
-        const page = await pdfDoc.getPage(p);
-        const tc   = await page.getTextContent();
-        const t    = tc.items.map(i=>i.str+(i.hasEOL?" ":" ")).join("").trim();
-        if (t) fullText += "\n=== Pagina "+p+" ===\n"+t;
-      } catch(e) {}
-    }
-    const trunc = fullText.length>12000 ? fullText.slice(0,12000)+"\n[...afgekort...]" : fullText;
-    const prompt = "Analyseer dit PDF-document en maak een uitgebreide inhoudsopgave.\n\n"
-      + "Formaat: ## Sectienaam (p. X)\n- Kernpunt\n\n"
-      + "Geef bij elke sectie het paginanummer (p. X), max 5 kernpunten per sectie, geen inleiding/nawoord.\n\n"
-      + "DOCUMENT:\n" + trunc;
-    try {
-      const model = llmModel || localStorage.getItem("zk_model") || "gemma3:12b";
-      const resp = await fetch("/api/llm/chat", {
-        method:"POST", headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({ model, messages:[{role:"user",content:prompt}] })
-      });
-      if (!resp.ok) throw new Error("Server fout: "+resp.status);
-      const reader=resp.body.getReader(), dec=new TextDecoder();
-      let buf="", acc="";
-      while(true) {
-        const {done,value}=await reader.read();
-        if(done) break;
-        buf += dec.decode(value,{stream:true});
-        const lines = buf.split("\n");
-        buf = lines.pop(); // bewaar onvolledige laatste regel
-        for (const ln of lines) {
-          if(!ln.startsWith("data: ")) continue;
-          try {
-            const ev=JSON.parse(ln.slice(6));
-            if(ev.error){ setOutlineLoading(false); setOutlineText("Fout: "+ev.error); return; }
-            if(ev.delta){ acc+=ev.delta; setOutlineText(acc); setOutlineItems(parseOutlineFromText(acc)); }
-            if(ev.done){ break; }
-          } catch(e){}
-        }
-      }
-      setOutlineLoading(false);
-      if(acc) { setOutlineText(acc); setOutlineItems(parseOutlineFromText(acc)); }
-    } catch(err) {
-      setOutlineLoading(false); setOutlineText("Fout: "+err.message);
-    }
-  }, [pdfDoc, pdfFile, notes]);
-
-  // Parse outline-tekst naar gestructureerde items
-  const parseOutlineFromText = (text) => {
-    const items = [];
-    const lines = text.split("\n");
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      // Sectiekoptekst: ## Titel (p. 12)
-      const sectionMatch = trimmed.match(/^#{1,3}\s+(.+?)\s*\(p\.\s*(\d+)\)/i);
-      if (sectionMatch) {
-        items.push({
-          level: (trimmed.match(/^#+/) || [""])[0].length,
-          text: sectionMatch[1].trim(),
-          page: parseInt(sectionMatch[2]),
-          type: "section",
-        });
-        continue;
-      }
-      // Sectiekoptekst zonder paginanummer
-      const sectionNoPage = trimmed.match(/^#{1,3}\s+(.+)/);
-      if (sectionNoPage) {
-        items.push({ level:2, text:sectionNoPage[1].trim(), page:null, type:"section" });
-        continue;
-      }
-      // Kernpunt: - tekst
-      if (trimmed.startsWith("- ") || trimmed.startsWith("• ")) {
-        items.push({ level:3, text:trimmed.slice(2).trim(), page:null, type:"bullet" });
-      }
-    }
-    return items;
   };
 
   // ── Feature 3: Exporteer alle annotaties als één literatuurnotitie ──────────
@@ -1402,249 +1281,7 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
     .sort((a,b)=>a.page-b.page);  // gesorteerd op pagina
 
   return React.createElement("div",{style:{display:"flex",flex:1,minHeight:0,background:W.bg,overflow:"hidden",position:"relative"}},
-    // ── AI Outline paneel ────────────────────────────────────────────────────
-    showOutlinePanel && pdfFile && React.createElement("div",{style:{
-      width:"320px", flexShrink:0, background:W.bg2,
-      borderRight:`1px solid ${W.splitBg}`,
-      display:"flex", flexDirection:"column", minHeight:0,
-    }},
-      // Header
-      React.createElement("div",{style:{padding:"10px 14px",borderBottom:`1px solid ${W.splitBg}`,
-        display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0}},
-        React.createElement("span",{style:{fontWeight:"600",color:W.fg,fontSize:"14px"}},"🗂 Outline"),
-        React.createElement("div",{style:{display:"flex",gap:"6px",alignItems:"center"}},
-          pdfFile && React.createElement("button",{
-            onClick:()=>{ setOutlineItems([]); setOutlineText(""); generateOutline(); },
-            title:"Genereer nieuwe outline",
-            style:{fontSize:"11px",padding:"3px 8px",borderRadius:"4px",
-              background:W.blueBg||"rgba(138,198,242,.1)",color:W.blue,
-              border:`1px solid ${W.blueBorder||"rgba(138,198,242,.3)"}`,cursor:"pointer"}
-          },outlineLoading?"⏳ Bezig…":"↺ Nieuw"),
-          React.createElement("button",{onClick:()=>setShowOutlinePanel(false),
-            style:{background:"none",border:"none",color:W.fgMuted,cursor:"pointer",fontSize:"18px"}}
-          ,"×")
-        )
-      ),
-      // Inhoud
-      React.createElement("div",{style:{flex:1,overflowY:"auto",padding:"4px 0",minHeight:0}},
-        // Native outline (indien beschikbaar)
-        nativeOutline.length > 0
-          ? React.createElement("div",null,
-              // Label
-              React.createElement("div",{style:{
-                padding:"4px 14px",fontSize:"10px",letterSpacing:"0.8px",
-                color:W.blue,fontWeight:"600",textTransform:"uppercase",
-                borderBottom:`1px solid ${W.splitBg}22`,marginBottom:"2px",
-                display:"flex",alignItems:"center",gap:"6px",
-              }},
-                "📄 Document structuur",
-                React.createElement("span",{style:{fontSize:"10px",color:W.fgMuted,fontWeight:"400",textTransform:"none"}},
-                  "("+nativeOutline.length+" secties)")
-              ),
-              // Flatten de boom voor weergave
-              ...(function flattenOutline(items, depth) {
-                const result = [];
-                for (const item of items) {
-                  result.push(
-                    React.createElement("div",{
-                      key:item.text+item.page+depth,
-                      onClick:item.page ? ()=>{setPageNum(item.page);scrollToPage(item.page);} : undefined,
-                      style:{
-                        padding:"6px 14px 6px "+(14+depth*14)+"px",
-                        cursor:item.page?"pointer":"default",
-                        display:"flex", alignItems:"center", gap:"8px",
-                        borderLeft: depth===0 ? `3px solid ${W.blue}` : `3px solid ${W.blue}33`,
-                        transition:"background .1s",
-                      },
-                      onMouseEnter:e=>{if(item.page)e.currentTarget.style.background=W.bg3||"rgba(255,255,255,.04)";},
-                      onMouseLeave:e=>e.currentTarget.style.background="",
-                    },
-                      React.createElement("span",{style:{
-                        flex:1, fontSize: depth===0 ? "13px" : "12px",
-                        fontWeight: item.bold||depth===0 ? "600" : "400",
-                        color: depth===0 ? W.fg : W.fgDim||W.fgMuted,
-                        lineHeight:"1.4",
-                      }}, item.text),
-                      item.page && React.createElement("span",{style:{
-                        fontSize:"11px", color:W.blue, flexShrink:0,
-                        background:W.blueBg||"rgba(138,198,242,.1)",
-                        border:`1px solid ${W.blueBorder||"rgba(138,198,242,.3)"}`,
-                        borderRadius:"10px", padding:"1px 7px",
-                      }},"p."+item.page)
-                    )
-                  );
-                  if (item.children && item.children.length) {
-                    result.push(...flattenOutline(item.children, depth+1));
-                  }
-                }
-                return result;
-              })(nativeOutline, 0),
-              // Separator voor AI sectie
-              React.createElement("div",{style:{
-                padding:"4px 14px",fontSize:"10px",letterSpacing:"0.8px",
-                color:W.blue,fontWeight:"600",textTransform:"uppercase",
-                borderBottom:`1px solid ${W.splitBg}22`,
-                borderTop:`1px solid ${W.splitBg}`,
-                margin:"8px 0 2px",
-                display:"flex",alignItems:"center",justifyContent:"space-between",
-              }},
-                React.createElement("span",null,"🤖 AI Samenvatting"),
-                !outlineLoading && outlineItems.length===0 && React.createElement("button",{
-                  onClick:generateOutline,
-                  style:{fontSize:"11px",padding:"2px 8px",borderRadius:"4px",background:W.blueBg||"rgba(138,198,242,.1)",
-                    color:W.blue,border:`1px solid ${W.blueBorder||"rgba(138,198,242,.3)"}`,cursor:"pointer"}
-                },"+ Genereer")
-              ),
-              // AI samenvatting — toon outlineText direct als opgemaakt tekst
-              outlineLoading && React.createElement("div",{style:{
-                padding:"10px 14px",fontSize:"12px",color:W.blue,
-                animation:"ai-pulse 1.5s ease-in-out infinite",display:"flex",alignItems:"center",gap:"6px"}},
-                "⏳ AI analyseert..."),
-              !outlineLoading && !outlineText && React.createElement("div",{
-                style:{padding:"8px 14px",fontSize:"12px",color:W.fgMuted,lineHeight:"1.5",fontStyle:"italic"}},
-                "Klik '+ Genereer' voor een AI-samenvatting met kernpunten per sectie."),
-              outlineText && React.createElement("div",{style:{padding:"4px 6px"}},
-                // Render outlineText regel voor regel met klikbare paginanummers
-                outlineText.split("\n").filter(l=>l.trim()).map((line,i)=>{
-                  const isSect = line.match(/^#+\s/);
-                  const isBull = line.match(/^[-*•]\s/);
-                  const pageMatch = line.match(/\(p\.?\s*(\d+)\)/i);
-                  const pg = pageMatch ? parseInt(pageMatch[1]) : null;
-                  const text = line.replace(/^#+\s/,"").replace(/^[-*•]\s/,"");
-                  return React.createElement("div",{
-                    key:i,
-                    onClick: pg ? ()=>{setPageNum(pg);scrollToPage(pg);} : undefined,
-                    style:{
-                      padding: isSect ? "5px 14px 2px" : "1px 14px 1px 24px",
-                      cursor: pg ? "pointer" : "default",
-                      display:"flex", alignItems:"baseline", gap:"6px",
-                      borderLeft: isSect ? `3px solid ${W.comment}88` : "3px solid transparent",
-                      transition:"background .1s",
-                    },
-                    onMouseEnter:e=>{if(pg)e.currentTarget.style.background=W.bg3||"rgba(255,255,255,.04)";},
-                    onMouseLeave:e=>e.currentTarget.style.background="",
-                  },
-                    React.createElement("span",{style:{
-                      flex:1,
-                      fontSize: isSect ? "12px" : "12px",
-                      fontWeight: isSect ? "600" : "400",
-                      color: isSect ? W.fg : W.fgMuted,
-                      lineHeight:"1.6",
-                    }}, isBull ? "• "+text : text),
-                    pg && React.createElement("span",{style:{
-                      fontSize:"10px",color:W.blue,flexShrink:0,
-                      background:W.blueBg||"rgba(138,198,242,.1)",
-                      border:`1px solid ${W.blueBorder||"rgba(138,198,242,.25)"}`,
-                      borderRadius:"8px",padding:"0 5px",
-                    }},"p."+pg)
-                  );
-                })
-              )
-            )
-          // Geen native outline: toon AI genereer optie
-          : React.createElement("div",null,
-              outlineItems.length===0 && !outlineLoading && React.createElement("div",{
-                style:{padding:"24px 16px",textAlign:"center",display:"flex",flexDirection:"column",gap:"12px"}},
-                React.createElement("div",{style:{fontSize:"32px"}},"🗂"),
-                React.createElement("div",{style:{color:W.fg,fontSize:"13px",lineHeight:"1.6"}},
-                  "Dit PDF heeft geen ingebouwde inhoudsopgave."),
-                React.createElement("div",{style:{color:W.fgMuted,fontSize:"12px",lineHeight:"1.6"}},
-                  "AI kan een outline genereren op basis van de inhoud."),
-                React.createElement("button",{
-                  onClick:generateOutline,
-                  style:{padding:"10px 20px",borderRadius:"8px",background:W.blue,color:W.bg,
-                    border:"none",cursor:"pointer",fontSize:"14px",fontWeight:"600"}
-                },"🤖 Genereer AI Outline")
-              ),
-              outlineLoading && React.createElement("div",{style:{padding:"16px",fontSize:"12px",lineHeight:"2"}},
-                React.createElement("div",{style:{color:W.blue,animation:"ai-pulse 1.5s ease-in-out infinite",marginBottom:"8px"}},"⏳ AI analyseert het document…"),
-                React.createElement("div",{style:{color:W.fg,fontSize:"11px",whiteSpace:"pre-wrap",lineHeight:"1.6"}},outlineText)
-              ),
-              outlineText && React.createElement("div",{style:{padding:"4px 6px"}},
-                outlineText.split("\n").filter(l=>l.trim()).map((line,i)=>{
-                  const isSect = line.match(/^#+\s/);
-                  const isBull = line.match(/^[-*•]\s/);
-                  const pm = line.match(/\(p\.?\s*(\d+)\)/i);
-                  const pg = pm ? parseInt(pm[1]) : null;
-                  const text = line.replace(/^#+\s/,"").replace(/^[-*•]\s/,"");
-                  return React.createElement("div",{
-                    key:i,
-                    onClick: pg ? ()=>{setPageNum(pg);scrollToPage(pg);} : undefined,
-                    style:{
-                      padding: isSect ? "7px 14px 3px" : "2px 14px 2px 24px",
-                      cursor:pg?"pointer":"default",
-                      borderLeft: isSect ? `3px solid ${W.blue}` : "3px solid transparent",
-                      transition:"background .1s",
-                      display:"flex",alignItems:"baseline",gap:"8px",
-                    },
-                    onMouseEnter:e=>{if(pg)e.currentTarget.style.background=W.bg3||"rgba(255,255,255,.04)";},
-                    onMouseLeave:e=>e.currentTarget.style.background="",
-                  },
-                    React.createElement("span",{style:{
-                      flex:1,fontSize: isSect?"13px":"12px",
-                      fontWeight:isSect?"600":"400",
-                      color: isSect ? W.fg : W.fgMuted,
-                      lineHeight:"1.6",
-                    }}, isBull ? "• "+text : text),
-                    pg && React.createElement("span",{style:{
-                      fontSize:"11px",color:W.blue,flexShrink:0,
-                      background:W.blueBg||"rgba(138,198,242,.1)",
-                      border:`1px solid ${W.blueBorder||"rgba(138,198,242,.3)"}`,
-                      borderRadius:"10px",padding:"1px 7px",
-                    }},"p."+pg)
-                  );
-                })
-              )
-            )
-      ),
-      // Opslaan footer
-      (nativeOutline.length>0||outlineText) && React.createElement("div",{style:{
-        padding:"8px 14px",borderTop:`1px solid ${W.splitBg}`,flexShrink:0,
-      }},
-        React.createElement("button",{
-          onClick:()=>{
-            const stem=pdfFile.name.replace(/\.pdf$/i,"");
-            // Bouw outline tekst op uit native + AI
-            let content = "# Outline: "+stem+"\n\n*Bron: [["+stem+"]]*\n\n";
-            if(nativeOutline.length>0){
-              content += "## Inhoudsopgave\n\n";
-              const addItems = (items,depth) => {
-                items.forEach(i => {
-                  content += "  ".repeat(depth)+"- "+i.text+(i.page?" (p."+i.page+")": "")+"\n";
-                  if(i.children&&i.children.length) addItems(i.children,depth+1);
-                });
-              };
-              addItems(nativeOutline,0);
-            }
-            if(outlineText){ content += "\n\n## AI Samenvatting\n\n"+outlineText; }
-            const saveNote = onSaveNote || onAddNote;
-            if(saveNote) {
-              saveNote({
-                id: genId ? genId() : ("note_"+Date.now()),
-                title:"Outline: "+stem,
-                content,
-                tags:["outline",stem.toLowerCase().replace(/\s+/g,"-")],
-                noteType:"literature",
-                importedAt:new Date().toISOString(),
-                created:new Date().toISOString(),
-                modified:new Date().toISOString(),
-              });
-              alert("✓ Outline opgeslagen als notitie");
-            } else {
-              alert("Fout: geen opslagfunctie beschikbaar");
-            }
-          },
-          style:{width:"100%",padding:"7px",borderRadius:"6px",
-            background:W.commentBg||"rgba(159,202,86,.1)",
-            color:W.tagColor||W.comment,
-            border:`1px solid ${W.tagBorder||"rgba(159,202,86,.28)"}`,
-            cursor:"pointer",fontSize:"12px",fontWeight:"600"}
-        },"📝 Opslaan als notitie")
-      )
-    ),
-
-
-        // Main PDF column
+    // Main PDF column
     React.createElement("div",{style:{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",minWidth:0,minHeight:0}},
       // Toolbar
       React.createElement("div",{style:{background:W.bg2,borderBottom:`1px solid ${W.splitBg}`,padding:"5px 10px",display:"flex",alignItems:"center",gap:"8px",fontSize:"14px",flexShrink:0,flexWrap:"wrap"}},
@@ -1737,17 +1374,6 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
           }, m.icon)),
           React.createElement("span",{style:{color:W.splitBg}},"|"),
           // Highlights-overzicht knop
-
-          pdfFile && React.createElement("button",{
-            onClick:()=>{ setShowNotePanel(p=>!p); if(showAnnotPanel) setShowAnnotPanel(false); },
-            title:"Leesnotitie per pagina",
-            style:{
-              background: showNotePanel ? W.commentBg||"rgba(159,202,86,.1)" : "none",
-              border: showNotePanel ? `1px solid ${W.tagBorder||"rgba(159,202,86,.28)"}` : "1px solid transparent",
-              borderRadius:"4px", color: showNotePanel ? W.comment : W.fgMuted,
-              cursor:"pointer", padding:"2px 6px", fontSize:"13px", lineHeight:1,
-            }
-          }, "◀✏"),
           pdfFile && React.createElement("button",{
             onClick:()=>setShowHlPanel(p=>!p),
             title:"Highlights overzicht",
@@ -1821,25 +1447,8 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
                    cursor:"pointer",padding:"2px 6px",fontSize:"15px",lineHeight:1},
           }, "🔍"),
           React.createElement("span",{style:{color:W.fgMuted}},"│"),
-          // 🗂 Outline knop — naast de samenvatting knop
-          pdfFile && React.createElement("button",{
-            onClick:()=>{
-              const next=!showOutlinePanel;
-              setShowOutlinePanel(next);
-              if(showAnnotPanel) setShowAnnotPanel(false);
-              if(showNotePanel) setShowNotePanel(false);
-              if(next && outlineItems.length===0 && !outlineLoading) generateOutline();
-            },
-            title:"AI Outline — navigeer door het document",
-            style:{
-              background: showOutlinePanel ? W.blueBg||"rgba(138,198,242,.1)" : "none",
-              border: showOutlinePanel ? `1px solid ${W.blue}` : "1px solid transparent",
-              borderRadius:"4px", color: showOutlinePanel ? W.blue : W.fgMuted,
-              cursor:"pointer", padding:"2px 8px", fontSize:"13px",
-              display:"flex", alignItems:"center", gap:"4px",
-            }
-          }, "🗂", React.createElement("span",{style:{fontSize:"12px"}},"Outline")),
-
+          ...HCOLORS.map(c=>React.createElement("button",{key:c.id,onClick:()=>setActiveColor(c),title:c.label,style:{width:"18px",height:"18px",borderRadius:"4px",background:c.bg,border:`2px solid ${activeColor.id===c.id?c.border:"transparent"}`,cursor:"pointer",padding:0,boxShadow:activeColor.id===c.id?`0 0 6px ${c.border}`:"none"}})),
+          React.createElement("span",{style:{color:W.fgMuted,fontSize:"14px",marginLeft:"4px",maxWidth:"160px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},pdfFile?.name),
           pdfFile && onAutoSummarize && React.createElement("button",{
             title:"Maak nu een samenvatting van deze PDF",
             disabled:summarizing,
@@ -2196,9 +1805,10 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
                  fontSize:"12px",cursor:"pointer"}
         },"◀ Bibliotheek"),
         React.createElement("span",{style:{color:W.fgMuted}},"│"),
-        React.createElement("span",{style:{color:W.fg,maxWidth:"160px",overflow:"hidden",
+        React.createElement("span",{style:{color:W.fg,maxWidth:"200px",overflow:"hidden",
           textOverflow:"ellipsis",whiteSpace:"nowrap",fontSize:"13px"}},
           pdfFile?.name?.replace(/\.pdf$/i,"")||""),
+        // "Verder lezen" badge als we niet op pagina 1 staan
         // Selectiemodus indicator
         selectMode && React.createElement("span",{
           style:{
@@ -2437,186 +2047,273 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
         ),
 
         // iOS Annoteren-knop (position:fixed — staat buiten scroll-container)
-        // iOS annoteren knop
         iosAnnotBtn&&!pendingSel&&React.createElement("button",{
-          onClick:()=>{ setIosAnnotBtn(null); tryOpenAnnotPopup(); },
-          style:{position:"fixed",
-            left:iosAnnotBtn?iosAnnotBtn.x:window.innerWidth/2-50,
-            top:iosAnnotBtn?iosAnnotBtn.y:200,
+          onTouchStart:e=>{ e.preventDefault(); tryOpenAnnotPopup(); setIosAnnotBtn(null); },
+          onClick:()=>{ tryOpenAnnotPopup(); setIosAnnotBtn(null); },
+          style:{
+            position:"fixed", left:iosAnnotBtn.x, top:iosAnnotBtn.y,
             zIndex:9998, background:W.blue, color:W.bg,
             border:"none", borderRadius:"20px", padding:"8px 18px",
             fontSize:"14px", fontWeight:"bold", cursor:"pointer",
             boxShadow:"0 3px 16px rgba(0,0,0,0.6)",
+            WebkitTapHighlightColor:"transparent",
           }
         },"✏ Annoteren"),
-        // Zwevende toolbar bij selectie (position:fixed)
-        floatBar && React.createElement("div",{
+        // Annotatie-popup — fixed onder de menubalk
+        pendingSel&&React.createElement("div",{
           "data-annot-popup":"1",
           style:{
-            position:"fixed",
-            left:Math.max(10,Math.min((floatBar.x||window.innerWidth/2)-140,window.innerWidth-300)),
-            top:floatBar.above?(floatBar.y||100)-52:(floatBar.y||100),
-            zIndex:10000, background:W.bg2, border:`1px solid ${W.splitBg}`,
-            borderRadius:"12px", boxShadow:"0 8px 32px rgba(0,0,0,0.7)",
-            padding:"8px 10px", display:"flex", flexDirection:"column", gap:"6px",
-            minWidth:"280px", maxWidth:"320px",
-          }
+            position:"fixed", top:"80px", left:0, right:0,
+            background:W.bg2,
+            borderTop:`3px solid ${activeColor.border}`,
+            borderBottom:`1px solid ${W.splitBg}`,
+            padding:"12px 16px",
+            zIndex:9999,
+            boxShadow:"0 8px 32px rgba(0,0,0,0.8)",
+            display:"flex", flexDirection:"column", gap:"10px",
+          },
+          onMouseDown:e=>e.stopPropagation(),
+          onMouseUp:e=>e.stopPropagation(),
+          onTouchStart:e=>e.stopPropagation(),
         },
-          React.createElement("div",{style:{display:"flex",alignItems:"center",gap:"6px"}},
-            ...HCOLORS.map(col=>React.createElement("button",{
-              key:col.id, title:col.label,
+          // Rij 1: citaat + sluiten
+          React.createElement("div",{style:{display:"flex",gap:"10px",alignItems:"flex-start"}},
+            React.createElement("div",{style:{
+              flex:1, fontSize:"13px", color:W.fg,
+              padding:"6px 10px", background:W.bg, borderRadius:"4px",
+              fontStyle:"italic", lineHeight:"1.6",
+              borderLeft:`4px solid ${activeColor.border}`,
+              overflow:"hidden", whiteSpace:"nowrap", textOverflow:"ellipsis",
+              boxShadow:"inset 0 0 0 1px rgba(255,255,255,0.06)",
+            }},
+              React.createElement("span",{style:{
+                background:activeColor.bg, padding:"1px 3px", borderRadius:"2px",
+              }}, '"', pendingSel.substring(0,120), pendingSel.length>120?"…":"", '"')
+            ),
+            React.createElement("button",{
               onClick:()=>{
-                setActiveColor(col); pendingColorRef.current=col;
-                setTimeout(()=>{saveHighlight();pendingColorRef.current=null;},0);
+                const savedTop = scrollRef.current?.scrollTop||0;
+                const savedLeft = scrollRef.current?.scrollLeft||0;
+                setPendingSel(null); window.getSelection()?.removeAllRanges();
+                // Als selectMode uit is, herstel scroll na sluiten
+                if (!selectMode) _setTextLayerTouch("pan-y");
+                requestAnimationFrame(()=>{
+                  if(scrollRef.current){ scrollRef.current.scrollTop=savedTop; scrollRef.current.scrollLeft=savedLeft; }
+                });
               },
-              style:{width:"28px",height:"28px",borderRadius:"50%",
-                background:col.bg,border:`2px solid ${col.border}`,cursor:"pointer",flexShrink:0},
-              onMouseEnter:e=>e.target.style.transform="scale(1.2)",
-              onMouseLeave:e=>e.target.style.transform="scale(1)",
-            })),
-            React.createElement("div",{style:{width:"1px",height:"20px",background:W.splitBg,margin:"0 2px"}}),
-            React.createElement("button",{
-              onClick:()=>setFloatOpen(o=>!o),
-              title:"Voeg annotatie toe",
-              style:{background:floatOpen?W.blueBg||"rgba(138,198,242,.12)":"none",
-                border:`1px solid ${floatOpen?W.blue:W.splitBg}`,borderRadius:"6px",
-                color:floatOpen?W.blue:W.fgMuted,cursor:"pointer",padding:"4px 8px",fontSize:"12px",flexShrink:0}
-            },"✎"),
-            React.createElement("button",{
-              title:"Voeg toe als citaat in leesnotitie (◀✏)",
-              onClick:()=>{
-                const txt = floatBar.text||"";
-                const pg  = floatBar.page || pageNum;
-                const quote = (noteContent&&!noteContent.endsWith("\n")?"\n":"")+
-                  "### p."+pg+"\n> "+txt+"\n";
-                setNoteContent(c=>c+quote);
-                setShowNotePanel(true);
-                setFloatBar(null); setFloatNote(""); setFloatOpen(false);
-                window.getSelection()?.removeAllRanges();
-              },
-              style:{background:W.commentBg||"rgba(159,202,86,.08)",
-                border:`1px solid ${W.tagBorder||"rgba(159,202,86,.28)"}`,borderRadius:"6px",
-                color:W.tagColor||W.comment,cursor:"pointer",padding:"4px 8px",fontSize:"12px",flexShrink:0}
-            },"❝"),
-            React.createElement("button",{
-              onClick:()=>{setFloatBar(null);setFloatNote("");setFloatOpen(false);window.getSelection()?.removeAllRanges();},
-              style:{marginLeft:"auto",background:"none",border:"none",color:W.fgMuted,cursor:"pointer",fontSize:"18px",lineHeight:1}
+              style:{background:"none",border:"none",color:W.fgMuted,
+                     fontSize:"18px",cursor:"pointer",lineHeight:1,flexShrink:0,padding:"2px 4px"}
             },"×")
           ),
-          React.createElement("div",{style:{fontSize:"11px",color:W.fgDim,lineHeight:"1.4",
-            maxHeight:"40px",overflow:"hidden",borderLeft:`2px solid ${W.splitBg}`,paddingLeft:"6px"}},
-            '"',(floatBar.text||"").substring(0,100),floatBar.text&&floatBar.text.length>100?"...":"",'"'),
-          floatOpen&&React.createElement(React.Fragment,null,
-            React.createElement("textarea",{autoFocus:true,value:floatNote,onChange:e=>setFloatNote(e.target.value),
-              onKeyDown:e=>{if(e.key==="Escape")setFloatOpen(false);if(e.key==="Enter"&&(e.ctrlKey||e.metaKey))saveHighlight();},
-              placeholder:"Notitie… (Ctrl+Enter)",rows:3,
-              style:{width:"100%",background:W.bg,border:`1px solid ${W.splitBg}`,borderRadius:"6px",
-                color:W.fg,fontSize:"12px",padding:"6px 8px",resize:"none",outline:"none",fontFamily:"inherit"}}),
+
+          // Rij 2: notitieveld + kleurkiezer naast elkaar
+          React.createElement("div",{style:{display:"flex",gap:"8px",alignItems:"flex-start"}},
+            React.createElement("textarea",{
+              value:quickNote,
+              onChange:e=>setQuickNote(e.target.value),
+              onKeyDown:e=>{
+                if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();saveHighlight();}
+                if(e.key==="Escape"){
+                  const savedTop = scrollRef.current?.scrollTop||0;
+                  const savedLeft = scrollRef.current?.scrollLeft||0;
+                  setPendingSel(null); window.getSelection()?.removeAllRanges();
+                  requestAnimationFrame(()=>{
+                    if(scrollRef.current){ scrollRef.current.scrollTop=savedTop; scrollRef.current.scrollLeft=savedLeft; }
+                  });
+                }
+              },
+              placeholder:"Notitie… (Enter=opslaan · Shift+Enter=nieuwe regel · Esc=sluiten)",
+              rows:2,
+              autoFocus:true,
+              style:{flex:1,background:W.bg,border:`1px solid ${W.splitBg}`,
+                     borderRadius:"4px",padding:"6px 9px",color:W.fg,
+                     fontSize:"13px",outline:"none",resize:"none",
+                     boxSizing:"border-box"},
+            }),
+            // Kleurkiezer verticaal
+            React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:"4px",flexShrink:0}},
+              ...HCOLORS.map(c=>React.createElement("button",{key:c.id,
+                onClick:()=>setActiveColor(c),
+                title:c.id,
+                style:{width:"18px",height:"18px",borderRadius:"3px",background:c.bg,
+                       border:`2px solid ${activeColor.id===c.id?c.border:W.splitBg}`,
+                       cursor:"pointer",padding:0}}))
+            )
+          ),
+
+          // Rij 3: tags
+          React.createElement("div",{style:{display:"flex",gap:"8px",alignItems:"center"}},
+            React.createElement("span",{style:{fontSize:"12px",color:W.fgMuted,flexShrink:0}},"tags:"),
+            React.createElement("div",{style:{flex:1}},
+              React.createElement(SmartTagEditor,{tags:quickTags,onChange:setQuickTags,allTags:[...allTags,...allAnnotTags]})
+            )
+          ),
+
+          // Rij 4: knoppen
+          React.createElement("div",{style:{display:"flex",gap:"6px",flexWrap:"wrap"}},
             React.createElement("button",{onClick:saveHighlight,
-              style:{width:"100%",padding:"6px",borderRadius:"6px",background:W.blue,color:W.bg,
-                border:"none",cursor:"pointer",fontSize:"12px",fontWeight:"600"}},"✓ Opslaan")
+              style:{background:activeColor.border,color:"#fff",border:"none",
+                     borderRadius:"4px",padding:"6px 16px",fontSize:"13px",
+                     cursor:"pointer",fontWeight:"600",flexShrink:0}},"✓ Opslaan"),
+            React.createElement("button",{
+              title:"Selectie aanpassen — teken opnieuw",
+              onClick:()=>{
+                setPendingSel(null);
+                window.getSelection()?.removeAllRanges();
+                // Activeer selectiemodus zodat gebruiker opnieuw kan slepen
+                if(!selectMode) setSelectMode(true);
+              },
+              style:{background:W.bg2,color:W.fgMuted,border:`1px solid ${W.splitBg}`,
+                     borderRadius:"4px",padding:"6px 12px",fontSize:"13px",
+                     cursor:"pointer",flexShrink:0}},"✏ Opnieuw"),
+            onPasteToNote&&React.createElement("button",{
+              onClick:()=>{
+                onPasteToNote({text:pendingSel,source:pdfFile?.name||"PDF",page:pageNum,url:null});
+                setPendingSel(null); window.getSelection()?.removeAllRanges();
+              },
+              style:{background:"rgba(159,202,86,0.15)",color:W.comment,
+                     border:"1px solid rgba(159,202,86,0.3)",borderRadius:"4px",
+                     padding:"5px 11px",fontSize:"13px",cursor:"pointer"}
+            },"📋 → notitie"),
+            React.createElement("button",{
+              onClick:()=>{setPendingSel(null);window.getSelection()?.removeAllRanges();},
+              style:{background:"none",color:W.fgMuted,border:`1px solid ${W.splitBg}`,
+                     borderRadius:"4px",padding:"5px 11px",fontSize:"13px",cursor:"pointer"}
+            },"Annuleren")
           )
         )
-      )),  // sluit: scrollRef-div + scroll-outer-div (pdfDoc &&)
+      ))
+    ),
+    // Notitie-paneel knop
+    pdfFile && React.createElement("button",{
+      onClick:()=>{ setShowNotePanel(p=>!p); if(showAnnotPanel) setShowAnnotPanel(false); },
+      title: showNotePanel ? "Sluit leesnotitie" : "Leesnotitie openen",
+      style:{
+        position:"absolute",
+        right: showNotePanel ? 322 : (showAnnotPanel && !isTablet) ? (annotWidth+14) : 8,
+        top:"38%",
+        transform:"translateY(-50%)",
+        background: showNotePanel ? "rgba(159,202,86,0.15)" : W.bg2,
+        border:`1px solid ${showNotePanel ? W.comment+"55" : W.splitBg}`,
+        borderRadius:"4px 0 0 4px",
+        color: showNotePanel ? W.comment : W.fgMuted,
+        fontSize:"13px", cursor:"pointer",
+        padding:"7px 5px", zIndex:10, lineHeight:1,
+        writingMode:"vertical-rl", transition:"all 0.15s",
+      }
+    }, showNotePanel ? "✏▶" : "◀✏"),
 
-    ),  // sluit: main column div
+    // Annotatiepaneel — knop om te openen (alleen als PDF open is)
+    pdfFile && React.createElement("button",{
+      onClick:()=>{ setShowAnnotPanel(p=>!p); if(showNotePanel) setShowNotePanel(false); },
+      title: showAnnotPanel ? "Annotaties verbergen" : "Annotaties tonen",
+      style:{
+        position:"absolute", right:(showAnnotPanel && !isTablet)?(annotWidth+6):0, top:"62%",
+        transform:"translateY(-50%)",
+        background:W.bg2, border:`1px solid ${W.splitBg}`,
+        borderRight:showAnnotPanel?"none":"1px solid "+W.splitBg,
+        borderRadius:showAnnotPanel?"4px 0 0 4px":"0 4px 4px 0",
+        color:W.fgMuted, fontSize:"14px", cursor:"pointer",
+        padding:"8px 5px", zIndex:10, lineHeight:1,
+        writingMode:"vertical-rl",
+      }
+    }, showAnnotPanel ? "▶" : "◀ " + (fileHl.length > 0 ? fileHl.length : "")),
 
-    // ── Highlights paneel (naast main column) ─────────────────────────────
-    showHlPanel && pdfFile && React.createElement("div",{style:{
+    // ── Notitie-zijpaneel ───────────────────────────────────────────────────
+    pdfFile && showNotePanel && React.createElement("div",{style:{
       width:"320px", flexShrink:0, background:W.bg2,
       borderLeft:`1px solid ${W.splitBg}`,
-      display:"flex", flexDirection:"column", minHeight:0,
+      display:"flex", flexDirection:"column",
+      ...(isTablet ? { position:"absolute",right:0,top:0,bottom:0,zIndex:20,boxShadow:"-4px 0 20px rgba(0,0,0,0.5)" } : {}),
     }},
-      React.createElement("div",{style:{padding:"10px 14px",borderBottom:`1px solid ${W.splitBg}`,
-        display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0}},
-        React.createElement("span",{style:{fontWeight:"600",color:W.fg,fontSize:"14px"}},"📋 Highlights"),
-        React.createElement("button",{onClick:()=>setShowHlPanel(false),
-          style:{background:"none",border:"none",color:W.fgMuted,cursor:"pointer",fontSize:"18px"}},"×")
+      // Header
+      React.createElement("div",{style:{
+        padding:"8px 12px", borderBottom:`1px solid ${W.splitBg}`,
+        background:W.bg2, flexShrink:0,
+        display:"flex", alignItems:"center", gap:"8px",
+      }},
+        React.createElement("div",{style:{flex:1}},
+          React.createElement("div",{style:{fontSize:"13px",fontWeight:"700",color:W.statusFg}},
+            "✏ Leesnotitie"),
+          React.createElement("div",{style:{fontSize:"10px",color:W.fgDim,marginTop:"1px",
+            overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:"220px"}},
+            pdfFile?.name)
+        ),
+        React.createElement("button",{
+          onClick:()=>setShowNotePanel(false),
+          style:{background:"none",border:"none",color:W.fgMuted,cursor:"pointer",fontSize:"16px",padding:"0 4px"}
+        },"×")
       ),
-      React.createElement("div",{style:{flex:1,overflowY:"auto",padding:"8px 0"}},
-        (()=>{
-          const hlItems=fileHl.filter(h=>h.rects&&h.rects.length||h.hlOnly);
-          if(!hlItems.length) return React.createElement("div",{
-            style:{padding:"20px",textAlign:"center",color:W.fgMuted,fontSize:"13px"}
-          },"Selecteer tekst en kies een kleur");
-          const byPage={};
-          hlItems.forEach(h=>{(byPage[h.page]=byPage[h.page]||[]).push(h);});
-          return Object.keys(byPage).sort((a,b)=>+a-+b).map(pg=>
-            React.createElement("div",{key:pg},
-              React.createElement("div",{style:{padding:"4px 14px",fontSize:"10px",letterSpacing:"0.8px",
-                color:W.fgMuted,fontWeight:"600",textTransform:"uppercase",
-                display:"flex",justifyContent:"space-between",alignItems:"center"}},
-                React.createElement("span",null,"PAGINA "+pg),
-                React.createElement("button",{onClick:()=>{setPageNum(+pg);scrollToPage(+pg);setShowHlPanel(false);},
-                  style:{background:"none",border:"none",color:W.blue,cursor:"pointer",fontSize:"11px"}},"→ ga naar")
-              ),
-              ...byPage[pg].map(h=>{
-                const hc=HCOLORS.find(c=>c.id===h.colorId)||HCOLORS[0];
-                return React.createElement("div",{key:h.id,style:{margin:"4px 10px",padding:"8px 10px",
-                  background:W.bg3,borderRadius:"6px",borderLeft:`3px solid ${hc.border}`}},
-                  React.createElement("div",{style:{fontSize:"12px",color:W.fg,lineHeight:"1.5",fontStyle:"italic"}},
-                    '"'+(h.text?h.text.length>120?h.text.slice(0,120)+"...":h.text:"")+'"'),
-                  h.note&&React.createElement("div",{style:{fontSize:"12px",color:W.fgDim,padding:"4px 6px",
-                    background:hc.bg,borderRadius:"3px",marginTop:"4px"}},h.note),
-                  React.createElement("div",{style:{display:"flex",gap:"6px",marginTop:"6px"}},
-                    React.createElement("button",{onClick:()=>{
-                        const stem=pdfFile.name.replace(/\.pdf$/i,"");
-                        if(onSaveNote) onSaveNote({
-                          title:(h.text?h.text.slice(0,50):"HL")+" (p."+h.page+")",
-                          content:"> "+(h.text||"")+(h.note?"\n"+h.note:"")+"\n\n---\n*Bron: [["+stem+"]], p."+h.page+"*",
-                          tags:["highlight","pdf"],noteType:"literature"});
-                      },
-                      style:{fontSize:"11px",padding:"2px 8px",borderRadius:"4px",
-                        background:W.commentBg||"rgba(159,202,86,.1)",color:W.tagColor||W.comment,
-                        border:`1px solid ${W.tagBorder||"rgba(159,202,86,.28)"}`,cursor:"pointer"}
-                    },"+ notitie"),
-                    React.createElement("button",{onClick:()=>{AnnotationStore.remove(h.id);setHighlights(AnnotationStore.getAll());},
-                      style:{fontSize:"11px",padding:"2px 8px",borderRadius:"4px",background:"none",
-                        color:W.fgMuted,border:`1px solid ${W.splitBg}`,cursor:"pointer"}},"× wis")
-                  )
-                );
-              })
-            )
-          );
-        })()
-      ),
-      React.createElement("div",{style:{padding:"10px 14px",borderTop:`1px solid ${W.splitBg}`,flexShrink:0}},
-        React.createElement("button",{onClick:()=>{
-            const hlItems=fileHl.filter(h=>h.rects&&h.rects.length||h.hlOnly);
-            if(!hlItems.length)return;
-            const stem=pdfFile.name.replace(/\.pdf$/i,"");
-            const byPage={};hlItems.forEach(h=>{(byPage[h.page]=byPage[h.page]||[]).push(h);});
-            const body=["# Highlights — "+stem,"*[["+stem+"]]*",
-              ...Object.keys(byPage).sort((a,b)=>+a-+b).flatMap(pg=>
-                ["\n## Pagina "+pg,...byPage[pg].map(h=>"> "+(h.text||"")+(h.note?"\n\n"+h.note:""))]
-              )].join("\n");
-            if(onSaveNote) onSaveNote({title:"Highlights — "+stem,content:body,
-              tags:["highlights","pdf"],noteType:"literature",importedAt:new Date().toISOString()});
+
+      // Hint: pagina invoegen
+      React.createElement("div",{style:{
+        padding:"5px 12px",
+        borderBottom:`1px solid ${W.splitBg}`,
+        background:"rgba(159,202,86,0.04)",
+        flexShrink:0,
+        display:"flex", gap:"6px", alignItems:"center",
+      }},
+        React.createElement("span",{style:{fontSize:"10px",color:W.fgDim}},
+          `Pagina ${pageNum} open`),
+        React.createElement("button",{
+          onClick:()=>setNoteContent(c => c + (c && !c.endsWith("\n") ? "\n" : "") + `\n## Pagina ${pageNum}\n`),
+          style:{fontSize:"10px",padding:"2px 7px",borderRadius:"4px",cursor:"pointer",
+                 background:"rgba(159,202,86,0.1)",border:`1px solid ${W.comment}44`,
+                 color:W.comment},
+        },"+ p."+pageNum),
+        React.createElement("button",{
+          onClick:()=>{
+            const sel = window.getSelection()?.toString().trim();
+            if (sel) setNoteContent(c => c + (c && !c.endsWith("\n") ? "\n" : "") + `\n> ${sel}\n> — p.${pageNum}\n`);
           },
-          style:{width:"100%",padding:"7px",borderRadius:"6px",
-            background:W.blueBg||"rgba(138,198,242,.12)",color:W.blue,
-            border:`1px solid ${W.blueBorder||"rgba(138,198,242,.3)"}`,
-            cursor:"pointer",fontSize:"13px",fontWeight:"600"}},"⬆ Alle highlights als notitie")
+          title:"Voeg geselecteerde tekst in als citaat",
+          style:{fontSize:"10px",padding:"2px 7px",borderRadius:"4px",cursor:"pointer",
+                 background:"rgba(138,198,242,0.1)",border:`1px solid ${W.blue}44`,
+                 color:W.blue},
+        },"+ citaat")
+      ),
+
+      // Textarea
+      React.createElement("textarea",{
+        value:noteContent,
+        onChange:e=>setNoteContent(e.target.value),
+        placeholder:`Notities bij ${pdfFile?.name||"dit PDF"}...\n\nTips:\n- ## voor een sectiekopregel\n- > voor citaat\n- [[link]] voor wiki-link`,
+        style:{
+          flex:1, background:"transparent", border:"none", outline:"none",
+          color:W.fg, fontSize:"13px", lineHeight:"1.7",
+          padding:"12px 14px", resize:"none",
+          fontFamily:"'DM Sans',system-ui,sans-serif",
+          caretColor:W.yellow,
+        }
+      }),
+
+      // Footer: opslaan
+      React.createElement("div",{style:{
+        padding:"8px 12px", borderTop:`1px solid ${W.splitBg}`,
+        background:W.bg2, flexShrink:0,
+        display:"flex", gap:"6px", alignItems:"center",
+      }},
+        React.createElement("span",{style:{flex:1,fontSize:"10px",color:W.fgDim}},
+          noteContent.split("\n").length + " regels · " + noteContent.split(/\s+/).filter(Boolean).length + " woorden"),
+        React.createElement("button",{
+          onClick:saveNotePanel,
+          disabled:noteSaving||!noteContent.trim(),
+          style:{
+            padding:"5px 14px", borderRadius:"5px", fontSize:"12px",
+            cursor:noteContent.trim()?"pointer":"default",
+            background:noteContent.trim()?"rgba(159,202,86,0.15)":"transparent",
+            border:`1px solid ${noteContent.trim()?W.comment+"55":W.splitBg}`,
+            color:noteContent.trim()?W.comment:W.fgDim,
+            fontWeight:"600",
+          }
+        }, noteSaving ? "⟳ Opslaan…" : "✓ Opslaan")
       )
     ),
 
-    // ── Toggle knop annotatie-zijbalk ──────────────────────────────────────
-    pdfFile && React.createElement("button",{
-      onClick:()=>{setShowAnnotPanel(p=>!p);if(showNotePanel)setShowNotePanel(false);},
-      title:showAnnotPanel?"Annotaties verbergen":"Annotaties tonen ("+fileHl.length+")",
-      style:{
-        position:"absolute",right:(showAnnotPanel&&!isTablet)?(annotWidth+6):0,top:"62%",
-        transform:"translateY(-50%)",background:W.bg2,border:`1px solid ${W.splitBg}`,
-        borderRight:showAnnotPanel&&!isTablet?"none":`1px solid ${W.splitBg}`,
-        borderRadius:showAnnotPanel?"4px 0 0 4px":"0 4px 4px 0",
-        color:showAnnotPanel?W.blue:W.fgMuted,fontSize:"14px",cursor:"pointer",
-        padding:"8px 5px",zIndex:isTablet&&showAnnotPanel?30:10,lineHeight:1,writingMode:"vertical-rl",
-      }
-    },showAnnotPanel?"▶":"◀ "+(fileHl.length>0?fileHl.length:"")),
-
-    // ── Leesnotitie paneel (per pagina notities) ─────────────────────────
-    pdfFile && showNotePanel && React.createElement("div",{style:{
-      width:"340px", flexShrink:0, background:W.bg2,
+    // Annotations panel
+    // ── Highlights-overzicht paneel ──────────────────────────────────────────
+    showHlPanel && pdfFile && React.createElement("div",{style:{
+      width: "320px", flexShrink:0, background:W.bg2,
       borderLeft:`1px solid ${W.splitBg}`,
       display:"flex", flexDirection:"column", minHeight:0,
     }},
@@ -2625,228 +2322,299 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
         padding:"10px 14px", borderBottom:`1px solid ${W.splitBg}`,
         display:"flex", alignItems:"center", justifyContent:"space-between", flexShrink:0,
       }},
-        React.createElement("span",{style:{fontWeight:"600",color:W.fg,fontSize:"14px"}},
-          "◀✏ Leesnotitie"),
+        React.createElement("span",{style:{fontWeight:"600",color:W.fg,fontSize:"14px"}},"📋 Highlights"),
         React.createElement("button",{
-          onClick:()=>setShowNotePanel(false),
-          style:{background:"none",border:"none",color:W.fgMuted,cursor:"pointer",fontSize:"18px"}}
-        ,"×")
+          onClick:()=>setShowHlPanel(false),
+          style:{background:"none",border:"none",color:W.fgMuted,cursor:"pointer",fontSize:"18px",padding:"0 2px"}
+        },"×")
       ),
-      // Subtitel: huidige PDF + pagina
+      // Inhoud — gegroepeerd per pagina
+      React.createElement("div",{style:{flex:1,overflowY:"auto",padding:"8px 0"}},
+        (() => {
+          const hlItems = fileHl.filter(h => h.rects?.length > 0 || h.hlOnly);
+          if (!hlItems.length) return React.createElement("div",{
+            style:{padding:"20px",textAlign:"center",color:W.fgMuted,fontSize:"13px"}
+          },"Geen highlights — selecteer tekst en kies 🖍 of 🖍✎");
+
+          // Groepeer per pagina
+          const byPage = {};
+          hlItems.forEach(h => { (byPage[h.page] = byPage[h.page]||[]).push(h); });
+
+          return Object.keys(byPage).sort((a,b)=>+a-+b).map(pg =>
+            React.createElement("div",{key:pg},
+              // Pagina-header
+              React.createElement("div",{style:{
+                padding:"4px 14px", fontSize:"10px", letterSpacing:"0.8px",
+                color:W.fgMuted, fontWeight:"600", textTransform:"uppercase",
+                borderBottom:`1px solid ${W.splitBg}22`, marginBottom:"2px",
+                display:"flex", justifyContent:"space-between", alignItems:"center",
+              }},
+                React.createElement("span",null,"PAGINA "+pg),
+                React.createElement("button",{
+                  onClick:()=>{ setPageNum(+pg); scrollToPage(+pg); setShowHlPanel(false); },
+                  style:{background:"none",border:"none",color:W.blue,cursor:"pointer",fontSize:"11px",padding:"0 2px"}
+                },"→ ga naar")
+              ),
+              // Highlight items
+              ...byPage[pg].map(h => {
+                const hColor = HCOLORS.find(c=>c.id===h.color)||HCOLORS[0];
+                return React.createElement("div",{key:h.id,style:{
+                  margin:"4px 10px", padding:"8px 10px",
+                  background:W.bg3, borderRadius:"6px",
+                  borderLeft:`3px solid ${hColor.border}`,
+                }},
+                  // Geciteerde tekst
+                  React.createElement("div",{style:{
+                    fontSize:"12px", color:W.fg, lineHeight:"1.5",
+                    fontStyle:"italic", marginBottom:h.note?"6px":"0",
+                  }},
+                    h.hlOnly
+                      ? React.createElement("span",{style:{color:W.fgMuted,fontSize:"10px"}},"🖍 ") : null,
+                    '"'+( h.text?.length>120 ? h.text.slice(0,120)+"…" : h.text||"")+'"'
+                  ),
+                  // Notitie (indien aanwezig)
+                  h.note && React.createElement("div",{style:{
+                    fontSize:"12px", color:W.fgDim, padding:"4px 6px",
+                    background:hColor.bg, borderRadius:"3px",
+                  }}, h.note),
+                  // Acties
+                  React.createElement("div",{style:{display:"flex",gap:"6px",marginTop:"6px",flexWrap:"wrap"}},
+                    // Voeg toe als notitie
+                    React.createElement("button",{
+                      title:"Voeg toe als losse notitie met link naar PDF",
+                      onClick:()=>{
+                        const stem = pdfFile.name.replace(/\.pdf$/i,"");
+                        const noteContent = [
+                          `> ${h.text}`,
+                          h.note ? `\n${h.note}` : "",
+                          `\n\n---`,
+                          `*Bron: [[${stem}]], p.${h.page}*`,
+                        ].join("\n");
+                        if (onSaveNote) onSaveNote({
+                          title: (h.text?.slice(0,50)||"Highlight")+" (p."+h.page+")",
+                          content: noteContent,
+                          tags: ["highlight","pdf",stem.toLowerCase().replace(/\s+/g,"-")],
+                          noteType: "literature",
+                          fields: { bron: stem, pagina: String(h.page) },
+                        });
+                        alert("✓ Notitie aangemaakt met link naar de PDF");
+                      },
+                      style:{fontSize:"11px",padding:"2px 8px",borderRadius:"4px",
+                             background:W.commentBg||"rgba(159,202,86,.1)",color:W.tagColor||W.comment,
+                             border:`1px solid ${W.tagBorder||"rgba(159,202,86,.28)"}`,cursor:"pointer"}
+                    },"+ notitie"),
+                    // Verwijder highlight
+                    React.createElement("button",{
+                      onClick:()=>{
+                        AnnotationStore.remove(h.id);
+                        setHighlights(AnnotationStore.getAll());
+                      },
+                      style:{fontSize:"11px",padding:"2px 8px",borderRadius:"4px",
+                             background:"none",color:W.fgMuted,
+                             border:`1px solid ${W.splitBg}`,cursor:"pointer"}
+                    },"× wis")
+                  )
+                );
+              })
+            )
+          );
+        })()
+      ),
+      // Footer: alles als notitie exporteren
       React.createElement("div",{style:{
-        padding:"6px 14px", borderBottom:`1px solid ${W.splitBg}22`,
-        fontSize:"11px", color:W.fgMuted, flexShrink:0,
-        display:"flex", alignItems:"center", gap:"8px",
+        padding:"10px 14px",borderTop:`1px solid ${W.splitBg}`,flexShrink:0,
       }},
-        React.createElement("span",null, pdfFile ? pdfFile.name.replace(/\.pdf$/i,"") : "Geen PDF"),
-        React.createElement("span",{style:{
-          background:W.tagBg||"rgba(159,202,86,.1)",
-          color:W.tagColor||W.comment,
-          border:`1px solid ${W.tagBorder||"rgba(159,202,86,.28)"}`,
-          borderRadius:"10px", padding:"1px 8px", fontSize:"11px",
-        }}, "p."+pageNum)
-      ),
-      // Textarea
-      React.createElement("div",{style:{flex:1,display:"flex",flexDirection:"column",padding:"10px 12px",gap:"8px",minHeight:0}},
-        React.createElement("textarea",{
-          value:noteContent,
-          onChange:e=>setNoteContent(e.target.value),
-          placeholder:"Schrijf je notities hier…\n\nTips:\n- + p." + pageNum + " voor een paginaverwijzing\n- **vetgedrukt**, *cursief*, [[wiki-link]]",
-          style:{
-            flex:1, width:"100%", background:W.bg,
-            border:`1px solid ${W.splitBg}`,
-            borderRadius:"6px", color:W.fg, fontSize:"13px",
-            padding:"10px 12px", resize:"none", outline:"none",
-            fontFamily:"'Hack', monospace", lineHeight:1.7,
-            minHeight:"200px",
-          }
-        }),
-        // Snelknoppen
-        React.createElement("div",{style:{display:"flex",gap:"6px",flexWrap:"wrap",flexShrink:0}},
-          React.createElement("button",{
-            title:"Voeg paginaverwijzing in",
-            onClick:()=>setNoteContent(c=>c+(c&&!c.endsWith("\n")?"\n":"")+"### p."+pageNum+"\n"),
-            style:{fontSize:"12px",padding:"4px 10px",borderRadius:"5px",
-              background:W.bg3,border:`1px solid ${W.splitBg}`,
-              color:W.fgMuted,cursor:"pointer"}
-          },"+ p."+pageNum),
-          React.createElement("button",{
-            title:"Voeg geselecteerde tekst als citaat in",
-            onClick:()=>{
-              const sel=window.getSelection()?.toString().trim();
-              if(sel) setNoteContent(c=>c+(c&&!c.endsWith("\n")?"\n":"")+"> "+sel+"\n");
-            },
-            style:{fontSize:"12px",padding:"4px 10px",borderRadius:"5px",
-              background:W.bg3,border:`1px solid ${W.splitBg}`,
-              color:W.fgMuted,cursor:"pointer"}
-          },"+ citaat"),
-          React.createElement("button",{
-            title:"Voeg link naar PDF in",
-            onClick:()=>{
-              const stem=pdfFile?.name?.replace(/\.pdf$/i,"")||"PDF";
-              setNoteContent(c=>c+(c&&!c.endsWith("\n")?"\n":"")+"[[" +stem+"]]\n");
-            },
-            style:{fontSize:"12px",padding:"4px 10px",borderRadius:"5px",
-              background:W.bg3,border:`1px solid ${W.splitBg}`,
-              color:W.blue,cursor:"pointer"}
-          },"+ link")
-        ),
-        // Opslaan knop
         React.createElement("button",{
-          onClick:saveNotePanel,
-          disabled:!noteContent.trim()||noteSaving,
-          style:{
-            padding:"8px", borderRadius:"6px", fontWeight:"600", fontSize:"13px",
-            background:noteContent.trim()?(W.comment):(W.fgMuted),
-            color:W.bg, border:"none", cursor:noteContent.trim()?"pointer":"not-allowed",
-            opacity:noteSaving?0.6:1, flexShrink:0,
-          }
-        }, noteSaving?"Opslaan…":"✓ Opslaan als notitie"),
-        // Info tekst
-        React.createElement("div",{style:{fontSize:"11px",color:W.fgMuted,lineHeight:"1.5",flexShrink:0}},
-          "Wordt opgeslagen als notitie met tags [",
-          React.createElement("span",{style:{color:W.tagColor||W.comment}},"leesnotitie"),
-          ", ",
-          React.createElement("span",{style:{color:W.tagColor||W.comment}},
-            pdfFile?pdfFile.name.replace(/\.pdf$/i,""):"pdf"),
-          "]")
+          onClick:()=>{
+            const hlItems = fileHl.filter(h=>h.rects?.length>0||h.hlOnly);
+            if (!hlItems.length) return;
+            const stem = pdfFile.name.replace(/\.pdf$/i,"");
+            const byPage = {};
+            hlItems.forEach(h=>{(byPage[h.page]=byPage[h.page]||[]).push(h);});
+            const lines = [
+              `# Highlights — ${stem}`,
+              `\n*[[${stem}]]*`,
+              ...Object.keys(byPage).sort((a,b)=>+a-+b).flatMap(pg=>[
+                `\n## Pagina ${pg}`,
+                ...byPage[pg].map(h=>`\n> ${h.text}${h.note?"\n\n"+h.note:""}`)
+              ]),
+              `\n---`,
+              `*Geëxporteerd: ${new Date().toLocaleDateString("nl")}*`
+            ];
+            if (onSaveNote) onSaveNote({
+              title: `Highlights — ${stem}`,
+              content: lines.join("\n"),
+              tags: ["highlights","pdf",stem.toLowerCase().replace(/\s+/g,"-")],
+              noteType: "literature",
+              importedAt: new Date().toISOString(),
+            });
+            alert("✓ Alle highlights als notitie opgeslagen");
+          },
+          style:{width:"100%",padding:"7px",borderRadius:"6px",
+                 background:W.blueBg||"rgba(138,198,242,.12)",color:W.blue,
+                 border:`1px solid ${W.blueBorder||"rgba(138,198,242,.3)"}`,
+                 cursor:"pointer",fontSize:"13px",fontWeight:"600"}
+        },"⬆ Alle highlights als notitie")
       )
     ),
 
-    // ── Annotatie-zijbalk ──────────────────────────────────────────────────
-    pdfFile&&showAnnotPanel&&isTablet&&React.createElement("div",{
-      onClick:()=>setShowAnnotPanel(false),
-      style:{position:"absolute",inset:0,zIndex:19,background:"rgba(0,0,0,0.25)"}
-    }),
-    pdfFile&&showAnnotPanel&&React.createElement("div",{
-      onClick:e=>e.stopPropagation(),
-      style:{
-        width:isTablet?"300px":annotWidth+"px",flexShrink:0,background:W.bg2,
-        borderLeft:`1px solid ${W.splitBg}`,display:"flex",flexDirection:"column",
-        position:"relative",
-        ...(isTablet?{position:"absolute",right:0,top:0,bottom:0,zIndex:25,
-          boxShadow:"-4px 0 24px rgba(0,0,0,0.6)"}:{}),
-      }
-    },
-      !isTablet&&React.createElement("div",{
-        style:{position:"absolute",left:0,top:0,bottom:0,width:"5px",cursor:"ew-resize",zIndex:10},
-        onMouseDown:e=>{
-          e.preventDefault();const sx=e.clientX,sw=annotWidth;
-          const m=ev=>setAnnotWidth(Math.max(280,sw+(sx-ev.clientX)));
-          const u=()=>{document.removeEventListener("mousemove",m);document.removeEventListener("mouseup",u);};
-          document.addEventListener("mousemove",m);document.addEventListener("mouseup",u);
-        }
+    pdfFile && showAnnotPanel&&React.createElement("div",{style:{
+      width: isTablet ? "280px" : annotWidth+"px",
+      flexShrink:0, background:W.bg2,
+      borderLeft:`1px solid ${W.splitBg}`,
+      display:"flex", flexDirection:"column",
+      position:"relative",
+      // Op mobile/tablet als absolute overlay
+      ...(isTablet ? {
+        position:"absolute",right:0,top:0,bottom:0,zIndex:20,
+        boxShadow:"-4px 0 20px rgba(0,0,0,0.5)"
+      } : {}),
+    }},
+      // ── Drag-handle (linkerrand) ─────────────────────────────────────────
+      !isTablet && React.createElement("div",{
+        style:{
+          position:"absolute", left:0, top:0, bottom:0, width:"5px",
+          cursor:"ew-resize", zIndex:10,
+          background:"transparent",
+          transition:"background 0.15s",
+        },
+        title:"Sleep om de breedte aan te passen",
+        onMouseEnter: e => { e.currentTarget.style.background = W.blue+"55"; },
+        onMouseLeave: e => { e.currentTarget.style.background = "transparent"; },
+        onMouseDown: e => {
+          e.preventDefault();
+          annotDragRef.current = { startX: e.clientX, startW: annotWidth };
+          const onMove = ev => {
+            const dx  = annotDragRef.current.startX - ev.clientX; // sleep naar links = groter
+            const newW = Math.max(280, annotDragRef.current.startW + dx);
+            setAnnotWidth(newW);
+          };
+          const onUp = () => {
+            document.removeEventListener("mousemove", onMove);
+            document.removeEventListener("mouseup",  onUp);
+            annotDragRef.current = null;
+          };
+          document.addEventListener("mousemove", onMove);
+          document.addEventListener("mouseup",   onUp);
+        },
       }),
-      React.createElement("div",{style:{padding:"8px 10px",borderBottom:`1px solid ${W.splitBg}`,
-        display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0}},
-        React.createElement("span",{style:{fontSize:"12px",fontWeight:"600",color:W.fgMuted}},"ANNOTATIES"),
-        React.createElement("div",{style:{display:"flex",gap:"4px",alignItems:"center"}},
-          filterTag&&React.createElement("button",{onClick:()=>setFilterTag(null),
-            style:{fontSize:"11px",padding:"2px 7px",borderRadius:"10px",
-              background:W.commentBg||"rgba(159,202,86,.1)",color:W.tagColor||W.comment,
-              border:`1px solid ${W.tagBorder||"rgba(159,202,86,.3)"}`,cursor:"pointer"}},
-            filterTag," ×"),
-          React.createElement("button",{onClick:()=>setShowAnnotPanel(false),
-            style:{background:isTablet?W.bg3:"none",border:isTablet?`1px solid ${W.splitBg}`:"none",
-              borderRadius:"6px",color:W.fgMuted,fontSize:isTablet?"18px":"16px",
-              cursor:"pointer",padding:isTablet?"4px 10px":"0 2px",lineHeight:1}},
-            isTablet?"✕ Sluit":"×")
-        )
+      React.createElement("div",{style:{background:W.bg2,borderBottom:`1px solid ${W.splitBg}`,padding:"6px 10px",display:"flex",alignItems:"center",gap:"6px",flexShrink:0}},
+        React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:"1px",flex:1}},
+          React.createElement("span",{style:{fontSize:"14px",color:W.statusFg,letterSpacing:"1px"}},"ANNOTATIES"),
+          pdfFile&&React.createElement("span",{style:{fontSize:"11px",color:"#c8c0b4",maxWidth:"180px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},pdfFile.name)
+        ),
+        React.createElement("span",{style:{background:W.blue,color:W.bg,borderRadius:"10px",padding:"0 6px",fontSize:"14px"}},fileHl.length),
+        React.createElement("div",{style:{flex:1}}),
+        // Export alle annotaties als literatuurnotitie
+        fileHl.length > 0 && React.createElement("button",{
+          onClick: exportAllAnnotations,
+          title: "Exporteer alle annotaties als één literatuurnotitie",
+          style:{
+            background:"rgba(234,231,136,0.1)",
+            border:`1px solid rgba(234,231,136,0.3)`,
+            borderRadius:"4px", color:W.yellow,
+            padding:"3px 8px", fontSize:"10px",
+            cursor:"pointer", fontWeight:"600",
+            display:"flex", alignItems:"center", gap:"4px",
+          }
+        },"⬆ exporteer"),
+        filterTag&&React.createElement("button",{
+          onClick:()=>setFilterTag(null),
+          style:{background:"rgba(159,202,86,0.16)",color:"#b8e06a",
+                 border:"1px solid rgba(159,202,86,0.45)",
+                 borderRadius:"5px",fontSize:"12px",fontWeight:"600",
+                 padding:"3px 9px",cursor:"pointer",
+                 display:"flex",alignItems:"center",gap:"4px"}
+        },
+          React.createElement("span",{style:{fontSize:"10px",opacity:0.7}},"#"),
+          filterTag,
+          React.createElement("span",{style:{marginLeft:"3px",fontSize:"13px",opacity:0.7}},"×")
+        ),
+        React.createElement("button",{onClick:()=>setShowAnnotPanel(false),style:{background:"none",border:"none",color:W.fgMuted,fontSize:"16px",cursor:"pointer",padding:"0 2px",lineHeight:1}}, "×")
       ),
-      allAnnotTags.length>0&&React.createElement("div",{style:{padding:"5px 8px",borderBottom:`1px solid ${W.splitBg}`,flexShrink:0}},
+      allAnnotTags.length>0&&React.createElement("div",{style:{padding:"5px 8px",borderBottom:`1px solid ${W.splitBg}`,background:"rgba(0,0,0,0.15)",flexShrink:0}},
         React.createElement(TagFilterBar,{tags:allAnnotTags,activeTag:filterTag,onChange:setFilterTag,compact:true,maxVisible:5})
       ),
-      React.createElement("div",{style:{flex:1,overflow:"auto",padding:"4px 0"}},
+      React.createElement("div",{style:{flex:1,overflow:"auto"}},
         panelHl.length===0
-          ?React.createElement("div",{style:{padding:"24px 14px",color:W.fgMuted,fontSize:"13px",textAlign:"center"}},
-            !pdfFile
-              ?React.createElement("div",null,
-                React.createElement("div",{style:{fontSize:"28px",marginBottom:"8px"}},"📄"),
-                React.createElement("div",null,"Geen PDF geopend"))
-              :React.createElement("div",null,
-                React.createElement("div",{style:{fontSize:"24px",marginBottom:"8px"}},"✏️"),
-                React.createElement("div",null,"Selecteer tekst en kies een kleur"))
-          )
+          ?React.createElement("div",{style:{padding:"24px 14px",color:W.fgMuted,fontSize:"14px",textAlign:"center",lineHeight:"2"}},
+              !pdfFile
+              ? React.createElement(React.Fragment,null,
+                  React.createElement("div",{style:{fontSize:"28px",marginBottom:"8px"}},"📄"),
+                  React.createElement("div",{style:{color:W.fgDim,marginBottom:"4px"}},"Geen PDF geopend"),
+                  React.createElement("div",{style:{fontSize:"14px",color:W.splitBg,lineHeight:"1.7"}},
+                    "Open een PDF via de toolbar.","\n","Annotaties worden hier getoond.")
+                )
+              : filterTag
+                ? `Geen annotaties met #${filterTag}`
+                : React.createElement(React.Fragment,null,
+                    React.createElement("div",{style:{fontSize:"20px",marginBottom:"8px"}},"✏"),
+                    React.createElement("div",{style:{color:W.fgDim}},"Nog geen annotaties"),
+                    React.createElement("div",{style:{fontSize:"14px",color:W.splitBg,lineHeight:"1.7",marginTop:"4px"}},
+                      "Selecteer tekst in de PDF","\n","om een annotatie te maken.")
+                  ))
           :panelHl.map(h=>{
             const col=HCOLORS.find(c=>c.id===h.colorId)||HCOLORS[0];
             const isEditing=editingId===h.id;
-            return React.createElement("div",{key:h.id,style:{borderBottom:`1px solid ${W.splitBg}22`,padding:"8px 10px"}},
-              React.createElement("div",{style:{display:"flex",alignItems:"center",gap:"6px",marginBottom:"4px",cursor:"pointer"},
-                onClick:()=>setEditingId(isEditing?null:h.id)},
-                React.createElement("div",{style:{width:"10px",height:"10px",borderRadius:"50%",background:col.border,flexShrink:0}}),
-                React.createElement("span",{style:{fontSize:"11px",color:W.fgMuted,flex:1}},col.label),
-                React.createElement("span",{onClick:e=>{e.stopPropagation();setPageNum(h.page);scrollToPage(h.page);},
-                  style:{fontSize:"11px",fontWeight:"600",color:col.border,background:col.bg,
-                    border:`1px solid ${col.border}55`,borderRadius:"10px",padding:"1px 7px",
-                    marginLeft:"auto",cursor:"pointer",flexShrink:0}},"p.",h.page),
-                React.createElement("span",{style:{fontSize:"11px",color:W.fgMuted}},isEditing?"▲":"▼")
+            return React.createElement("div",{key:h.id,style:{borderBottom:`1px solid ${W.splitBg}`,borderLeft:`3px solid ${col.border}`,background:isEditing?"rgba(255,255,255,0.025)":"transparent"}},
+              React.createElement("div",{style:{padding:"8px 10px",cursor:"pointer"},onClick:()=>setEditingId(isEditing?null:h.id)},
+                React.createElement("div",{style:{display:"flex",alignItems:"flex-start",gap:"6px",marginBottom:"3px"}},
+                  React.createElement("div",{style:{fontSize:"14px",color:W.string,fontStyle:"italic",lineHeight:"1.5",flex:1}},'"',h.text.substring(0,70),h.text.length>70?"…":"",'"'),
+                ),
+                h.note&&!isEditing&&React.createElement("div",{style:{fontSize:"14px",color:W.fg,lineHeight:"1.4",marginBottom:"4px"}},h.note.substring(0,60),h.note.length>60?"…":""),
+                React.createElement("div",{style:{display:"flex",gap:"3px",flexWrap:"wrap",alignItems:"center"}},
+                  ...(h.tags||[]).map(t=>React.createElement(TagPill,{key:t,tag:t,small:true})),
+                  React.createElement("span",{
+                    onClick:e=>{e.stopPropagation();setPageNum(h.page);scrollToPage(h.page);},
+                    title:`Ga naar pagina ${h.page}`,
+                    style:{
+                      fontSize:"11px", fontWeight:"600",
+                      color:col.border,
+                      background:col.bg,
+                      border:`1px solid ${col.border}55`,
+                      borderRadius:"10px",
+                      padding:"1px 7px",
+                      marginLeft:"auto",
+                      cursor:"pointer",
+                      flexShrink:0,
+                    }
+                  },"p.",h.page),
+                  React.createElement("span",{style:{fontSize:"11px",color:W.fgMuted}},isEditing?"▲":"▼")
+                )
               ),
-              React.createElement("div",{style:{fontSize:"12px",color:W.fg,fontStyle:"italic",lineHeight:"1.5",
-                borderLeft:`3px solid ${col.border}`,paddingLeft:"6px",marginBottom:"4px"}},
-                '"',h.text&&h.text.substring(0,80),h.text&&h.text.length>80?"...":"",'"'),
-              h.note&&!isEditing&&React.createElement("div",{style:{fontSize:"11px",color:W.fgDim,
-                padding:"3px 6px",background:col.bg,borderRadius:"3px",marginBottom:"4px"}},h.note),
-              isEditing&&React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:"4px",marginTop:"4px"}},
-                React.createElement("textarea",{value:h.note||"",rows:3,placeholder:"Notitie...",
-                  onChange:e=>updateHighlight(h.id,{note:e.target.value}),
-                  style:{width:"100%",background:W.bg,border:`1px solid ${W.splitBg}`,
-                    borderRadius:"4px",color:W.fg,fontSize:"12px",padding:"4px 6px",resize:"none"}}),
-                React.createElement("div",{style:{display:"flex",gap:"4px"}},
-                  React.createElement("button",{onClick:()=>setEditingId(null),
-                    style:{flex:1,padding:"3px",borderRadius:"4px",background:W.bg3,
-                      border:`1px solid ${W.splitBg}`,color:W.fgMuted,cursor:"pointer",fontSize:"11px"}},"✓ Klaar"),
-                  React.createElement("button",{onClick:()=>{AnnotationStore.remove(h.id);setHighlights(AnnotationStore.getAll());setEditingId(null);},
-                    style:{padding:"3px 8px",borderRadius:"4px",background:"none",
-                      border:`1px solid ${W.orange}44`,color:W.orange,cursor:"pointer",fontSize:"11px"}},"× Wis")
+              isEditing&&React.createElement("div",{style:{padding:"0 10px 12px",borderTop:`1px solid ${W.splitBg}`}},
+                React.createElement("div",{style:{fontSize:"9px",color:W.fgMuted,margin:"8px 0 4px",letterSpacing:"1px"}},"NOTITIE"),
+                React.createElement("textarea",{value:h.note||"",onChange:e=>updateHighlight(h.id,{note:e.target.value}),rows:3,style:{width:"100%",background:W.bg,border:`1px solid ${W.splitBg}`,borderRadius:"4px",padding:"6px 8px",color:W.fg,fontSize:"14px",outline:"none",resize:"vertical"},placeholder:"Notitie toevoegen…"}),
+                React.createElement("div",{style:{fontSize:"9px",color:W.fgMuted,margin:"8px 0 4px",letterSpacing:"1px"}},"TAGS"),
+                React.createElement(SmartTagEditor,{tags:h.tags||[],onChange:tags=>updateHighlight(h.id,{tags}),allTags:[...allTags,...allAnnotTags]}),
+                React.createElement("div",{style:{display:"flex",gap:"4px",margin:"8px 0",flexWrap:"wrap",alignItems:"center"}},
+                ...HCOLORS.map(c=>React.createElement("button",{
+                  key:c.id,
+                  onClick:()=>updateHighlight(h.id,{colorId:c.id}),
+                  title:c.label + (c.desc ? " — " + c.desc : ""),
+                  style:{
+                    display:"flex",alignItems:"center",gap:"3px",
+                    padding:"2px 6px",borderRadius:"10px",
+                    background:h.colorId===c.id?c.bg:"transparent",
+                    border:`1px solid ${h.colorId===c.id?c.border:W.splitBg}`,
+                    cursor:"pointer",fontSize:"9px",color:h.colorId===c.id?c.border:W.fgDim,
+                    fontWeight:h.colorId===c.id?"700":"400",
+                  }
+                },
+                  React.createElement("span",{style:{width:"8px",height:"8px",borderRadius:"50%",background:c.border,flexShrink:0}}),
+                  c.label.split(" · ")[0]
+                ))),
+                React.createElement("div",{style:{display:"flex",gap:"6px"}},
+                  React.createElement("button",{onClick:()=>setEditingId(null),style:{background:W.comment,color:W.bg,border:"none",borderRadius:"3px",padding:"3px 10px",fontSize:"14px",cursor:"pointer",fontWeight:"bold"}},"✓ klaar"),
+                  React.createElement("button",{onClick:()=>removeHighlight(h.id),style:{background:"none",color:W.orange,border:`1px solid rgba(229,120,109,0.3)`,borderRadius:"3px",padding:"3px 8px",fontSize:"14px",cursor:"pointer"}},":del")
                 )
               )
             );
           })
-      ),
-      React.createElement("div",{style:{padding:"8px 10px",borderTop:`1px solid ${W.splitBg}`,flexShrink:0,display:"flex",gap:"6px"}},
-        React.createElement("button",{onClick:()=>{
-            const stem=pdfFile?.name?.replace(/\.pdf$/i,"")||"PDF";
-            const body=["# Annotaties — "+stem,...fileHl.map(h=>{
-              const col=HCOLORS.find(c=>c.id===h.colorId)||HCOLORS[0];
-              return "\n## p."+h.page+" — "+col.label+"\n> "+(h.text||"")+(h.note?"\n\n"+h.note:"");
-            })].join("\n");
-            if(onSaveNote) onSaveNote({title:"Annotaties — "+stem,content:body,
-              tags:["annotaties","literatuur"],noteType:"literature",
-              importedAt:new Date().toISOString()});
-          },
-          style:{flex:1,padding:"5px",borderRadius:"5px",
-            background:W.blueBg||"rgba(138,198,242,.1)",color:W.blue,
-            border:`1px solid ${W.blueBorder||"rgba(138,198,242,.3)"}`,
-            cursor:"pointer",fontSize:"12px",fontWeight:"600"}},"⬆ Exporteer")
       )
     )
   );
-};  // Laad native PDF outline via PDF.js getOutline()
-  React.useEffect(() => {
-    if (!pdfDoc) { setNativeOutline([]); return; }
-    (async () => {
-      try {
-        const outline = await pdfDoc.getOutline();
-        if (!outline || !outline.length) { setNativeOutline([]); return; }
-        const resolveItem = async (item, depth) => {
-          let page = null;
-          try {
-            if (item.dest) {
-              const dest = typeof item.dest === "string"
-                ? await pdfDoc.getDestination(item.dest)
-                : item.dest;
-              if (dest && dest[0]) page = (await pdfDoc.getPageIndex(dest[0])) + 1;
-            }
-          } catch(e) {}
-          const children = item.items
-            ? await Promise.all(item.items.map(c => resolveItem(c, depth+1)))
-            : [];
-          return { text: item.title||"", page, depth: depth||0, bold: item.bold, children };
-        };
-        const resolved = await Promise.all(outline.map(i => resolveItem(i, 0)));
-        setNativeOutline(resolved);
-      } catch(e) { setNativeOutline([]); }
-    })();
-  }, [pdfDoc]);
+};
 
 
+// ── Vault Settings Panel ───────────────────────────────────────────────────────

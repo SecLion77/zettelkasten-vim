@@ -1593,11 +1593,9 @@ const App = () => {
           if(t==="pdf") return React.createElement("div",{style:{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",minHeight:0}},
             React.createElement(PDFViewer,{pdfNotes,setPdfNotes,allTags,serverPdfs,
               notes,isTablet,
-              llmModel: W.model || localStorage.getItem("zk_model") || "gemma3:12b",
               onRefreshPdfs:refreshPdfs,
               onPasteToNote: selId ? handlePasteToNote : null,
               onAddNote:async(note)=>{ await NoteStore.save(note); setNotes([...NoteStore.getAll()]); },
-              onSaveNote:async(note)=>{ await NoteStore.save({...note,id:note.id||genId(),created:note.created||new Date().toISOString(),modified:new Date().toISOString()}); setNotes([...NoteStore.getAll()]); },
               onDeletePdf:async(fname)=>{
                 const stem=fname.replace(/\.pdf$/i,"");
                 const linked=notes.filter(n=>n.tags?.includes("samenvatting")&&(n.title?.includes(stem)||n.content?.includes(fname)));
