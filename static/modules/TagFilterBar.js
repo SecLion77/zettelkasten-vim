@@ -39,6 +39,11 @@ const TagFilterBar = ({tags=[], activeTag, onChange, compact=false, tagColors={}
   const hiddenCount = filtered.length - maxVisible;
   const hasMore     = hiddenCount > 0;
 
+  // activeTag kan een string zijn (enkelvoudig) of een Set (multi-select)
+  const isActive = (t) => activeTag instanceof Set
+    ? activeTag.has(t)
+    : isActive(t);
+
   // chipStyle: geef alleen layout terug — kleur komt via CSS klasse .zk-chip
   const chipStyle = (t, active) => ({
     fontSize:sz, padding:pad, borderRadius:rad,
@@ -91,7 +96,9 @@ const TagFilterBar = ({tags=[], activeTag, onChange, compact=false, tagColors={}
       fontWeight: activeTag ? "600" : "400",
       cursor:"default",
     }},
-      activeTag ? `#${activeTag}` : `${tags.length}`
+      activeTag instanceof Set
+        ? (activeTag.size === 0 ? `${tags.length}` : [...activeTag].map(t=>"#"+t).join(", "))
+        : activeTag ? `#${activeTag}` : `${tags.length}`
     ),
     // "× wis filter" knopje als er een actief filter is
     activeTag && React.createElement("span",{

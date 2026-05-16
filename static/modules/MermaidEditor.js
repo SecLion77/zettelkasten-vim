@@ -1112,6 +1112,30 @@ const MermaidEditor = ({ initialText="", onSave, onCancel, notes=[], serverPdfs=
         }
       }, showPreview ? "⊟ preview" : "⊞ preview"),
 
+      // 📋 → Canvas (stuur zichtbare notities vanuit de mermaid mindmap)
+      window._sendToCanvas && React.createElement("button",{
+        onClick:()=>{
+          // Extraheer noteIds uit de mermaid tekst via note-titles
+          const lines=(editorRef?.current?.value||text||"").split("\n");
+          const titles=lines
+            .map(l=>l.trim().replace(/^[\[\]()]+|[\[\]()]+$/g,"").trim())
+            .filter(t=>t.length>2);
+          const ids=(notes||[])
+            .filter(n=>titles.some(t=>n.title?.toLowerCase()===t.toLowerCase()))
+            .map(n=>n.id);
+          if(ids.length) window._sendToCanvas(ids);
+          else alert("Geen overeenkomende notities gevonden");
+        },
+        title:"Stuur zichtbare notities naar canvas",
+        style:{
+          background: W.tagBg||"rgba(159,202,86,0.08)",
+          border:`1px solid ${W.tagBorder||"rgba(159,202,86,0.3)"}`,
+          borderRadius:"6px", padding:"4px 10px",
+          color: W.tagColor||"#9fca56",
+          fontSize:"14px", cursor:"pointer", flexShrink:0,
+        }
+      },"📋 → Canvas"),
+
       // ✓ opslaan
       React.createElement("button",{
         onClick:handleSave, disabled:saving,
@@ -1183,6 +1207,7 @@ const MindMap = ({notes, allTags, onSelectNote, aiMindmap, onAddNote, serverPdfs
   const [nodes,      setNodes]     = useState([]);
   const [edges,      setEdges]     = useState([]);
   const [selId,      setSelId]     = useState(null);
+  const [peekNote,   setPeekNote]  = useState(null); // preview popup bij klik
   const [editingId,  setEditingId] = useState(null);
   const [editLabel,  setEditLabel] = useState("");
   const [zoom,       setZoom]      = useState(1);
@@ -1191,7 +1216,8 @@ const MindMap = ({notes, allTags, onSelectNote, aiMindmap, onAddNote, serverPdfs
   const [layout,     setLayout]    = useState("radial");
   const [showTags,   setShowTags]  = useState(true);
   const [showNotes,  setShowNotes] = useState(true);
-  const [tagFilter,  setTagFilter] = useState(null);
+  const [tagFilters, setTagFilters] = useState(new Set()); // multi-select tag filter
+  const [tagSearch,  setTagSearch]  = useState("");          // zoek in tags
   const [aiMode,     setAiMode]    = useState(false);  // toon AI mindmap ipv vault
   const [mmView,     setMmView]    = useState("canvas"); // "canvas" | "mermaid"
   const [editMermaid,setEditMermaid]=useState(null);   // null = nieuw, string = bestaande code
@@ -1228,7 +1254,7 @@ const MindMap = ({notes, allTags, onSelectNote, aiMindmap, onAddNote, serverPdfs
     const CH = cv.clientHeight || cv.height/dpr || 600;
     const cx = CW / 2, cy = CH / 2;
 
-    const visibleTags = tagFilter ? [tagFilter]
+    const visibleTags = tagFilters.size > 0 ? [...tagFilters]
       : (showTags ? allTags : []);
 
     const newNodes = [];
@@ -1355,7 +1381,7 @@ const MindMap = ({notes, allTags, onSelectNote, aiMindmap, onAddNote, serverPdfs
     setEdges(newEdges);
     mmCentredRef.current = false; // volgende resize centreert opnieuw
     setZoom(0.85);
-  }, [notes, allTags, tagFilter, showTags, showNotes, layout, tagColorMap]);
+  }, [notes, allTags, tagFilters, showTags, showNotes, layout, tagColorMap]);
 
   useEffect(() => { buildLayout(); }, [buildLayout]);
 
@@ -1788,7 +1814,10 @@ const MindMap = ({notes, allTags, onSelectNote, aiMindmap, onAddNote, serverPdfs
       const n = nodesRef.current.find(x=>x.id===nodeId);
       if (!n) return;
       if (n.type==="note" && n.noteId) {
-        onSelectNote?.(n.noteId);
+        // Toon preview ipv direct navigeren
+        const note = notes.find(nt=>nt.id===n.noteId);
+        if (note) setPeekNote(note);
+        else onSelectNote?.(n.noteId);
       }
     }
   }, [onSelectNote]);
@@ -1998,9 +2027,146 @@ const MindMap = ({notes, allTags, onSelectNote, aiMindmap, onAddNote, serverPdfs
   }
 
   return React.createElement("div", {
-    style:{flex:1,display:"flex",flexDirection:"column",minHeight:0,overflow:"hidden",position:"relative"}
+    style:{flex:1,display:"flex",flexDirection:"row",minHeight:0,overflow:"hidden",position:"relative"}
   },
 
+    // ── Linker paneel: compacte toolbar ─────────────────────────────────────
+    React.createElement("div",{style:{
+      width:"200px", flexShrink:0, background:W.bg2,
+      borderRight:`1px solid ${W.splitBg}`,
+      display:"flex", flexDirection:"column", overflowY:"auto",
+    }},
+      // Rij 1: modus + layout + weergave
+      React.createElement("div",{style:{
+        display:"flex", alignItems:"center", gap:"4px",
+        padding:"6px 8px", borderBottom:`1px solid ${W.splitBg}`,
+        flexWrap:"wrap",
+      }},
+        ...["view","edit"].map(m=>React.createElement("button",{
+          key:m, onClick:()=>setMode(m),
+          className:"btn-wombat"+(mode===m?" active-blue":""),
+          style:{fontSize:"12px",padding:"3px 8px"},
+        }, m==="view"?"bekijk":"bewerk")),
+        React.createElement("div",{style:{width:"1px",height:"16px",background:W.splitBg,margin:"0 2px"}}),
+        ...[["radial","⊙"],["tree","T"],["force","⟳"]].map(([l,ic])=>React.createElement("button",{
+          key:l, onClick:()=>setLayout(l), title:l,
+          className:"btn-wombat"+(layout===l?" active-blue":""),
+          style:{fontSize:"12px",padding:"3px 7px"},
+        }, ic)),
+        React.createElement("div",{style:{width:"1px",height:"16px",background:W.splitBg,margin:"0 2px"}}),
+        React.createElement("button",{
+          onClick:()=>setShowTags(v=>!v), title:showTags?"Tags verbergen":"Tags tonen",
+          className:"btn-wombat"+(showTags?" active-blue":""),
+          style:{fontSize:"12px",padding:"3px 7px"},
+        }, "#"),
+        React.createElement("button",{
+          onClick:()=>setShowNotes(v=>!v), title:showNotes?"Notities verbergen":"Notities tonen",
+          className:"btn-wombat"+(showNotes?" active-blue":""),
+          style:{fontSize:"12px",padding:"3px 7px"},
+        }, "□"),
+      ),
+      // Rij 2: acties
+      React.createElement("div",{style:{
+        display:"flex", gap:"4px", padding:"6px 8px",
+        borderBottom:`1px solid ${W.splitBg}`,
+      }},
+        React.createElement("button",{
+          onClick:()=>{ setMmView("mermaid"); setEditMermaid(null); },
+          className:"btn-wombat",
+          style:{fontSize:"12px",padding:"4px 8px"},
+        }, "✦ Nieuw"),
+        React.createElement("button",{
+          onClick:()=>{
+            if(!window._sendToCanvas) return;
+            if(selId){ const n=nodes.find(n=>n.id===selId); if(n?.noteId){window._sendToCanvas([n.noteId]);return;} }
+            const ids=nodes.filter(n=>n.type==="note"&&n.noteId).map(n=>n.noteId);
+            if(ids.length) window._sendToCanvas(ids);
+          },
+          className:"btn-wombat active-green",
+          title:"Stuur zichtbare notities naar canvas",
+          style:{fontSize:"12px",padding:"4px 8px",flex:1,justifyContent:"center"},
+        }, "📋 Canvas"),
+      ),
+      // Tag filter met zoekbalk
+      React.createElement("div",{style:{display:"flex",flexDirection:"column",flex:1,minHeight:0}},
+        // Zoekbalk
+        React.createElement("div",{style:{padding:"6px 8px",borderBottom:`1px solid ${W.splitBg}`,flexShrink:0}},
+          React.createElement("div",{style:{position:"relative"}},
+            React.createElement("span",{style:{
+              position:"absolute",left:"8px",top:"50%",transform:"translateY(-50%)",
+              color:W.fgMuted,fontSize:"12px",pointerEvents:"none"
+            }},"🔍"),
+            React.createElement("input",{
+              type:"text",
+              value:tagSearch,
+              onChange:e=>setTagSearch(e.target.value),
+              placeholder:"Zoek tag…",
+              style:{
+                width:"100%", padding:"5px 8px 5px 26px",
+                background:W.bg, border:`1px solid ${W.splitBg}`,
+                borderRadius:"5px", color:W.fg, fontSize:"12px",
+                outline:"none", fontFamily:"inherit",
+              }
+            })
+          )
+        ),
+        // Actieve filters samenvatting
+        tagFilters.size > 0 && React.createElement("div",{style:{
+          padding:"5px 8px", borderBottom:`1px solid ${W.splitBg}`,
+          display:"flex", alignItems:"center", gap:"6px", flexShrink:0,
+          background:W.tagBg||"rgba(159,202,86,0.06)",
+        }},
+          React.createElement("span",{style:{fontSize:"11px",color:W.tagColor||"#9fca56",flex:1}},
+            tagFilters.size+" actief: "+[...tagFilters].map(t=>"#"+t).join(", ")
+          ),
+          React.createElement("button",{
+            onClick:()=>setTagFilters(new Set()),
+            style:{fontSize:"11px",padding:"1px 6px",borderRadius:"3px",
+              background:"none",border:`1px solid ${W.splitBg}`,
+              color:W.fgMuted,cursor:"pointer"}
+          },"× wis")
+        ),
+        // Tags lijst — scrollbaar, volledige hoogte
+        React.createElement("div",{style:{flex:1,overflowY:"auto",padding:"6px 8px"}},
+          React.createElement("div",{style:{display:"flex",flexWrap:"wrap",gap:"5px",alignContent:"flex-start"}},
+            // "Alles" knop
+            !tagSearch && React.createElement("button",{
+              onClick:()=>setTagFilters(new Set()),
+              className:"zk-chip"+(tagFilters.size===0?" zk-chip-active":""),
+              style:{fontSize:"12px",padding:"3px 8px"},
+            },"alles"),
+            // Gefilterde tags
+            ...allTags
+              .filter(t=>!tagSearch||t.toLowerCase().includes(tagSearch.toLowerCase()))
+              .map(t=>{
+                const active=tagFilters.has(t);
+                const col=tagColorMap[t];
+                return React.createElement("button",{
+                  key:t,
+                  onClick:()=>setTagFilters(prev=>{
+                    const next=new Set(prev);
+                    next.has(t)?next.delete(t):next.add(t);
+                    return next;
+                  }),
+                  style:{
+                    fontSize:"12px",padding:"3px 8px",borderRadius:"4px",
+                    cursor:"pointer",whiteSpace:"nowrap",
+                    background: active?(col||W.tagBg||"rgba(159,202,86,0.2)"):"none",
+                    color: active?(col?".bg":W.tagColor||"#9fca56"):W.fgMuted,
+                    border:`1px solid ${active?(col||W.tagBorder||"rgba(159,202,86,0.4)"):W.splitBg}`,
+                    fontWeight:active?"600":"400",
+                    transition:"all 0.1s",
+                  }
+                },"#"+t);
+              })
+          )
+        )
+      )
+    ),
+
+    // ── Rechter paneel: canvas ────────────────────────────────────────────────
+    React.createElement("div",{style:{flex:1,display:"flex",flexDirection:"column",
+      minHeight:0,overflow:"hidden",position:"relative"}},
     // Canvas
     React.createElement("canvas", {
       ref: cvRef,
@@ -2009,190 +2175,6 @@ const MindMap = ({notes, allTags, onSelectNote, aiMindmap, onAddNote, serverPdfs
       onWheel,
       onContextMenu: e=>e.preventDefault(),
     }),
-
-    // ── Controls panel linksboven ────────────────────────────────────────────
-    React.createElement("div", {
-      style:{position:"absolute",top:"10px",left:"10px",zIndex:10,
-             background:"rgba(28,28,28,0.88)",border:`1px solid ${W.splitBg}`,
-             borderRadius:"8px",padding:"10px 12px",backdropFilter:"blur(6px)",
-             display:"flex",flexDirection:"column",gap:"7px",minWidth:"210px"}
-    },
-
-      // ✦ Nieuwe lege mindmap — boven de tabs
-      React.createElement("button",{
-        onClick:()=>{ setMmView("mermaid"); setEditMermaid(null); },
-        title:"Nieuwe lege mindmap openen in editor",
-        style:{
-          width:"100%", padding:"6px 10px",
-          background:"rgba(138,198,242,0.07)",
-          border:`1px solid rgba(138,198,242,0.3)`,
-          borderRadius:"6px", color:W.blue,
-          fontSize:"14px", fontWeight:"600",
-          cursor:"pointer", marginBottom:"4px",
-          display:"flex", alignItems:"center",
-          justifyContent:"center", gap:"6px",
-          transition:"all 0.12s",
-        },
-        onMouseEnter:e=>{
-          e.currentTarget.style.background="rgba(138,198,242,0.15)";
-          e.currentTarget.style.borderColor="rgba(138,198,242,0.55)";
-        },
-        onMouseLeave:e=>{
-          e.currentTarget.style.background="rgba(138,198,242,0.07)";
-          e.currentTarget.style.borderColor="rgba(138,198,242,0.3)";
-        },
-      },
-        React.createElement("span",null,"✦"),
-        "Nieuwe mindmap"
-      ),
-
-      // AI/Vault/Mermaid toggle — onder de nieuwe-knop
-      React.createElement("div",{
-        style:{display:"flex",gap:"4px",background:"rgba(0,0,0,0.3)",
-               borderRadius:"6px",padding:"3px",marginBottom:"2px"}
-      },
-        [
-          ...(aiMindmap ? [{id:"ai",label:"🧠 AI"},{id:"vault",label:"🕸 Vault"}] : [{id:"vault",label:"🕸 Vault"}]),
-          {id:"mermaid",label:"🌿 Mermaid"},
-        ].map(opt =>
-          React.createElement("button",{key:opt.id,
-            onClick:()=>{
-              if (opt.id==="mermaid") { setMmView("mermaid"); setEditMermaid(nodesToMermaid()); }
-              else { setAiMode(opt.id==="ai"); }
-            },
-            style:{
-              flex:1,
-              background: (opt.id==="mermaid" ? mmView==="mermaid"
-                          : opt.id==="ai" ? (aiMode&&mmView==="canvas")
-                          : (!aiMode&&mmView==="canvas"))
-                ? "rgba(138,198,242,0.2)" : "none",
-              border:`1px solid ${
-                (opt.id==="mermaid" ? mmView==="mermaid"
-                : opt.id==="ai" ? (aiMode&&mmView==="canvas")
-                : (!aiMode&&mmView==="canvas"))
-                ? "rgba(138,198,242,0.5)" : "transparent"}`,
-              color: (opt.id==="mermaid" ? mmView==="mermaid"
-                     : opt.id==="ai" ? (aiMode&&mmView==="canvas")
-                     : (!aiMode&&mmView==="canvas"))
-                ? "#a8d8f0" : W.fgMuted,
-              borderRadius:"4px",padding:"3px 6px",fontSize:"14px",cursor:"pointer"
-            }
-          },opt.label)
-        )
-      ),
-
-      // AI mindmap info
-      aiMode && aiMindmap && React.createElement("div",{
-        style:{fontSize:"9px",color:W.comment,padding:"3px 6px",
-               background:"rgba(159,202,86,0.08)",borderRadius:"4px",
-               borderLeft:"2px solid rgba(159,202,86,0.4)"}
-      },
-        "📄 ",aiMindmap.root,
-        React.createElement("br"),
-        `${aiMindmap.branches?.length||0} takken · `,
-        `${aiMindmap.branches?.reduce((a,b)=>(a+(b.children?.length||0)),0)||0} subtopics`
-      ),
-
-      // ── Opslaan als notitie ──────────────────────────────────────────────
-      onAddNote && nodes.length > 1 && React.createElement("div",{
-        style:{borderTop:`1px solid ${W.splitBg}`,paddingTop:"7px"}
-      },
-        React.createElement("button",{
-          onClick: saveAsNote,
-          disabled: saving,
-          style:{
-            width:"100%", padding:"6px 10px",
-            background: saving
-              ? "rgba(159,202,86,0.08)"
-              : "linear-gradient(135deg,rgba(159,202,86,0.22),rgba(159,202,86,0.12))",
-            border:`1px solid rgba(159,202,86,${saving?0.15:0.45})`,
-            borderRadius:"5px", color:saving?W.fgMuted:W.comment,
-            fontSize:"14px", fontWeight:"600", cursor:saving?"default":"pointer",
-            display:"flex", alignItems:"center", justifyContent:"center", gap:"5px",
-            transition:"all 0.15s",
-          }
-        },
-          saving
-            ? React.createElement(React.Fragment,null,
-                React.createElement("span",{style:{fontSize:"14px"}},"⏳"),
-                "Opslaan…")
-            : React.createElement(React.Fragment,null,
-                React.createElement("span",{style:{fontSize:"14px"}},"💾"),
-                "Opslaan als notitie")
-        ),
-        saveMsg && React.createElement("div",{style:{
-          marginTop:"5px", fontSize:"14px", textAlign:"center",
-          color: saveMsg.startsWith("✓") ? W.comment : W.orange,
-        }}, saveMsg)
-      ),
-      React.createElement("div",{style:{display:"flex",gap:"5px",alignItems:"center"}},
-        React.createElement("span",{style:{fontSize:"9px",color:"rgba(138,198,242,0.5)",
-          letterSpacing:"1.5px",flex:1}},"MODUS"),
-        [{id:"view",label:"👁 bekijk"},{id:"edit",label:"✏ bewerk"}].map(m=>
-          React.createElement("button",{key:m.id, onClick:()=>setMode(m.id),
-            style:{background:mode===m.id?"rgba(138,198,242,0.18)":"none",
-                   border:`1px solid ${mode===m.id?"rgba(138,198,242,0.5)":W.splitBg}`,
-                   color:mode===m.id?"#a8d8f0":W.fgMuted,
-                   borderRadius:"4px",padding:"2px 8px",fontSize:"14px",cursor:"pointer"}
-          },m.label))
-      ),
-
-      // Layout + weergave — in vault-modus ook tag-filter
-      React.createElement(React.Fragment,null,
-        // Layout
-        React.createElement("div",{style:{display:"flex",gap:"5px",alignItems:"center"}},
-          React.createElement("span",{style:{fontSize:"9px",color:"rgba(138,198,242,0.5)",
-            letterSpacing:"1.5px",flex:1}},"LAYOUT"),
-          [{id:"radial",label:"⊙"},{id:"tree",label:"⊤"}].map(l=>
-            React.createElement("button",{key:l.id, onClick:()=>setLayout(l.id),
-              style:{background:layout===l.id?"rgba(138,198,242,0.18)":"none",
-                     border:`1px solid ${layout===l.id?"rgba(138,198,242,0.5)":W.splitBg}`,
-                     color:layout===l.id?"#a8d8f0":W.fgMuted,
-                     borderRadius:"4px",padding:"2px 10px",fontSize:"14px",cursor:"pointer"}
-            },l.label))
-        ),
-        // Weergave (tags/notities toggle alleen zinvol in vault-modus)
-        !aiMode && React.createElement("div",{style:{display:"flex",gap:"5px",flexWrap:"wrap"}},
-          [{label:"tags",val:showTags,set:setShowTags},
-           {label:"notities",val:showNotes,set:setShowNotes}].map(({label,val,set})=>
-            React.createElement("button",{key:label,onClick:()=>set(v=>!v),
-              style:{background:val?"rgba(138,198,242,0.12)":"none",
-                     border:`1px solid ${val?"rgba(138,198,242,0.4)":W.splitBg}`,
-                     color:val?"#a8d8f0":W.fgMuted,
-                     borderRadius:"4px",padding:"2px 9px",fontSize:"14px",cursor:"pointer"}
-            },val?"✓ "+label:"○ "+label))
-        ),
-        // Tag filter: alleen in vault-modus
-        !aiMode && allTags.length>0 && React.createElement("div",null,
-          React.createElement("div",{style:{fontSize:"9px",color:W.fgMuted,
-            letterSpacing:"1.5px",marginBottom:"4px"}},"TAG FILTER"),
-          React.createElement(TagFilterBar,{tags:allTags,activeTag:tagFilter,onChange:setTagFilter,compact:true,tagColors:tagColorMap,maxVisible:6})
-        )
-      ),
-
-      // Edit-modus acties — beschikbaar in beide modi
-      mode==="edit" && React.createElement("div",{
-        style:{borderTop:`1px solid ${W.splitBg}`,paddingTop:"7px",
-               display:"flex",gap:"5px",flexWrap:"wrap"}
-      },
-        React.createElement("button",{onClick:addCustomNode,
-          style:{background:"rgba(138,198,242,0.1)",border:`1px solid rgba(138,198,242,0.3)`,
-                 color:"#a8d8f0",borderRadius:"4px",padding:"3px 9px",
-                 fontSize:"14px",cursor:"pointer"}
-        },"+ knoop"),
-        selId&&selId!=="root"&&React.createElement("button",{onClick:deleteSelected,
-          style:{background:"rgba(229,120,109,0.08)",border:`1px solid rgba(229,120,109,0.25)`,
-                 color:W.orange,borderRadius:"4px",padding:"3px 9px",
-                 fontSize:"14px",cursor:"pointer"}
-        },"✕ verwijder"),
-        React.createElement("button",{onClick:()=>aiMode?buildAiLayout():buildLayout(),
-          style:{background:"none",border:`1px solid ${W.splitBg}`,color:W.fgMuted,
-                 borderRadius:"4px",padding:"3px 9px",fontSize:"14px",cursor:"pointer"}
-        },"↺ reset"),
-        React.createElement("div",{style:{fontSize:"9px",color:W.fgMuted,
-          width:"100%",marginTop:"2px"}},"dubbelklik = hernoemen · sleep = verplaatsen")
-      )
-    ),
 
     // ── Zoom controls rechtsonder ─────────────────────────────────────────────
     React.createElement("div",{
@@ -2278,20 +2260,71 @@ const MindMap = ({notes, allTags, onSelectNote, aiMindmap, onAddNote, serverPdfs
       )
     ),
 
+    // ── Preview popup bij klik op notitie ────────────────────────────────────
+    peekNote && React.createElement("div",{
+      style:{
+        position:"absolute", right:"12px", top:"12px",
+        width:"320px", maxHeight:"calc(100% - 24px)",
+        background:W.bg2, border:`1px solid ${W.splitBg}`,
+        borderRadius:"10px", boxShadow:"0 8px 32px rgba(0,0,0,0.6)",
+        display:"flex", flexDirection:"column", zIndex:20,
+        overflow:"hidden",
+      },
+      onClick:e=>e.stopPropagation(),
+    },
+      // Header
+      React.createElement("div",{style:{
+        padding:"10px 14px", borderBottom:`1px solid ${W.splitBg}`,
+        display:"flex", alignItems:"flex-start", gap:"8px", flexShrink:0,
+      }},
+        React.createElement("span",{style:{flex:1,fontWeight:"600",color:W.fg,fontSize:"14px",lineHeight:1.3}},
+          peekNote.title||"Zonder titel"),
+        React.createElement("div",{style:{display:"flex",gap:"4px",flexShrink:0}},
+          React.createElement("button",{
+            onClick:()=>onSelectNote?.(peekNote.id),
+            title:"Open in editor",
+            style:{background:W.blueBg||"rgba(138,198,242,.1)",
+              border:`1px solid ${W.blueBorder||"rgba(138,198,242,.3)"}`,
+              borderRadius:"5px",color:W.blue,
+              fontSize:"12px",padding:"3px 8px",cursor:"pointer"}
+          },"✎ Open"),
+          React.createElement("button",{
+            onClick:()=>setPeekNote(null),
+            style:{background:"none",border:"none",color:W.fgMuted,
+              cursor:"pointer",fontSize:"18px",padding:"0 2px",lineHeight:1}
+          },"×")
+        )
+      ),
+      // Tags
+      peekNote.tags?.length>0 && React.createElement("div",{style:{
+        padding:"6px 14px", borderBottom:`1px solid ${W.splitBg}22`,
+        display:"flex", flexWrap:"wrap", gap:"4px", flexShrink:0,
+      }},
+        peekNote.tags.map(t=>React.createElement("span",{key:t,className:"tag-pill",style:{fontSize:"11px",padding:"1px 7px"}},"#"+t))
+      ),
+      // Inhoud (markdown-achtig)
+      React.createElement("div",{
+        className:"mdv",
+        style:{flex:1,overflowY:"auto",padding:"12px 16px",fontSize:"13px"},
+        dangerouslySetInnerHTML:{__html: renderMd
+          ? renderMd(peekNote.content||"_Geen inhoud_")
+          : (peekNote.content||"_Geen inhoud_").replace(/\n/g,"<br>")}
+      })
+    ),
+
     // ── Legenda onderin ────────────────────────────────────────────────────────
     React.createElement("div",{
-      style:{position:"absolute",bottom:"14px",left:"50%",transform:"translateX(-50%)",
-             background:"rgba(28,28,28,0.85)",border:`1px solid ${W.splitBg}`,
-             borderRadius:"6px",padding:"5px 14px",fontSize:"14px",color:W.fgMuted,
-             display:"flex",gap:"14px",backdropFilter:"blur(8px)"}
+      style:{position:"absolute",bottom:"8px",right:"12px",
+             fontSize:"11px",color:W.fgMuted,
+             display:"flex",gap:"10px",opacity:0.55}
     },
       React.createElement("span",null,"⊙ root"),
       React.createElement("span",{style:{color:"#a8d8f0"}},"▬ tag"),
       React.createElement("span",{style:{color:W.fgDim}},"□ notitie"),
-      React.createElement("span",null,"scroll = zoom"),
-      React.createElement("span",null,"sleep = pannen/verplaatsen"),
-      mode==="edit"&&React.createElement("span",{style:{color:W.yellow}},"✏ dubbelklik = bewerken")
+      React.createElement("span",null,"scroll=zoom · sleep=pannen"),
+      mode==="edit"&&React.createElement("span",{style:{color:W.yellow}},"✏ 2×klik=bewerken")
     )
+    ),  // sluit rechter paneel div
   );
 };
 
@@ -2866,7 +2899,7 @@ REGELS:
                 border:"1px solid rgba(138,198,242,0.25)",lineHeight:"1.4",
                 whiteSpace:"nowrap",
               }}, ctxNotes.length),
-              tagFilter && React.createElement("span",{style:{
+              tagFilters.size>0 && React.createElement("span",{style:{
                 fontSize:"9px",background:"rgba(159,202,86,0.2)",
                 color:W.green,borderRadius:"8px",padding:"1px 4px",
                 border:"1px solid rgba(159,202,86,0.35)",
@@ -2896,7 +2929,7 @@ REGELS:
                 background:"rgba(138,198,242,0.08)",borderRadius:"4px",padding:"4px 8px",
                 border:"1px solid rgba(138,198,242,0.2)"}},
                 `📚 ${ctxNotes.length} notitie${ctxNotes.length!==1?"s":""} in context`
-                + (tagFilter ? ` · filter: #${tagFilter}` : " · alle")
+                + (tagFilters.size>0 ? ` · filter: ${[...tagFilters].map(t=>"#"+t).join(", ")}` : " · alle")
               ),
               // Tag-filter
               allNoteTags.length > 0 && React.createElement("div",null,
@@ -3063,7 +3096,7 @@ REGELS:
           tagFilter && React.createElement("span",{style:{
             fontSize:"11px",background:"rgba(159,202,86,0.2)",color:W.green,
             borderRadius:"8px",padding:"1px 6px",border:"1px solid rgba(159,202,86,0.35)"
-          }}, "#"+tagFilter)
+          }}, tagFilters.size>0 ? [...tagFilters].map(t=>"#"+t).join(" ") : "")
         ),
 
         // Context badge — altijd zichtbaar
@@ -3074,7 +3107,7 @@ REGELS:
         }, `📚 ${ctxNotes.length} notitie${ctxNotes.length!==1?"s":""}` +
            (ctxPdfs.length ? ` + ${ctxPdfs.length} PDF` : "") +
            (ctxExtPdfs.length ? ` + ${ctxExtPdfs.length} ext.` : "") +
-           (tagFilter ? ` · #${tagFilter}` : "")
+           (tagFilter ? ` · ${[...tagFilters].map(t=>"#"+t).join(", ")}` : "")
         ),
 
         // Externe PDF's knop

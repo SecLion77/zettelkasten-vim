@@ -254,9 +254,22 @@ const PDFUploadPanel = ({ serverPdfs=[], onRefreshPdfs, onOpenPdf, llmModel,
                 style: { fontSize: "10px", color: W.fgMuted, marginTop: "1px" }
               }, pdfSize)
             ),
-            React.createElement("span", {
-              style: { fontSize: "11px", color: W.blue, flexShrink: 0 }
-            }, "→ open")
+            // Paginabadge: onthoud pagina per PDF in localStorage
+            (()=>{
+              try {
+                const saved = parseInt(localStorage.getItem("zk_pdf_page_"+pdfName));
+                if(saved > 1) return React.createElement("span",{
+                  style:{fontSize:"11px",color:W.blue,flexShrink:0,
+                    background:W.blueBg||"rgba(138,198,242,.1)",
+                    border:`1px solid ${W.blueBorder||"rgba(138,198,242,.25)"}`,
+                    borderRadius:"8px",padding:"2px 8px"},
+                  title:"Verder lezen op pagina "+saved,
+                },"p."+saved+" →");
+              } catch {}
+              return React.createElement("span",{
+                style:{fontSize:"11px",color:W.fgMuted,flexShrink:0}
+              },"→ open");
+            })()
           );
         })
       ),
@@ -276,7 +289,7 @@ const PDFUploadPanel = ({ serverPdfs=[], onRefreshPdfs, onOpenPdf, llmModel,
   );
 };
 
-const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, onAutoSummarize, onDeletePdf, onPasteToNote=null, onAddNote=null, onSaveNote=null, notes=[], isTablet=false, llmModel=""}) => {
+const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, onAutoSummarize, onDeletePdf, onPasteToNote=null, onAddNote=null, notes=[], isTablet=false}) => {
   const [pdfDoc,     setPdfDoc]     = useState(null);
   const [pdfFile,    setPdfFile]    = useState(null);
   const [pageNum,    setPageNum]    = useState(1);   // huidige zichtbare pagina (voor annotaties)
@@ -320,12 +333,7 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
   const [showAnnotPanel,setShowAnnotPanel]= useState(!isTablet);
   const [annotWidth,   setAnnotWidth]    = useState(280);  // min 280px = huidige breedte
   const annotDragRef  = useRef(null);   // {startX, startW} tijdens drag
-  const [showNotePanel,    setShowNotePanel]    = useState(false);  // leesnotitie zijpaneel
-  const [showOutlinePanel, setShowOutlinePanel] = useState(false); // AI outline paneel
-  const [outlineItems,     setOutlineItems]     = useState([]);    // [{level,text,page,anchor}]
-  const [outlineLoading,   setOutlineLoading]   = useState(false); // genereren bezig
-  const [nativeOutline,    setNativeOutline]    = useState([]);    // native PDF outline
-  const [outlineText,      setOutlineText]      = useState("");    // streaming tekst
+  const [showNotePanel, setShowNotePanel]  = useState(false);  // leesnotitie zijpaneel
   const [noteContent,   setNoteContent]    = useState("");     // inhoud leesnotitie
   const [noteSaving,    setNoteSaving]     = useState(false);  // opslaan bezig
   const [summarizing,   setSummarizing]   = useState(false);
@@ -1057,104 +1065,6 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
     setNoteSaving(false);
   };
 
-  // ── AI Outline genereren ─────────────────────────────────────────────────────
-  const generateOutline = React.useCallback(async () => {
-    if (!pdfDoc || !pdfFile) return;
-    const stem = pdfFile.name.replace(/\.pdf$/i, "");
-    // 1. Bestaande notitie-outline → direct tonen
-    const stemTag = stem.toLowerCase().replace(/\s+/g,"-");
-    const existing = notes && notes.find(n =>
-      (n.tags||[]).includes("outline") &&
-      ((n.tags||[]).includes(stemTag) || (n.tags||[]).includes(stem)));
-    if (existing) {
-      setOutlineText(existing.content);
-      setShowOutlinePanel(true); return;
-    }
-    // 2. Native PDF outline aanwezig → direct tonen, geen AI nodig
-    if (nativeOutline && nativeOutline.length > 0) {
-      setShowOutlinePanel(true); return;
-    }
-    // 3. Geen van beide → AI genereren
-    setOutlineLoading(true); setOutlineText(""); setOutlineItems([]); setShowOutlinePanel(true);
-    const maxPg = pdfDoc.numPages;  // volledig document
-    let fullText = "";
-    for (let p=1; p<=maxPg; p++) {
-      try {
-        const page = await pdfDoc.getPage(p);
-        const tc   = await page.getTextContent();
-        const t    = tc.items.map(i=>i.str+(i.hasEOL?" ":" ")).join("").trim();
-        if (t) fullText += "\n=== Pagina "+p+" ===\n"+t;
-      } catch(e) {}
-    }
-    const trunc = fullText.length>12000 ? fullText.slice(0,12000)+"\n[...afgekort...]" : fullText;
-    const prompt = "Analyseer dit PDF-document en maak een uitgebreide inhoudsopgave.\n\n"
-      + "Formaat: ## Sectienaam (p. X)\n- Kernpunt\n\n"
-      + "Geef bij elke sectie het paginanummer (p. X), max 5 kernpunten per sectie, geen inleiding/nawoord.\n\n"
-      + "DOCUMENT:\n" + trunc;
-    try {
-      const model = llmModel || localStorage.getItem("zk_model") || "gemma3:12b";
-      const resp = await fetch("/api/llm/chat", {
-        method:"POST", headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({ model, messages:[{role:"user",content:prompt}] })
-      });
-      if (!resp.ok) throw new Error("Server fout: "+resp.status);
-      const reader=resp.body.getReader(), dec=new TextDecoder();
-      let buf="", acc="";
-      while(true) {
-        const {done,value}=await reader.read();
-        if(done) break;
-        buf += dec.decode(value,{stream:true});
-        const lines = buf.split("\n");
-        buf = lines.pop(); // bewaar onvolledige laatste regel
-        for (const ln of lines) {
-          if(!ln.startsWith("data: ")) continue;
-          try {
-            const ev=JSON.parse(ln.slice(6));
-            if(ev.error){ setOutlineLoading(false); setOutlineText("Fout: "+ev.error); return; }
-            if(ev.delta){ acc+=ev.delta; setOutlineText(acc); setOutlineItems(parseOutlineFromText(acc)); }
-            if(ev.done){ break; }
-          } catch(e){}
-        }
-      }
-      setOutlineLoading(false);
-      if(acc) { setOutlineText(acc); setOutlineItems(parseOutlineFromText(acc)); }
-    } catch(err) {
-      setOutlineLoading(false); setOutlineText("Fout: "+err.message);
-    }
-  }, [pdfDoc, pdfFile, notes]);
-
-  // Parse outline-tekst naar gestructureerde items
-  const parseOutlineFromText = (text) => {
-    const items = [];
-    const lines = text.split("\n");
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      // Sectiekoptekst: ## Titel (p. 12)
-      const sectionMatch = trimmed.match(/^#{1,3}\s+(.+?)\s*\(p\.\s*(\d+)\)/i);
-      if (sectionMatch) {
-        items.push({
-          level: (trimmed.match(/^#+/) || [""])[0].length,
-          text: sectionMatch[1].trim(),
-          page: parseInt(sectionMatch[2]),
-          type: "section",
-        });
-        continue;
-      }
-      // Sectiekoptekst zonder paginanummer
-      const sectionNoPage = trimmed.match(/^#{1,3}\s+(.+)/);
-      if (sectionNoPage) {
-        items.push({ level:2, text:sectionNoPage[1].trim(), page:null, type:"section" });
-        continue;
-      }
-      // Kernpunt: - tekst
-      if (trimmed.startsWith("- ") || trimmed.startsWith("• ")) {
-        items.push({ level:3, text:trimmed.slice(2).trim(), page:null, type:"bullet" });
-      }
-    }
-    return items;
-  };
-
   // ── Feature 3: Exporteer alle annotaties als één literatuurnotitie ──────────
   const exportAllAnnotations = async () => {
     if (!pdfFile || fileHl.length === 0) return;
@@ -1402,249 +1312,7 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
     .sort((a,b)=>a.page-b.page);  // gesorteerd op pagina
 
   return React.createElement("div",{style:{display:"flex",flex:1,minHeight:0,background:W.bg,overflow:"hidden",position:"relative"}},
-    // ── AI Outline paneel ────────────────────────────────────────────────────
-    showOutlinePanel && pdfFile && React.createElement("div",{style:{
-      width:"320px", flexShrink:0, background:W.bg2,
-      borderRight:`1px solid ${W.splitBg}`,
-      display:"flex", flexDirection:"column", minHeight:0,
-    }},
-      // Header
-      React.createElement("div",{style:{padding:"10px 14px",borderBottom:`1px solid ${W.splitBg}`,
-        display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0}},
-        React.createElement("span",{style:{fontWeight:"600",color:W.fg,fontSize:"14px"}},"🗂 Outline"),
-        React.createElement("div",{style:{display:"flex",gap:"6px",alignItems:"center"}},
-          pdfFile && React.createElement("button",{
-            onClick:()=>{ setOutlineItems([]); setOutlineText(""); generateOutline(); },
-            title:"Genereer nieuwe outline",
-            style:{fontSize:"11px",padding:"3px 8px",borderRadius:"4px",
-              background:W.blueBg||"rgba(138,198,242,.1)",color:W.blue,
-              border:`1px solid ${W.blueBorder||"rgba(138,198,242,.3)"}`,cursor:"pointer"}
-          },outlineLoading?"⏳ Bezig…":"↺ Nieuw"),
-          React.createElement("button",{onClick:()=>setShowOutlinePanel(false),
-            style:{background:"none",border:"none",color:W.fgMuted,cursor:"pointer",fontSize:"18px"}}
-          ,"×")
-        )
-      ),
-      // Inhoud
-      React.createElement("div",{style:{flex:1,overflowY:"auto",padding:"4px 0",minHeight:0}},
-        // Native outline (indien beschikbaar)
-        nativeOutline.length > 0
-          ? React.createElement("div",null,
-              // Label
-              React.createElement("div",{style:{
-                padding:"4px 14px",fontSize:"10px",letterSpacing:"0.8px",
-                color:W.blue,fontWeight:"600",textTransform:"uppercase",
-                borderBottom:`1px solid ${W.splitBg}22`,marginBottom:"2px",
-                display:"flex",alignItems:"center",gap:"6px",
-              }},
-                "📄 Document structuur",
-                React.createElement("span",{style:{fontSize:"10px",color:W.fgMuted,fontWeight:"400",textTransform:"none"}},
-                  "("+nativeOutline.length+" secties)")
-              ),
-              // Flatten de boom voor weergave
-              ...(function flattenOutline(items, depth) {
-                const result = [];
-                for (const item of items) {
-                  result.push(
-                    React.createElement("div",{
-                      key:item.text+item.page+depth,
-                      onClick:item.page ? ()=>{setPageNum(item.page);scrollToPage(item.page);} : undefined,
-                      style:{
-                        padding:"6px 14px 6px "+(14+depth*14)+"px",
-                        cursor:item.page?"pointer":"default",
-                        display:"flex", alignItems:"center", gap:"8px",
-                        borderLeft: depth===0 ? `3px solid ${W.blue}` : `3px solid ${W.blue}33`,
-                        transition:"background .1s",
-                      },
-                      onMouseEnter:e=>{if(item.page)e.currentTarget.style.background=W.bg3||"rgba(255,255,255,.04)";},
-                      onMouseLeave:e=>e.currentTarget.style.background="",
-                    },
-                      React.createElement("span",{style:{
-                        flex:1, fontSize: depth===0 ? "13px" : "12px",
-                        fontWeight: item.bold||depth===0 ? "600" : "400",
-                        color: depth===0 ? W.fg : W.fgDim||W.fgMuted,
-                        lineHeight:"1.4",
-                      }}, item.text),
-                      item.page && React.createElement("span",{style:{
-                        fontSize:"11px", color:W.blue, flexShrink:0,
-                        background:W.blueBg||"rgba(138,198,242,.1)",
-                        border:`1px solid ${W.blueBorder||"rgba(138,198,242,.3)"}`,
-                        borderRadius:"10px", padding:"1px 7px",
-                      }},"p."+item.page)
-                    )
-                  );
-                  if (item.children && item.children.length) {
-                    result.push(...flattenOutline(item.children, depth+1));
-                  }
-                }
-                return result;
-              })(nativeOutline, 0),
-              // Separator voor AI sectie
-              React.createElement("div",{style:{
-                padding:"4px 14px",fontSize:"10px",letterSpacing:"0.8px",
-                color:W.blue,fontWeight:"600",textTransform:"uppercase",
-                borderBottom:`1px solid ${W.splitBg}22`,
-                borderTop:`1px solid ${W.splitBg}`,
-                margin:"8px 0 2px",
-                display:"flex",alignItems:"center",justifyContent:"space-between",
-              }},
-                React.createElement("span",null,"🤖 AI Samenvatting"),
-                !outlineLoading && outlineItems.length===0 && React.createElement("button",{
-                  onClick:generateOutline,
-                  style:{fontSize:"11px",padding:"2px 8px",borderRadius:"4px",background:W.blueBg||"rgba(138,198,242,.1)",
-                    color:W.blue,border:`1px solid ${W.blueBorder||"rgba(138,198,242,.3)"}`,cursor:"pointer"}
-                },"+ Genereer")
-              ),
-              // AI samenvatting — toon outlineText direct als opgemaakt tekst
-              outlineLoading && React.createElement("div",{style:{
-                padding:"10px 14px",fontSize:"12px",color:W.blue,
-                animation:"ai-pulse 1.5s ease-in-out infinite",display:"flex",alignItems:"center",gap:"6px"}},
-                "⏳ AI analyseert..."),
-              !outlineLoading && !outlineText && React.createElement("div",{
-                style:{padding:"8px 14px",fontSize:"12px",color:W.fgMuted,lineHeight:"1.5",fontStyle:"italic"}},
-                "Klik '+ Genereer' voor een AI-samenvatting met kernpunten per sectie."),
-              outlineText && React.createElement("div",{style:{padding:"4px 6px"}},
-                // Render outlineText regel voor regel met klikbare paginanummers
-                outlineText.split("\n").filter(l=>l.trim()).map((line,i)=>{
-                  const isSect = line.match(/^#+\s/);
-                  const isBull = line.match(/^[-*•]\s/);
-                  const pageMatch = line.match(/\(p\.?\s*(\d+)\)/i);
-                  const pg = pageMatch ? parseInt(pageMatch[1]) : null;
-                  const text = line.replace(/^#+\s/,"").replace(/^[-*•]\s/,"");
-                  return React.createElement("div",{
-                    key:i,
-                    onClick: pg ? ()=>{setPageNum(pg);scrollToPage(pg);} : undefined,
-                    style:{
-                      padding: isSect ? "5px 14px 2px" : "1px 14px 1px 24px",
-                      cursor: pg ? "pointer" : "default",
-                      display:"flex", alignItems:"baseline", gap:"6px",
-                      borderLeft: isSect ? `3px solid ${W.comment}88` : "3px solid transparent",
-                      transition:"background .1s",
-                    },
-                    onMouseEnter:e=>{if(pg)e.currentTarget.style.background=W.bg3||"rgba(255,255,255,.04)";},
-                    onMouseLeave:e=>e.currentTarget.style.background="",
-                  },
-                    React.createElement("span",{style:{
-                      flex:1,
-                      fontSize: isSect ? "12px" : "12px",
-                      fontWeight: isSect ? "600" : "400",
-                      color: isSect ? W.fg : W.fgMuted,
-                      lineHeight:"1.6",
-                    }}, isBull ? "• "+text : text),
-                    pg && React.createElement("span",{style:{
-                      fontSize:"10px",color:W.blue,flexShrink:0,
-                      background:W.blueBg||"rgba(138,198,242,.1)",
-                      border:`1px solid ${W.blueBorder||"rgba(138,198,242,.25)"}`,
-                      borderRadius:"8px",padding:"0 5px",
-                    }},"p."+pg)
-                  );
-                })
-              )
-            )
-          // Geen native outline: toon AI genereer optie
-          : React.createElement("div",null,
-              outlineItems.length===0 && !outlineLoading && React.createElement("div",{
-                style:{padding:"24px 16px",textAlign:"center",display:"flex",flexDirection:"column",gap:"12px"}},
-                React.createElement("div",{style:{fontSize:"32px"}},"🗂"),
-                React.createElement("div",{style:{color:W.fg,fontSize:"13px",lineHeight:"1.6"}},
-                  "Dit PDF heeft geen ingebouwde inhoudsopgave."),
-                React.createElement("div",{style:{color:W.fgMuted,fontSize:"12px",lineHeight:"1.6"}},
-                  "AI kan een outline genereren op basis van de inhoud."),
-                React.createElement("button",{
-                  onClick:generateOutline,
-                  style:{padding:"10px 20px",borderRadius:"8px",background:W.blue,color:W.bg,
-                    border:"none",cursor:"pointer",fontSize:"14px",fontWeight:"600"}
-                },"🤖 Genereer AI Outline")
-              ),
-              outlineLoading && React.createElement("div",{style:{padding:"16px",fontSize:"12px",lineHeight:"2"}},
-                React.createElement("div",{style:{color:W.blue,animation:"ai-pulse 1.5s ease-in-out infinite",marginBottom:"8px"}},"⏳ AI analyseert het document…"),
-                React.createElement("div",{style:{color:W.fg,fontSize:"11px",whiteSpace:"pre-wrap",lineHeight:"1.6"}},outlineText)
-              ),
-              outlineText && React.createElement("div",{style:{padding:"4px 6px"}},
-                outlineText.split("\n").filter(l=>l.trim()).map((line,i)=>{
-                  const isSect = line.match(/^#+\s/);
-                  const isBull = line.match(/^[-*•]\s/);
-                  const pm = line.match(/\(p\.?\s*(\d+)\)/i);
-                  const pg = pm ? parseInt(pm[1]) : null;
-                  const text = line.replace(/^#+\s/,"").replace(/^[-*•]\s/,"");
-                  return React.createElement("div",{
-                    key:i,
-                    onClick: pg ? ()=>{setPageNum(pg);scrollToPage(pg);} : undefined,
-                    style:{
-                      padding: isSect ? "7px 14px 3px" : "2px 14px 2px 24px",
-                      cursor:pg?"pointer":"default",
-                      borderLeft: isSect ? `3px solid ${W.blue}` : "3px solid transparent",
-                      transition:"background .1s",
-                      display:"flex",alignItems:"baseline",gap:"8px",
-                    },
-                    onMouseEnter:e=>{if(pg)e.currentTarget.style.background=W.bg3||"rgba(255,255,255,.04)";},
-                    onMouseLeave:e=>e.currentTarget.style.background="",
-                  },
-                    React.createElement("span",{style:{
-                      flex:1,fontSize: isSect?"13px":"12px",
-                      fontWeight:isSect?"600":"400",
-                      color: isSect ? W.fg : W.fgMuted,
-                      lineHeight:"1.6",
-                    }}, isBull ? "• "+text : text),
-                    pg && React.createElement("span",{style:{
-                      fontSize:"11px",color:W.blue,flexShrink:0,
-                      background:W.blueBg||"rgba(138,198,242,.1)",
-                      border:`1px solid ${W.blueBorder||"rgba(138,198,242,.3)"}`,
-                      borderRadius:"10px",padding:"1px 7px",
-                    }},"p."+pg)
-                  );
-                })
-              )
-            )
-      ),
-      // Opslaan footer
-      (nativeOutline.length>0||outlineText) && React.createElement("div",{style:{
-        padding:"8px 14px",borderTop:`1px solid ${W.splitBg}`,flexShrink:0,
-      }},
-        React.createElement("button",{
-          onClick:()=>{
-            const stem=pdfFile.name.replace(/\.pdf$/i,"");
-            // Bouw outline tekst op uit native + AI
-            let content = "# Outline: "+stem+"\n\n*Bron: [["+stem+"]]*\n\n";
-            if(nativeOutline.length>0){
-              content += "## Inhoudsopgave\n\n";
-              const addItems = (items,depth) => {
-                items.forEach(i => {
-                  content += "  ".repeat(depth)+"- "+i.text+(i.page?" (p."+i.page+")": "")+"\n";
-                  if(i.children&&i.children.length) addItems(i.children,depth+1);
-                });
-              };
-              addItems(nativeOutline,0);
-            }
-            if(outlineText){ content += "\n\n## AI Samenvatting\n\n"+outlineText; }
-            const saveNote = onSaveNote || onAddNote;
-            if(saveNote) {
-              saveNote({
-                id: genId ? genId() : ("note_"+Date.now()),
-                title:"Outline: "+stem,
-                content,
-                tags:["outline",stem.toLowerCase().replace(/\s+/g,"-")],
-                noteType:"literature",
-                importedAt:new Date().toISOString(),
-                created:new Date().toISOString(),
-                modified:new Date().toISOString(),
-              });
-              alert("✓ Outline opgeslagen als notitie");
-            } else {
-              alert("Fout: geen opslagfunctie beschikbaar");
-            }
-          },
-          style:{width:"100%",padding:"7px",borderRadius:"6px",
-            background:W.commentBg||"rgba(159,202,86,.1)",
-            color:W.tagColor||W.comment,
-            border:`1px solid ${W.tagBorder||"rgba(159,202,86,.28)"}`,
-            cursor:"pointer",fontSize:"12px",fontWeight:"600"}
-        },"📝 Opslaan als notitie")
-      )
-    ),
-
-
-        // Main PDF column
+    // Main PDF column
     React.createElement("div",{style:{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",minWidth:0,minHeight:0}},
       // Toolbar
       React.createElement("div",{style:{background:W.bg2,borderBottom:`1px solid ${W.splitBg}`,padding:"5px 10px",display:"flex",alignItems:"center",gap:"8px",fontSize:"14px",flexShrink:0,flexWrap:"wrap"}},
@@ -1737,17 +1405,6 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
           }, m.icon)),
           React.createElement("span",{style:{color:W.splitBg}},"|"),
           // Highlights-overzicht knop
-
-          pdfFile && React.createElement("button",{
-            onClick:()=>{ setShowNotePanel(p=>!p); if(showAnnotPanel) setShowAnnotPanel(false); },
-            title:"Leesnotitie per pagina",
-            style:{
-              background: showNotePanel ? W.commentBg||"rgba(159,202,86,.1)" : "none",
-              border: showNotePanel ? `1px solid ${W.tagBorder||"rgba(159,202,86,.28)"}` : "1px solid transparent",
-              borderRadius:"4px", color: showNotePanel ? W.comment : W.fgMuted,
-              cursor:"pointer", padding:"2px 6px", fontSize:"13px", lineHeight:1,
-            }
-          }, "◀✏"),
           pdfFile && React.createElement("button",{
             onClick:()=>setShowHlPanel(p=>!p),
             title:"Highlights overzicht",
@@ -1821,25 +1478,8 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
                    cursor:"pointer",padding:"2px 6px",fontSize:"15px",lineHeight:1},
           }, "🔍"),
           React.createElement("span",{style:{color:W.fgMuted}},"│"),
-          // 🗂 Outline knop — naast de samenvatting knop
-          pdfFile && React.createElement("button",{
-            onClick:()=>{
-              const next=!showOutlinePanel;
-              setShowOutlinePanel(next);
-              if(showAnnotPanel) setShowAnnotPanel(false);
-              if(showNotePanel) setShowNotePanel(false);
-              if(next && outlineItems.length===0 && !outlineLoading) generateOutline();
-            },
-            title:"AI Outline — navigeer door het document",
-            style:{
-              background: showOutlinePanel ? W.blueBg||"rgba(138,198,242,.1)" : "none",
-              border: showOutlinePanel ? `1px solid ${W.blue}` : "1px solid transparent",
-              borderRadius:"4px", color: showOutlinePanel ? W.blue : W.fgMuted,
-              cursor:"pointer", padding:"2px 8px", fontSize:"13px",
-              display:"flex", alignItems:"center", gap:"4px",
-            }
-          }, "🗂", React.createElement("span",{style:{fontSize:"12px"}},"Outline")),
-
+          ...HCOLORS.map(c=>React.createElement("button",{key:c.id,onClick:()=>setActiveColor(c),title:c.label,style:{width:"18px",height:"18px",borderRadius:"4px",background:c.bg,border:`2px solid ${activeColor.id===c.id?c.border:"transparent"}`,cursor:"pointer",padding:0,boxShadow:activeColor.id===c.id?`0 0 6px ${c.border}`:"none"}})),
+          React.createElement("span",{style:{color:W.fgMuted,fontSize:"14px",marginLeft:"4px",maxWidth:"160px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},pdfFile?.name),
           pdfFile && onAutoSummarize && React.createElement("button",{
             title:"Maak nu een samenvatting van deze PDF",
             disabled:summarizing,
@@ -2102,7 +1742,36 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
               const thumb = thumbCache[p.name];
               const readMins = Math.max(1, Math.round(sizeKb / 50));
 
-              return React.createElement("div", {
+            
+  // Laad native PDF outline via PDF.js getOutline()
+  React.useEffect(() => {
+    if (!pdfDoc) { setNativeOutline([]); return; }
+    (async () => {
+      try {
+        const outline = await pdfDoc.getOutline();
+        if (!outline || !outline.length) { setNativeOutline([]); return; }
+        const resolveItem = async (item, depth) => {
+          let page = null;
+          try {
+            if (item.dest) {
+              const dest = typeof item.dest === "string"
+                ? await pdfDoc.getDestination(item.dest)
+                : item.dest;
+              if (dest && dest[0]) page = (await pdfDoc.getPageIndex(dest[0])) + 1;
+            }
+          } catch(e) {}
+          const children = item.items
+            ? await Promise.all(item.items.map(c => resolveItem(c, depth+1)))
+            : [];
+          return { text: item.title||"", page, depth: depth||0, bold: item.bold, children };
+        };
+        const resolved = await Promise.all(outline.map(i => resolveItem(i, 0)));
+        setNativeOutline(resolved);
+      } catch(e) { setNativeOutline([]); }
+    })();
+  }, [pdfDoc]);
+
+  return React.createElement("div", {
                 key: p.name,
                 style: {
                   display: "flex", alignItems: "center", gap: "12px",
@@ -2196,9 +1865,10 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
                  fontSize:"12px",cursor:"pointer"}
         },"◀ Bibliotheek"),
         React.createElement("span",{style:{color:W.fgMuted}},"│"),
-        React.createElement("span",{style:{color:W.fg,maxWidth:"160px",overflow:"hidden",
+        React.createElement("span",{style:{color:W.fg,maxWidth:"200px",overflow:"hidden",
           textOverflow:"ellipsis",whiteSpace:"nowrap",fontSize:"13px"}},
           pdfFile?.name?.replace(/\.pdf$/i,"")||""),
+        // "Verder lezen" badge als we niet op pagina 1 staan
         // Selectiemodus indicator
         selectMode && React.createElement("span",{
           style:{
@@ -2437,7 +2107,6 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
         ),
 
         // iOS Annoteren-knop (position:fixed — staat buiten scroll-container)
-        // iOS annoteren knop
         iosAnnotBtn&&!pendingSel&&React.createElement("button",{
           onClick:()=>{ setIosAnnotBtn(null); tryOpenAnnotPopup(); },
           style:{position:"fixed",
@@ -2821,32 +2490,5 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
       )
     )
   );
-};  // Laad native PDF outline via PDF.js getOutline()
-  React.useEffect(() => {
-    if (!pdfDoc) { setNativeOutline([]); return; }
-    (async () => {
-      try {
-        const outline = await pdfDoc.getOutline();
-        if (!outline || !outline.length) { setNativeOutline([]); return; }
-        const resolveItem = async (item, depth) => {
-          let page = null;
-          try {
-            if (item.dest) {
-              const dest = typeof item.dest === "string"
-                ? await pdfDoc.getDestination(item.dest)
-                : item.dest;
-              if (dest && dest[0]) page = (await pdfDoc.getPageIndex(dest[0])) + 1;
-            }
-          } catch(e) {}
-          const children = item.items
-            ? await Promise.all(item.items.map(c => resolveItem(c, depth+1)))
-            : [];
-          return { text: item.title||"", page, depth: depth||0, bold: item.bold, children };
-        };
-        const resolved = await Promise.all(outline.map(i => resolveItem(i, 0)));
-        setNativeOutline(resolved);
-      } catch(e) { setNativeOutline([]); }
-    })();
-  }, [pdfDoc]);
 
-
+};

@@ -1947,6 +1947,51 @@ class ZKHandler(BaseHTTPRequestHandler):
         if p == "/app.js":
             fp = STATIC_DIR / "app.js"
             if fp.exists(): return self._send_nocache(fp.read_bytes(), "application/javascript")
+
+        # ── PWA bestanden ──────────────────────────────────────────────────────
+        # Service Worker: MOET no-cache zijn zodat iOS altijd de nieuwste versie pakt
+        if p == "/service-worker.js":
+            fp = STATIC_DIR / "service-worker.js"
+            if fp.exists():
+                data = fp.read_bytes()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/javascript")
+                self.send_header("Content-Length", len(data))
+                self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+                self.send_header("Service-Worker-Allowed", "/")  # scope toestaan
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(data)
+                return
+
+        # Web App Manifest
+        if p == "/manifest.json":
+            fp = STATIC_DIR / "manifest.json"
+            if fp.exists():
+                data = fp.read_bytes()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/manifest+json")
+                self.send_header("Content-Length", len(data))
+                self.send_header("Cache-Control", "max-age=86400")  # 1 dag cachen
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(data)
+                return
+
+        # PWA iconen (icon-192.png, icon-512.png)
+        if p in ("/icon-192.png", "/icon-512.png", "/apple-touch-icon.png"):
+            fp = STATIC_DIR / p.lstrip("/")
+            if fp.exists():
+                data = fp.read_bytes()
+                self.send_response(200)
+                self.send_header("Content-Type", "image/png")
+                self.send_header("Content-Length", len(data))
+                self.send_header("Cache-Control", "max-age=604800")  # 1 week
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(data)
+                return
+
         # Modules-bestanden (SOLID refactor — stap 1+)
         if p.startswith("/modules/"):
             rel = p[9:]  # strip /modules/

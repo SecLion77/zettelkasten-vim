@@ -408,6 +408,19 @@ const NotesTab = ({
     onLayerFilterChange: setLayerFilter,
     isMobile,
     onCloseSidebar:    () => onSidebarToggle?.(false),
+    onToggleRead:      async (note) => {
+      // Offline-robuust: werkt via offline queue als server niet bereikbaar
+      const updated = { ...note, isRead: !note.isRead, modified: new Date().toISOString() };
+      // Optimistisch bijwerken in de UI
+      onNotesChange([...notes.map(n => n.id === note.id ? updated : n)]);
+      try {
+        await NoteStore.save(updated);
+        onNotesChange([...NoteStore.getAll()]);
+      } catch (err) {
+        console.warn("[NoteList] toggleRead fout:", err.message);
+        // Fout? Behoud de optimistische update (offline queue pakt dit op)
+      }
+    },
   });
 
   // ── Hoofd content (editor of preview) ────────────────────────────────────

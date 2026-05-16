@@ -5,7 +5,7 @@
 // Wetenschappelijk: ruimtelijk denken ondersteunt creatief probleemoplossen
 // (Schon & Wiggins 1992: "zie, beweeg, zie opnieuw")
 
-const Whiteboard = ({ notes = [], onCreateNote, llmModel = "", serverImages = [] }) => {
+const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", serverImages = [], pendingNotes = null, onClearPending, onShowInGraph }) => {
   const { useState, useEffect, useRef, useCallback } = React;
 
   // ── State ────────────────────────────────────────────────────────────────
@@ -43,6 +43,7 @@ const Whiteboard = ({ notes = [], onCreateNote, llmModel = "", serverImages = []
   // Canvas
   const cvRef     = useRef(null);
   const viewRef   = useRef({ ox: 0, oy: 0, scale: 1 });
+  const pendingRef = useRef(null); // noteIds die op canvas moeten komen
   const dirtyRef  = useRef(true);
   const isPanning = useRef(false);
   const panStart  = useRef(null);
@@ -430,6 +431,43 @@ const Whiteboard = ({ notes = [], onCreateNote, llmModel = "", serverImages = []
     saveBoard(next, stateRef.current.connections);
     return card;
   }, [saveBoard]);
+
+  // ── Verwerk notities vanuit andere tabs ────────────────────────────────────
+  // Sla pending noteIds op in ref (stabiel, geen timing-problemen)
+  React.useEffect(() => {
+    if (pendingNotes && pendingNotes.length) {
+      pendingRef.current = pendingNotes;
+      if (onClearPending) onClearPending();
+    }
+  }, [pendingNotes]);
+
+  // Verwerk pendingRef nadat board geladen is (via cards state)
+  const pendingProcessedRef = useRef(false);
+  React.useEffect(() => {
+    if (!pendingRef.current || pendingProcessedRef.current) return;
+    const ids = pendingRef.current;
+    pendingProcessedRef.current = true;
+    pendingRef.current = null;
+    const cols = 3, colW = 290, rowH = 170;
+    let added = 0;
+    // Kleine delay zodat board zeker geladen is
+    setTimeout(() => {
+      ids.forEach((noteId, i) => {
+        const note = notes.find(n => n.id === noteId);
+        if (!note) return;
+        const col = i % cols, row = Math.floor(i / cols);
+        addCard(80 + col * colW, 80 + row * rowH,
+                note.title || (note.content || '').slice(0, 60) || 'Notitie', 1, noteId);
+        added++;
+      });
+      if (added > 0) {
+        // Reset viewport naar linksboven zodat kaarten zichtbaar zijn
+        viewRef.current = { ox: 30, oy: 30, scale: 1 };
+      }
+      pendingProcessedRef.current = false;
+    }, 200);
+  }, [cards]); // fires na elke cards-update, maar pendingRef guards dubbele verwerking
+
 
   const updateCard = useCallback((id, patch) => {
     const next = stateRef.current.cards.map(c => c.id === id ? { ...c, ...patch } : c);
@@ -1440,6 +1478,15 @@ const Whiteboard = ({ notes = [], onCreateNote, llmModel = "", serverImages = []
                    borderRadius: "5px", color: W.comment,
                    padding: "3px 9px", fontSize: "12px", cursor: "pointer" }
         }, "→ notitie"),
+        selCard.noteId && onShowInGraph && React.createElement("button", {
+          onClick: () => onShowInGraph(selCard.noteId),
+          title: "Toon in kennisgraaf",
+          style: { background: W.blueBg||"rgba(122,168,200,0.15)",
+                   border: `1px solid ${W.blueBorder||"rgba(122,168,200,0.4)"}`,
+                   borderRadius: "5px", color: W.blue||"#7aa8c8",
+                   padding: "3px 9px", fontSize: "12px", cursor: "pointer",
+                   fontWeight: "500" }
+        }, "🕸 Graaf"),
         React.createElement("button", {
           onClick: () => deleteCard(selCard.id),
           title: "Verwijder kaart",

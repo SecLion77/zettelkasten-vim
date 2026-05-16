@@ -21,12 +21,14 @@ const NoteList = ({
   onDateFilterChange,
   isMobile = false,
   onCloseSidebar,
+  onToggleRead,           // (note) => void — toggle gelezen-status offline-robuust
 }) => {
   const { useMemo, useRef, useEffect, useState, useCallback } = React;
   const listRef    = useRef(null);
   const hoverTimer = useRef(null);
   const [sortBy,    setSortBy]    = useState("modified");
   const [showCalendar, setShowCalendar] = useState(false);
+  const [canvasSel, setCanvasSel] = useState(null); // null = uit, Set = selectiemodus aan
   const setDateFilter = onDateFilterChange || (() => {});
   const [hoverNote, setHoverNote] = useState(null); // {note, rect} voor peek-tooltip
   const [pinnedIds, setPinnedIds] = useState(() => {
@@ -365,7 +367,24 @@ const NoteList = ({
             transition: "all 0.12s",
           }
         }, label)
-      )
+      ),
+      React.createElement("button", {
+        onClick: () => setCanvasSel(s => s !== null ? null : new Set()),
+        title: canvasSel !== null ? "Klik op notities om te selecteren, dan → Canvas" : "Selecteer meerdere notities voor het canvas",
+        style:{
+          background: canvasSel !== null ? (W.tagBg||"rgba(159,202,86,0.12)") : "none",
+          border: canvasSel !== null
+            ? `1px solid ${W.tagBorder||"rgba(159,202,86,0.4)"}`
+            : `1px solid ${W.splitBg}`,
+          borderRadius:"5px", marginLeft:"auto",
+          color: canvasSel !== null ? (W.tagColor||"#9fca56") : W.fgMuted,
+          cursor:"pointer", fontSize:"12px", padding:"3px 8px", lineHeight:1,
+          fontWeight: canvasSel !== null ? "600" : "400",
+          display:"flex", alignItems:"center", gap:"4px",
+        }
+      },
+        React.createElement("span",null, canvasSel !== null ? "☑" : "☐"),
+        React.createElement("span",{style:{fontSize:"11px"}}, "Canvas"))
     ),
 
     // ── Datum-filter balk ───────────────────────────────────────────────────
@@ -401,6 +420,36 @@ const NoteList = ({
       )
     ),
 
+    // ── Canvas selectie balk ──────────────────────────────────────────────────
+    canvasSel !== null && React.createElement("div", {
+      style:{display:"flex",alignItems:"center",gap:"8px",padding:"7px 10px",
+             background: W.tagBg||"rgba(159,202,86,0.08)",
+             borderBottom:`1px solid ${W.tagBorder||"rgba(159,202,86,0.25)"}`,
+             flexShrink:0, minHeight:"36px"}
+    },
+      (canvasSel?.size ?? 0) === 0
+        ? React.createElement("span",{style:{fontSize:"12px",color:W.fgMuted,flex:1,fontStyle:"italic"}},
+            "Tik op notities om te selecteren…")
+        : React.createElement("span",{style:{fontSize:"12px",color:W.tagColor||"#9fca56",flex:1,fontWeight:"500"}},
+            (canvasSel?.size ?? 0)+" notitie"+((canvasSel?.size ?? 0)===1?"":"s")+" geselecteerd"),
+      (canvasSel?.size ?? 0) > 0 && React.createElement("button",{
+        onClick:()=>{
+          if(window._sendToCanvas) window._sendToCanvas([...canvasSel]);
+          setCanvasSel(null);
+        },
+        style:{fontSize:"12px",padding:"4px 12px",borderRadius:"5px",
+               background:W.tagBg||"rgba(159,202,86,0.15)",
+               color:W.tagColor||"#9fca56",
+               border:`1px solid ${W.tagBorder||"rgba(159,202,86,0.35)"}`,
+               cursor:"pointer",fontWeight:"600",whiteSpace:"nowrap"}
+      },"📋 → Canvas"),
+      React.createElement("button",{
+        onClick:()=>setCanvasSel(null),
+        title:"Selectiemodus uit",
+        style:{fontSize:"16px",padding:"0 4px",borderRadius:"4px",background:"none",
+               color:W.fgMuted,border:"none",cursor:"pointer",lineHeight:1}
+      },"×")
+    ),
     // ── Lijst ───────────────────────────────────────────────────────────────
     React.createElement("div", {
       ref: listRef,
@@ -446,8 +495,15 @@ const NoteList = ({
                 setHoverNote(null);
               },
               className: "note-item" + (sel ? " selected" : ""),
+              onClick: () => { if(canvasSel === null) onSelect(n.id); },
+              onContextMenu: onToggleRead ? (e) => {
+                // Rechtsklik = snel gelezen/ongelezen wisselen
+                e.preventDefault();
+                onToggleRead(n);
+              } : undefined,
               style: {
-                padding: "10px 12px 9px",
+                padding: canvasSel !== null ? "10px 12px 9px 34px" : "10px 12px 9px",
+                position: "relative",
                 borderBottom: `1px solid rgba(58,64,70,0.5)`,
                 cursor: "pointer",
                 background: sel ? W.blueBg : "transparent",
@@ -455,11 +511,44 @@ const NoteList = ({
                 transition: "background 0.1s",
               }
             },
+              // Multi-select checkbox
+              canvasSel !== null && React.createElement("input", {
+                type: "checkbox",
+                checked: canvasSel !== null && canvasSel.has(n.id),
+                onChange: e => {
+                  e.stopPropagation();
+                  setCanvasSel(prev => {
+                    const next = new Set(prev);
+                    next.has(n.id) ? next.delete(n.id) : next.add(n.id);
+                    return next;
+                  });
+                },
+                onClick: e => e.stopPropagation(),
+                style:{position:"absolute",left:"10px",top:"50%",transform:"translateY(-50%)",
+                       cursor:"pointer",width:"15px",height:"15px",
+                       accentColor:W.tagColor||"#9fca56"}
+              }),
               // Titel + datum + pin op één rij
               React.createElement("div", {
                 style: { display: "flex", alignItems: "center",
                          gap: "4px", marginBottom: "3px" }
               },
+                // Offline-pending indicator
+                (window.OfflineStore?.isPending?.(n.id) || n._pending) &&
+                  React.createElement("span", {
+                    title: "Offline opgeslagen — wordt gesynchroniseerd zodra de server bereikbaar is",
+                    style: { fontSize: "11px", flexShrink: 0, opacity: 0.7 }
+                  }, "⏳"),
+                // Gelezen-indicator
+                n.isRead && React.createElement("span", {
+                  title: "Gelezen",
+                  style: {
+                    fontSize: "10px", flexShrink: 0,
+                    color: W.comment, background: W.commentBg||"rgba(159,202,86,.08)",
+                    border: `1px solid ${W.tagBorder||"rgba(159,202,86,.25)"}`,
+                    borderRadius: "8px", padding: "0 5px", lineHeight: "16px",
+                  }
+                }, "✓"),
                 pinnedIds.includes(n.id) && React.createElement("span", {
                   title: "Gepind — klik om te ontkoppelen",
                   onClick: (e) => togglePin(n.id, e),

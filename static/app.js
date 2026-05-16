@@ -52,10 +52,13 @@ const THEMES = {
     splitBg:"#333333", lineNrBg:"#1a1a1a",
     fg:"#d4d4d4", fgMuted:"#666666", fgDim:"#888888",
     statusFg:"#eeeeee",
-    comment:"#aaaaaa", string:"#cccccc", keyword:"#d4d4d4",
-    type:"#999999", special:"#bbbbbb",
-    orange:"#bbbbbb", purple:"#aaaaaa", green:"#999999",
-    yellow:"#cccccc", blue:"#d4d4d4",
+    comment:"#909090", string:"#b8b8b8", keyword:"#d4d4d4",
+    type:"#808080", special:"#a0a0a0",
+    orange:"#c8a060", purple:"#9090c8", green:"#78a878",
+    yellow:"#c8b860", blue:"#7aa8c8",
+    // Uitgebreide kleuren voor UI-componenten
+    blueBg:"rgba(122,168,200,0.12)", blueBorder:"rgba(122,168,200,0.35)", blueBg2:"rgba(122,168,200,0.06)",
+    commentBg:"rgba(144,144,144,0.1)", tagBg:"rgba(120,168,120,0.1)", tagBorder:"rgba(120,168,120,0.3)", tagColor:"#78a878",
   },
 
   "perkament": {
@@ -833,11 +836,96 @@ const PAD_LEFT  = 8;    // tekst-padding links van content
 
 // ── App (zie modules/ voor componenten) ─────────────────────────────────────
 
+// ── Offline badge component ────────────────────────────────────────────────
+const OfflineBadge = () => {
+  const [state,  setState]  = React.useState(() =>
+    navigator.onLine ? "online" : "offline"
+  );
+  const [queued, setQueued] = React.useState(() => {
+    // Laad pending count direct uit localStorage — werkt ook na refresh
+    try { return JSON.parse(localStorage.getItem("zk_offline_pending") || "[]").length; }
+    catch { return 0; }
+  });
+
+  React.useEffect(() => {
+    // Herstel offline-staat als we al offline zijn bij mount
+    if (!navigator.onLine) setState("offline");
+
+    const onOnline  = () => {
+      setState("syncing");
+      setTimeout(() => { if (navigator.onLine) setState("online"); }, 4000);
+    };
+    const onOffline = () => setState("offline");
+    const onSync    = (e) => {
+      const { processed = 0 } = e.detail || {};
+      setQueued(0);
+      if (processed > 0) {
+        setState("syncing");
+        setTimeout(() => setState("online"), 3000);
+      } else {
+        setState("online");
+      }
+    };
+    const onUpdate  = () => setState("update");
+    // OfflineStore stuurt dit event bij elke pending-wijziging
+    const onPending = (e) => {
+      const count = e.detail?.count ?? 0;
+      setQueued(count);
+      if (count > 0 && navigator.onLine) setState("queued");
+      if (count === 0 && state !== "syncing") setState("online");
+    };
+
+    window.addEventListener("zk-online",         onOnline);
+    window.addEventListener("zk-offline",        onOffline);
+    window.addEventListener("zk-sync-complete",  onSync);
+    window.addEventListener("zk-sw-update",      onUpdate);
+    window.addEventListener("zk-pending-change", onPending);
+    return () => {
+      window.removeEventListener("zk-online",         onOnline);
+      window.removeEventListener("zk-offline",        onOffline);
+      window.removeEventListener("zk-sync-complete",  onSync);
+      window.removeEventListener("zk-sw-update",      onUpdate);
+      window.removeEventListener("zk-pending-change", onPending);
+    };
+  }, [state]);
+
+  // Verborgen als alles normaal is
+  if (state === "online") return null;
+
+  const cfg = {
+    offline:  { bg:"rgba(229,120,109,.15)", border:"rgba(229,120,109,.35)", color:"#e5786d", label:"⚡ Offline",         pulse:false },
+    syncing:  { bg:"rgba(138,198,242,.15)", border:"rgba(138,198,242,.35)", color:"#8ac6f2", label:"⟳ Synchroniseren…", pulse:true  },
+    queued:   { bg:"rgba(234,231,136,.12)", border:"rgba(234,231,136,.3)",  color:"#eae788", label:`⏳ ${queued} in wachtrij`, pulse:false },
+    update:   { bg:"rgba(159,202,86,.12)",  border:"rgba(159,202,86,.35)",  color:"#9fca56", label:"↑ Update beschikbaar", pulse:false },
+  }[state] || {};
+
+  return React.createElement("div", {
+    title: state === "offline"
+      ? "Offline — wijzigingen worden bewaard en gesynchroniseerd zodra de verbinding terugkeert"
+      : state === "queued"
+      ? `${queued} wijziging(en) wachten op synchronisatie — verbind met de server`
+      : state === "update"
+      ? "Klik om de nieuwe versie te laden"
+      : "Bezig met synchroniseren…",
+    onClick: state === "update" ? () => window.location.reload() : undefined,
+    style:{
+      padding:"2px 10px", borderRadius:"10px", fontSize:"12px", fontWeight:"500",
+      flexShrink:0, cursor: state === "update" ? "pointer" : "default",
+      background:  cfg.bg,
+      color:       cfg.color,
+      border:      `1px solid ${cfg.border}`,
+      animation:   cfg.pulse ? "ai-pulse 1.5s ease-in-out infinite" : "none",
+      userSelect:  "none",
+    }
+  }, cfg.label);
+};
+
 const App = () => {
   const { useState, useEffect, useRef, useMemo, useCallback } = React;
 
   // ── Notities-state (gedelegeerd aan NoteStore + NotesTab) ───────────────────
   const [notes,    setNotes]   = useState([]);   // gespiegeld vanuit NoteStore
+  const [canvasPendingNotes, setCanvasPendingNotes] = useState(null); // noteIds wachten op canvas
   const [goyoMode, setGoyoMode] = useState(false); // App-level: beïnvloedt topbar
   const [splitMode,  setSplitMode]  = useState(false);
   const [splitTab,   setSplitTab]   = useState("pdf");
@@ -1120,6 +1208,10 @@ const App = () => {
   React.useEffect(() => {
     window._zkForceUpdate   = () => _forceRender(n => n + 1);
     window._zkRefreshNotes  = () => setNotes([...NoteStore.getAll()]);
+    window._sendToCanvas = (noteIds) => { setCanvasPendingNotes(noteIds); setTab("whiteboard"); };
+    window._showInGraph  = (noteId)  => { setTab("graph"); setTimeout(()=>window._graphCenterNode?.(noteId),200); };
+    window._sendToCanvas = (noteIds) => { setCanvasPendingNotes(noteIds); setTab("whiteboard"); };
+    window._showInGraph  = (noteId)  => { setTab("graph"); setTimeout(()=>window._graphCenterNode?.(noteId),200); };
     // _switchToTab: vanuit Whiteboard/Graph naar een tab navigeren
     window._switchToTab = (tabId) => setTab(tabId);
     // _graphToNotebook: vanuit Graaf een context-bericht naar Notebook sturen
@@ -1133,6 +1225,12 @@ const App = () => {
     document.documentElement.style.setProperty("--zk-fg", W.fg);
     return () => {
       window._zkRefreshNotes  = null;
+      window._sendToCanvas    = null;
+      window._showInGraph     = null;
+      window._sendToCanvas    = null;
+      window._showInGraph     = null;
+      window._sendToCanvas    = null;
+      window._showInGraph     = null;
       window._zkForceUpdate   = null;
       window._switchToTab     = null;
       window._graphToNotebook = null;
@@ -1275,6 +1373,8 @@ const App = () => {
       padding:"0 4px", display:"flex", gap:"3px",
       alignItems:"center", flexShrink:0,
     }},
+      // Offline/sync badge
+      React.createElement(OfflineBadge, null),
       // Jobs indicator
       (jobs.length > 0) && React.createElement("div",{style:{position:"relative"}},
         React.createElement("button",{
@@ -1849,6 +1949,9 @@ const App = () => {
               onAddNote: async(note)=>{ await NoteStore.save(note); setNotes([...NoteStore.getAll()]); },
               onSelectNote: id=>{ setSelId(id); setTab("notes"); },
               llmModel,
+              pendingNotes: canvasPendingNotes,
+              onClearPending: ()=>setCanvasPendingNotes(null),
+              onShowInGraph: (noteId)=>{ setTab("graph"); setTimeout(()=>window._graphCenterNode?.(noteId),150); },
             }));
           if(t==="cleanup") return React.createElement("div",{style:{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",minHeight:0}},
             React.createElement(VaultCleanup,{notes,

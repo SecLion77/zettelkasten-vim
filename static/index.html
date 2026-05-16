@@ -284,7 +284,11 @@
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Zettelkasten">
   <meta name="theme-color" content="#1c1c1c">
+  <link rel="manifest" href="/manifest.json">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <link rel="apple-touch-icon" sizes="192x192" href="/icon-192.png">
   <script>
     // Herstel font-size uit localStorage vóór eerste render (voorkomt FOUC)
     (function() {
@@ -309,6 +313,7 @@
 <script src="modules/noteStore.js"></script>
 <script src="modules/pdfService.js"></script>
 <script src="modules/annotationStore.js"></script>
+<script src="modules/offlineStore.js"></script>  <!-- offline-aware patches op NoteAPI/NoteStore -->
 <!-- app.js: globals, constants, api, renderMd, TagPill, TagEditor -->
 <script src="app.js"></script>
 <script src="modules/OutlineEditor.js"></script>
@@ -352,6 +357,65 @@
 <script src="modules/ReviewPanel.js"></script>
 <!-- Bootstrap: mount React NADAT alle modules geladen zijn -->
 <script>
+  // ── Service Worker registratie ──────────────────────────────────────────────
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", async () => {
+      try {
+        const reg = await navigator.serviceWorker.register("/service-worker.js", { scope: "/" });
+        console.log("[ZK] Service Worker actief:", reg.scope);
+
+        // Nieuwe versie klaar → toon melding
+        reg.addEventListener("updatefound", () => {
+          const nw = reg.installing;
+          nw?.addEventListener("statechange", () => {
+            if (nw.state === "installed" && navigator.serviceWorker.controller) {
+              window._zkSwUpdateReady = true;
+              window.dispatchEvent(new CustomEvent("zk-sw-update"));
+            }
+          });
+        });
+
+        // Helpers beschikbaar stellen voor de app
+        const msg = (type, payload) => new Promise(resolve => {
+          const ch = new MessageChannel();
+          ch.port1.onmessage = e => resolve(e.data);
+          navigator.serviceWorker.controller?.postMessage({ type, payload }, [ch.port2]);
+          // Fallback als controller nog niet klaar is
+          setTimeout(() => resolve(null), 2000);
+        });
+
+        window._zkSW = {
+          getStatus: () => msg("GET_QUEUE_STATUS"),
+          syncNow:   () => msg("SYNC_NOW"),
+          clearOffline: () => msg("CLEAR_OFFLINE"),
+        };
+
+        // Sync bij terugkeer van verbinding
+        navigator.serviceWorker.addEventListener("message", e => {
+          if (e.data?.type === "SYNC_COMPLETE") {
+            window.dispatchEvent(new CustomEvent("zk-sync-complete", { detail: e.data }));
+          }
+        });
+
+      } catch (err) {
+        console.warn("[ZK] Service Worker registratie mislukt:", err);
+      }
+    });
+  }
+
+  // Online/offline events
+  window._zkOffline = !navigator.onLine;
+  window.addEventListener("online",  () => {
+    window._zkOffline = false;
+    window.dispatchEvent(new CustomEvent("zk-online"));
+    window._zkSW?.syncNow?.().then(r => r && console.log("[ZK] Auto-sync:", r));
+  });
+  window.addEventListener("offline", () => {
+    window._zkOffline = true;
+    window.dispatchEvent(new CustomEvent("zk-offline"));
+  });
+
+  // ── App mounten ─────────────────────────────────────────────────────────────
   const root = ReactDOM.createRoot(document.getElementById("root"));
   root.render(React.createElement(App));
 </script>

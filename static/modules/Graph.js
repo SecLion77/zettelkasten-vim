@@ -38,7 +38,8 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
   const [ctxMenu,      setCtxMenu]     = useState(null);
   const [pinnedIds,    setPinnedIds]   = useState(new Set());
   const [focusNode,    setFocusNode]   = useState(null); // {id, depth} — neighborhood filter
-  const [peekNoteId,   setPeekNoteId]  = useState(null); // notitie peek panel
+  const [peekNoteId,     setPeekNoteId]    = useState(null); // notitie peek panel
+  const [highlightNodeId, setHighlightNodeId] = useState(null); // pulsende highlight
   const [scale,        setScale]       = useState(1);
   const [lassoRect,    setLassoRect]   = useState(null);  // {x,y,w,h} in screen coords
   const [lassoSel,     setLassoSel]    = useState(new Set()); // geselecteerde node-ids
@@ -162,6 +163,23 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
     }
     setTimeout(() => setCssCleanMsg(""), 5000);
   }, []);
+
+  // Registreer centering functie voor gebruik vanuit andere tabs
+  React.useEffect(() => {
+    window._graphCenterNode = (noteId) => {
+      if (!simRef.current) return;
+      const node = simRef.current.nodes && simRef.current.nodes.find(n => n.id === noteId);
+      if (!node || !canvasRef.current) return;
+      const c = canvasRef.current;
+      setTransform({ x: c.width/2 - node.x*2.2, y: c.height/2 - node.y*2.2, scale: 2.2 });
+      setPeekNoteId(noteId);
+      setHighlightNodeId(noteId);
+      // Verwijder highlight na 4 seconden
+      setTimeout(() => setHighlightNodeId(null), 4000);
+    };
+    return () => { window._graphCenterNode = null; };
+  }, []);
+
   const fetchSemanticEdges = useCallback(async () => {
     if (!notes.length) return;
     setSemLoading(true);
@@ -1058,6 +1076,7 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
         if(n.id===pathFrom&&!sel) color="#9fca56";
         if(n.id===pathTo&&!sel) color="#e5786d";
         if(isSearchHit&&!sel) color="#ffd700";
+        if(n.id===highlightNodeId) color="#ff9f40"; // tijdelijk oranje-accent bij canvas→graaf
 
         ctx.globalAlpha=dimmed?0.18:1;
         ctx.beginPath();ctx.arc(n.x,n.y,r,0,Math.PI*2);
@@ -1155,6 +1174,40 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
         ctx.strokeRect(vx0,vy0,vw,vh);
       }
 
+      // ── Pulsende highlight ring (screen space, bij canvas→graaf navigatie) ───
+      if (highlightNodeId) {
+        const hn = nodes.find(n => n.id === highlightNodeId);
+        if (hn) {
+          const hx = hn.x * v.scale + v.ox;
+          const hy = hn.y * v.scale + v.oy;
+          const t = Date.now() / 300;
+          const pulse = 1 + 0.5 * Math.sin(t);
+          const baseR = (hn.r || 14) * v.scale;
+          ctx.save();
+          // Buitenste zachte gloed
+          const grad = ctx.createRadialGradient(hx, hy, baseR, hx, hy, baseR + 28 * pulse);
+          grad.addColorStop(0, "rgba(255,159,64,0.5)");
+          grad.addColorStop(1, "rgba(255,159,64,0)");
+          ctx.beginPath();
+          ctx.arc(hx, hy, baseR + 28 * pulse, 0, Math.PI * 2);
+          ctx.fillStyle = grad;
+          ctx.fill();
+          // Scherpe ring
+          ctx.beginPath();
+          ctx.arc(hx, hy, baseR + 8 * pulse, 0, Math.PI * 2);
+          ctx.strokeStyle = "rgba(255,159,64,1)";
+          ctx.lineWidth = 2.5;
+          ctx.setLineDash([]);
+          ctx.stroke();
+          // Label "← hier" boven de node
+          ctx.font = "bold 13px DM Sans, system-ui";
+          ctx.fillStyle = "#ff9f40";
+          ctx.textAlign = "center";
+          ctx.fillText("← hier", hx, hy - baseR - 16 * pulse);
+          ctx.restore();
+        }
+      }
+
       // Lasso rechthoek tekenen (screen space, buiten world transform)
       const lr = lassoRef.current;
       if (lr?.active && lr.x2 !== undefined) {
@@ -1173,7 +1226,7 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
     };
     afRef.current=requestAnimationFrame(tick);
     return()=>cancelAnimationFrame(afRef.current);
-  },[notes,selectedId,tagColors,hubMode,communityMode,pathFrom,pathTo,searchQ,scale,pathOnly,focusNode,surpriseNote]);
+  },[notes,selectedId,tagColors,hubMode,communityMode,pathFrom,pathTo,searchQ,scale,pathOnly,focusNode,surpriseNote,highlightNodeId]);
 
   // ── Node under cursor (world coords) ─────────────────────────────────────
   const nodeAt=(sx,sy)=>{
@@ -1422,9 +1475,21 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
           title:"Herstart de layout vanaf nul",
           style:{background:"rgba(229,120,109,0.08)",border:"1px solid rgba(229,120,109,0.2)",
                  color:W.orange,borderRadius:"4px",padding:"3px 9px",fontSize:"12px",cursor:"pointer"}
-        },"\u21BA herstart")
+        },"\u21BA herstart"),
+        lassoSel.size > 0 && React.createElement("button", {
+          onClick: () => {
+            const ids = [...lassoSel].filter(id => {
+              const nd = (simRef.current?.nodes||[]).find(n=>n.id===id);
+              return nd && nd.type !== "tag";
+            });
+            if(window._sendToCanvas && ids.length) window._sendToCanvas(ids);
+          },
+          title: lassoSel.size+" notities naar canvas sturen",
+          style:{background:"rgba(159,202,86,0.15)",color:"#9fca56",
+                 border:"1px solid rgba(159,202,86,0.4)",
+                 borderRadius:"4px",padding:"3px 9px",fontSize:"12px",cursor:"pointer",whiteSpace:"nowrap"}
+        }, "📋 → Canvas")
       ),
-
       // Tip
       React.createElement("div",{style:{fontSize:"11px",color:"rgba(255,255,255,0.2)",
         lineHeight:"1.5",marginTop:"2px"}},
@@ -1902,7 +1967,15 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
                          borderRadius: "5px", color: W.yellow,
                          padding: "5px 0", fontSize: "12px",
                          cursor: "pointer", fontWeight: "600" }
-              }, "🕸 Notebook")
+              }, "🕸 Notebook"),
+              peekNoteId && React.createElement("button", {
+                onClick: () => { if(window._sendToCanvas) window._sendToCanvas([peekNoteId]); },
+                style:{fontSize:"12px",padding:"5px 10px",borderRadius:"5px",
+                       background: W.tagBg||"rgba(159,202,86,0.12)",
+                       color: W.tagColor||"#9fca56",
+                       border:`1px solid ${W.tagBorder||"rgba(159,202,86,0.3)"}`,
+                       cursor:"pointer", fontWeight:"500"}
+              }, "📋 → Canvas")
             )
           )
     ),
