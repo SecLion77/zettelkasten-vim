@@ -1289,8 +1289,9 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
       zIndex:10,
       width:"260px",
       display:"flex", flexDirection:"column",
-      background:"rgba(28,28,28,0.92)",borderRadius:"8px",
-      border:"1px solid rgba(255,255,255,0.1)",
+      background:W.dark?"rgba(28,28,28,0.92)":W.bg2||"rgba(245,240,228,0.95)",
+      borderRadius:"8px",
+      border:`1px solid ${W.splitBg||"rgba(255,255,255,0.1)"}`,
       WebkitBackdropFilter:"blur(6px)",backdropFilter:"blur(6px)",
       // overflow op het element zelf — top+bottom geeft Safari de hoogte-context
       overflowY:"auto",
@@ -1312,7 +1313,7 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
           onChange:e=>setSearchQ(e.target.value),
           onKeyDown:e=>{ if(e.key==="Enter") jumpToSearch(); if(e.key==="Escape"){ setSearchQ(""); setPeekNoteId(null); } },
           placeholder:"Zoek node…",
-          style:{flex:1,background:"rgba(0,0,0,0.4)",border:"1px solid rgba(255,255,255,0.12)",
+          style:{flex:1,background:W.dark?"rgba(0,0,0,0.4)":W.bg3||"rgba(232,224,210,0.8)",border:`1px solid ${W.splitBg||"rgba(255,255,255,0.12)"}`,
                  borderRadius:"4px",padding:"4px 8px",color:W.fg,fontSize:"12px",outline:"none"}
         }),
         searchQ&&React.createElement("button",{
@@ -1360,7 +1361,7 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
         ),
       ),
 
-      React.createElement("div",{style:{height:"1px",background:"rgba(255,255,255,0.06)",margin:"2px 0"}}),
+      React.createElement("div",{style:{height:"1px",background:W.splitBg||"rgba(255,255,255,0.06)",margin:"2px 0"}}),
 
       // Graaf-statistieken
       React.createElement("div",{style:{fontSize:"10px",color:W.fgMuted,
@@ -1389,7 +1390,7 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
         })()
       ),
 
-      React.createElement("div",{style:{height:"1px",background:"rgba(255,255,255,0.06)",margin:"2px 0"}}),
+      React.createElement("div",{style:{height:"1px",background:W.splitBg||"rgba(255,255,255,0.06)",margin:"2px 0"}}),
 
       // Weergave toggles
       React.createElement("div",{style:{fontSize:"11px",fontWeight:"600",
@@ -1404,7 +1405,7 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
          {label:"✨ verrass", val:false, set:()=>findSurpriseConnection(), col:W.yellow, btn:true},
         ].map(({label,val,set,col,btn})=>React.createElement("button",{
           key:label, onClick: btn ? ()=>set() : ()=>set(!val),
-          style:{background: btn ? "rgba(232,200,122,0.12)" : val?`${col||"#8ac6f2"}22`:"rgba(0,0,0,0.4)",
+          style:{background: btn ? "rgba(232,200,122,0.12)" : val?`${col||"#8ac6f2"}22`:(W.dark?"rgba(0,0,0,0.4)":W.bg3||"rgba(232,224,210,0.8)"),
                  border:`1px solid ${btn ? "rgba(232,200,122,0.35)" : val?(col||"rgba(138,198,242,0.5)"):"rgba(255,255,255,0.1)"}`,
                  color: btn ? W.yellow : val?(col||"#a8d8f0"):W.fgMuted,
                  borderRadius:"4px",padding:"3px 9px",fontSize:"13px",cursor:"pointer",fontWeight:val||btn?"600":"400"}
@@ -1509,10 +1510,10 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
           },pathOnly?"● alleen pad":"◎ toon alles")
         ),
         React.createElement("div",{style:{display:"flex",gap:"6px",alignItems:"center",flexWrap:"wrap"}},
-          React.createElement("div",{style:{fontSize:"12px",color:"#9fca56",minWidth:"70px"}},
+          React.createElement("div",{style:{fontSize:"12px",color:W.green||"#9fca56",minWidth:"70px"}},
             pathFrom?(nodesRef.current.find(n=>n.id===pathFrom)?.title||pathFrom).substring(0,18)+"…":"▶ van: —"),
           React.createElement("span",{style:{color:W.fgDim}},"→"),
-          React.createElement("div",{style:{fontSize:"12px",color:"#e5786d",minWidth:"70px"}},
+          React.createElement("div",{style:{fontSize:"12px",color:W.orange||"#e5786d",minWidth:"70px"}},
             pathTo?(nodesRef.current.find(n=>n.id===pathTo)?.title||pathTo).substring(0,18)+"…":"▶ naar: —"),
           pathFrom&&pathTo&&React.createElement("button",{
             onClick:()=>{ const p=bfsPath(pathFrom,pathTo); setPathResult(p||[]); },
@@ -2168,7 +2169,8 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
     // ── Legenda onderaan ──────────────────────────────────────────────────
     React.createElement("div",{style:{
       position:"absolute",bottom:"12px",left:"50%",transform:"translateX(-50%)",
-      background:"rgba(28,28,28,0.92)",border:`1px solid ${W.splitBg}`,
+      background:W.dark?"rgba(28,28,28,0.92)":W.bg2||"rgba(245,240,228,0.95)",
+      border:`1px solid ${W.splitBg}`,
       borderRadius:"6px",padding:"5px 14px",fontSize:"13px",color:W.fgMuted,
       display:"flex",gap:"12px",backdropFilter:"blur(8px)",
     }},

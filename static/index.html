@@ -313,11 +313,11 @@
 <script src="modules/noteStore.js"></script>
 <script src="modules/pdfService.js"></script>
 <script src="modules/annotationStore.js"></script>
-<script src="modules/offlineStore.js"></script>  <!-- offline-aware patches op NoteAPI/NoteStore -->
+<script src="modules/offlineStore.js?v=16"></script>  <!-- offline-aware patches op NoteAPI/NoteStore -->
 <!-- app.js: globals, constants, api, renderMd, TagPill, TagEditor -->
-<script src="app.js"></script>
+<script src="app.js?v=16"></script>
 <script src="modules/OutlineEditor.js"></script>
-<script src="modules/Whiteboard.js"></script>
+<script src="modules/Whiteboard.js?v=16"></script>
 <script src="modules/VaultCleanup.js"></script>
 <script src="modules/TasksPanel.js"></script>
 <script src="modules/AnnotationsPanel.js"></script>
@@ -339,22 +339,24 @@
 <!-- Afbeeldingen -->
 <script src="modules/ImagesGallery.js"></script>
 <!-- Mermaid, MindMap, LLMNotebook, FuzzySearch -->
-<script src="modules/MermaidEditor.js"></script>
+<script src="modules/MermaidEditor.js?v=16"></script>
 <!-- Model picker -->
 <script src="modules/ModelPicker.js"></script>
 <!-- Overige UI-modules: laden NA app.js zodat W, TagPill etc. beschikbaar zijn -->
-<script src="modules/NoteList.js"></script>
+<script src="modules/NoteList.js?v=16"></script>
 <script src="modules/SmartLinkSuggester.js"></script>
     <script src="modules/LinksSidebar.js"></script>
-<script src="modules/NoteEditor.js"></script>
+<script src="modules/NoteEditor.js?v=16"></script>
 <script src="modules/NotePreview.js"></script>
 <script src="modules/NotesMeta.js"></script>
 <script src="modules/TagManager.js"></script>
-<script src="modules/NotesTab.js"></script>
+<script src="modules/NotesTab.js?v=16"></script>
 <script src="modules/WebImporter.js"></script>
 <script src="modules/ReadingList.js"></script>
 <script src="modules/StatsPanel.js"></script>
 <script src="modules/ReviewPanel.js"></script>
+<!-- Live sync zit al in app.js — sync.js verwijderd -->
+
 <!-- Bootstrap: mount React NADAT alle modules geladen zijn -->
 <script>
   // ── Service Worker registratie ──────────────────────────────────────────────
@@ -390,10 +392,15 @@
           clearOffline: () => msg("CLEAR_OFFLINE"),
         };
 
-        // Sync bij terugkeer van verbinding
+        // Berichten van de SW ontvangen
         navigator.serviceWorker.addEventListener("message", e => {
           if (e.data?.type === "SYNC_COMPLETE") {
             window.dispatchEvent(new CustomEvent("zk-sync-complete", { detail: e.data }));
+          }
+          // Nieuwe build beschikbaar op de server
+          if (e.data?.type === "BUILD_UPDATE") {
+            window._zkSwUpdateReady = true;
+            window.dispatchEvent(new CustomEvent("zk-sw-update", { detail: e.data }));
           }
         });
 
@@ -418,6 +425,29 @@
   // ── App mounten ─────────────────────────────────────────────────────────────
   const root = ReactDOM.createRoot(document.getElementById("root"));
   root.render(React.createElement(App));
+
+  // Zorg dat tag-kleuren correct zijn na React render
+  // (werkt ook als de service worker een oudere app.js serveert)
+  function _fixTagColors() {
+    var themeId = (typeof localStorage !== "undefined" && localStorage.getItem("zk_theme")) || "void-cyan";
+    var themes  = (typeof THEMES !== "undefined") ? THEMES : {};
+    var t       = themes[themeId] || themes["void-cyan"] || {};
+    var isLight = t.dark === false;
+    var tc  = t.tagColor  || (isLight ? "#7A3A0A"              : "#9fca56");
+    var tbg = t.tagBg     || (isLight ? "rgba(122,58,10,0.12)" : "rgba(159,202,86,0.12)");
+    var tbd = t.tagBorder || (isLight ? "rgba(122,58,10,0.32)" : "rgba(159,202,86,0.38)");
+    document.querySelectorAll(".tag-pill").forEach(function(el) {
+      el.style.setProperty("color",        tc,  "important");
+      el.style.setProperty("background",   tbg, "important");
+      el.style.setProperty("border-color", tbd, "important");
+    });
+    document.querySelectorAll(".taghl").forEach(function(el) {
+      el.style.setProperty("color",      tc,  "important");
+      el.style.setProperty("background", tbg, "important");
+    });
+  }
+  setTimeout(_fixTagColors, 400);
+  setTimeout(_fixTagColors, 1200);
 </script>
 </body>
 </html>

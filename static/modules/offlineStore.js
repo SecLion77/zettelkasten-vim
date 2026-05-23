@@ -63,46 +63,63 @@ const OfflineStore = (() => {
   };
 
 
-  // ── PATCH 1: fetch interceptor — vangt 202 op voor NoteAPI ────────────────
+  // ── PATCH 1: fetch interceptor — vangt 202, 503 én netwerkfouten op ─────────
   (() => {
     const _orig = window.fetch.bind(window);
+
+    const _makeOfflineResponse = (init, status) => {
+      // Bouw een nep-200-response voor de offline case
+      let body = {};
+      try { body = JSON.parse(init?.body || "{}"); } catch {}
+      // Zorg voor een lokaal ID als het een nieuwe notitie is (POST zonder id)
+      if (!body.id) {
+        body.id = "offline_" + Date.now() + "_" + Math.random().toString(36).slice(2,7);
+      }
+      body._offline = true;
+      body._pending = true;
+      _addPending(String(body.id));
+      return new Response(JSON.stringify(body), {
+        status:  200,
+        headers: { "Content-Type": "application/json", "X-Offline-Queued": "true" },
+      });
+    };
+
     window.fetch = async (input, init = {}) => {
-      const url    = typeof input === "string" ? input : (input?.url || "");
-      const method = (init?.method || "GET").toUpperCase();
-      const isMut  = ["POST","PUT","PATCH","DELETE"].includes(method);
+      const url     = typeof input === "string" ? input : (input?.url || "");
+      const method  = (init?.method || "GET").toUpperCase();
+      const isMut   = ["POST","PUT","PATCH","DELETE"].includes(method);
       const isNotes = /\/api\/notes/.test(url);
 
-      const resp = await _orig(input, init);
+      let resp;
+      try {
+        resp = await _orig(input, init);
+      } catch (networkErr) {
+        // Netwerkfout — server onbereikbaar, SW niet actief
+        if (isNotes && isMut) {
+          return _makeOfflineResponse(init, 0);
+        }
+        throw networkErr; // niet-API fouten doorlaten
+      }
 
+      // 202 = SW heeft de mutatie in de queue gezet
       if (isNotes && isMut && resp.status === 202) {
-        // SW heeft de mutatie in de queue gezet
-        const clone = resp.clone();
-        clone.json().then(d => { if (d?.id) _addPending(String(d.id)); }).catch(() => {});
-        // Geef een 200 terug zodat NoteAPI niet faalt
         const bodyText = await resp.text();
+        let id;
+        try { id = JSON.parse(bodyText)?.id; } catch {}
+        if (id) _addPending(String(id));
         return new Response(bodyText, {
           status: 200,
           headers: { "Content-Type": "application/json", "X-Offline-Queued": "true" },
         });
       }
 
+      // 503 = server weg, geen SW
       if (isNotes && isMut && resp.status === 503) {
-        // Geen SW, server echt weg — stuur ook 200 terug met offline-flag
-        let bodyData = {};
-        try {
-          const b = typeof init?.body === "string" ? JSON.parse(init.body) : {};
-          bodyData = { ...b, _offline: true, _pending: true };
-          _addPending(String(bodyData.id || ""));
-        } catch {}
-        return new Response(JSON.stringify(bodyData), {
-          status: 200,
-          headers: { "Content-Type": "application/json", "X-Offline-Queued": "true" },
-        });
+        return _makeOfflineResponse(init, 503);
       }
 
       return resp;
     };
-    console.log("[OfflineStore] fetch interceptor actief");
   })();
 
 
@@ -125,13 +142,11 @@ const OfflineStore = (() => {
         console.warn("[OfflineStore] load mislukt → IDB fallback:", err.message);
         const cached = await _idbAll(NOTES_STORE);
         if (cached.length) {
-          console.log(`[OfflineStore] ${cached.length} notities uit IDB geladen`);
           return cached;
         }
         throw err;
       }
     };
-    console.log("[OfflineStore] NoteStore.load patch actief");
   })();
 
 
@@ -163,7 +178,6 @@ const OfflineStore = (() => {
         return local;
       }
     };
-    console.log("[OfflineStore] NoteStore.save patch actief");
   })();
 
 
@@ -178,10 +192,119 @@ const OfflineStore = (() => {
   window.addEventListener("zk-online", () => {
     setTimeout(() => {
       window._zkSW?.syncNow?.().then(r => {
-        if (r?.processed > 0) console.log("[OfflineStore] Auto-sync:", r);
       });
     }, 800);
   });
+
+
+  // ── SW-onafhankelijke sync queue ──────────────────────────────────────────
+  // Slaat mislukte requests op in localStorage en herprobeert bij reconnect
+  const LS_QUEUE = "zk_sync_queue_v1";
+
+  const _getQueue = () => {
+    try { return JSON.parse(localStorage.getItem(LS_QUEUE) || "[]"); } catch { return []; }
+  };
+  const _saveQueue = (q) => {
+    try { localStorage.setItem(LS_QUEUE, JSON.stringify(q)); } catch {}
+  };
+
+  const _enqueue = (entry) => {
+    const q = _getQueue();
+    q.push({ ...entry, id: Date.now() + "_" + Math.random().toString(36).slice(2,6) });
+    _saveQueue(q);
+    window.dispatchEvent(new CustomEvent("zk-pending-change", { detail: { count: _getPending().size } }));
+  };
+
+  const _syncQueue = async () => {
+    const q = _getQueue();
+    if (!q.length) return { processed: 0, failed: 0 };
+
+    const _origFetchDirect = window.__zkOrigFetch || fetch;
+    let processed = 0, failed = 0;
+    const remaining = [];
+
+    for (const item of q) {
+      try {
+        const r = await _origFetchDirect(item.url, {
+          method:  item.method,
+          headers: { "Content-Type": "application/json" },
+          body:    item.body ? JSON.stringify(item.body) : undefined,
+        });
+        if (r.ok || r.status === 200 || r.status === 201) {
+          processed++;
+          _removePending(item.body?.id);
+        } else {
+          remaining.push(item);
+          failed++;
+        }
+      } catch {
+        // Nog steeds offline
+        remaining.push(item);
+        break;
+      }
+    }
+
+    _saveQueue(remaining);
+    if (processed > 0) {
+      window.dispatchEvent(new CustomEvent("zk-sync-complete", { detail: { processed, failed } }));
+    }
+    return { processed, failed };
+  };
+
+  // Bewaar de originele fetch voor directe server-communicatie
+  window.__zkOrigFetch = window.fetch;
+
+  // Upgrade de fetch interceptor: sla mislukte requests ook op in localStorage queue
+  const _currentFetch = window.fetch;
+  window.fetch = async (input, init = {}) => {
+    const url    = typeof input === "string" ? input : (input?.url || "");
+    const method = (init?.method || "GET").toUpperCase();
+    const isMut  = ["POST","PUT","PATCH","DELETE"].includes(method);
+    const isNotes = /\/api\/notes/.test(url);
+
+    // GET requests nooit intercepten — anders cachet de SW hash-checks
+    if (!isMut) return _currentFetch(input, init);
+
+    if (isNotes && isMut) {
+      try {
+        const resp = await _currentFetch(input, init);
+        if (resp.ok) return resp;
+        // Server-fout: sla op in queue
+        throw new Error("Server error: " + resp.status);
+      } catch (err) {
+        // Netwerkfout of server-fout — sla op in SW-onafhankelijke queue
+        let body = {};
+        try { body = JSON.parse(init?.body || "{}"); } catch {}
+        if (!body.id) body.id = "offline_" + Date.now();
+        _enqueue({ url, method, body });
+        _addPending(String(body.id));
+        return new Response(JSON.stringify({ ...body, _offline: true, _pending: true }), {
+          status: 200, headers: { "Content-Type": "application/json" }
+        });
+      }
+    }
+    return _currentFetch(input, init);
+  };
+
+  // Sync bij reconnect
+  window.addEventListener("online", () => {
+    setTimeout(() => {
+      _syncQueue().then(r => {
+      });
+      // Probeer ook de SW queue als die er is
+      window._zkSW?.syncNow?.();
+    }, 1000);
+  });
+
+  window.addEventListener("zk-sync-complete", ({ detail = {} }) => {
+    if ((detail.processed || 0) > 0) {
+      _clearPending();
+      if (typeof NoteStore !== "undefined") NoteStore.load().catch(() => {});
+    }
+  });
+
+  // Maak syncQueue globaal beschikbaar zodat de app hem kan aanroepen
+  window._zkSyncQueue = _syncQueue;
 
 
   // ── Publieke API ───────────────────────────────────────────────────────────
@@ -192,11 +315,12 @@ const OfflineStore = (() => {
     clearPending: _clearPending,
     getCached:    ()   => _idbAll(NOTES_STORE),
     cache:        (n)  => _idbPut(NOTES_STORE, n),
+    syncQueue:    ()   => _syncQueue(),
     status: async () => ({
       online:  navigator.onLine,
       pending: _getPending().size,
       cached:  (await _idbAll(NOTES_STORE)).length,
-      queued:  (await _idbAll(QUEUE_STORE)).length,
+      queued:  _getQueue().length,
     }),
   };
 })();

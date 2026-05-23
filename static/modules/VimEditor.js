@@ -264,7 +264,11 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
       s.cur = {row,col};
       setMode("INSERT");
       scrollToCursor(s);
-      inputRef.current?.focus();
+      // Directe focus op canvas-tap — maar NIET als de title al gefocust is
+      // (dan heeft de gebruiker bewust de title gekozen)
+      if (document.activeElement !== document.querySelector('input[placeholder*="Titel"]')) {
+        inputRef.current?.focus();
+      }
       draw();
     };
     cv.addEventListener("touchstart", onTouchStart, {passive:false});
@@ -2398,6 +2402,14 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
       style: {flex:1, position:"relative", overflow:"hidden", minHeight:0},
       tabIndex: -1,
       onClick: () => inputRef.current?.focus(),
+      // iOS Safari: gebruik onTouchStart voor synchrone focus (toont toetsenbord)
+      // Dit vuurt VOOR onClick — essentieel voor iOS keyboard
+      onTouchStart: (e) => {
+        if (e.target.tagName !== "BUTTON" && e.target.tagName !== "A") {
+          e.preventDefault(); // voorkom 300ms delay
+          inputRef.current?.focus();
+        }
+      },
       onKeyDown: (e) => {
         // Onderschep pijltjestoetsen op wrapper-niveau als popup open is
         // zodat de browser ze niet voor scrollen gebruikt
@@ -2506,18 +2518,45 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
         }
       }, `spell:${spellLang}  :spell+ = woord leren`),
 
-      // Onzichtbaar input-element — vangt ALLES af, inclusief Escape
-      // readOnly + size=1 → browser toont niks, maar events komen wél binnen
+      // Invoer-element — vangt toetsaanslagen af
+      // Op iOS: NIET readOnly + groter + geen pointerEvents:none = toetsenbord verschijnt
       React.createElement("input", {
-        ref:      inputRef,
-        onKeyDown:handleKey,
-        onPaste:  handlePaste,
-        readOnly: true,
+        ref:         inputRef,
+        onKeyDown:   handleKey,
+        onPaste:     handlePaste,
+        // NIET readOnly — iOS weigert toetsenbord voor readOnly inputs
+        onChange:    (e) => { e.target.value = ""; }, // leeg houden; VimEditor beheert eigen state
+        onCompositionEnd: (e) => {
+          // IME-invoer (Aziatische talen, iOS autocorrect): verwerk de tekst
+          const text = e.data || "";
+          if (text) {
+            text.split("").forEach(ch => {
+              const fakeEv = { key: ch, preventDefault: ()=>{}, stopPropagation: ()=>{} };
+              handleKey(fakeEv);
+            });
+          }
+          e.target.value = "";
+        },
+        autoCapitalize: "none",    // geen auto-hoofdletter (VIM INSERT mode)
+        autoCorrect:    "off",     // geen autocorrectie in VIM mode
+        autoComplete:   "off",
+        spellCheck:     false,
+        inputMode:      "text",    // iOS toont volledig toetsenbord
         style: {
           position:"absolute", top:0, left:0,
-          width:"1px", height:"1px", opacity:0,
+          // Groot genoeg voor iOS om te detecteren, maar visueel onzichtbaar
+          width:"100%", height:"100%",
+          opacity: 0.001,     // NIET 0: iOS negeert volledig onzichtbare inputs
           border:"none", outline:"none", padding:0,
-          fontSize:"1px", pointerEvents:"none",
+          fontSize:"16px",  // min 16px voorkomt iOS auto-zoom
+          background: "transparent",
+          color: "transparent",
+          caretColor: "transparent",
+          // pointerEvents NOT none: input moet focusbaar zijn voor iOS
+          pointerEvents: "auto",
+          WebkitUserSelect: "text",
+          userSelect: "text",
+          zIndex: 1,         // boven de canvas zodat taps de input bereiken
         },
         tabIndex: 0,
       })

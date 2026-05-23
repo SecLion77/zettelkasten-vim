@@ -2542,7 +2542,7 @@ const LLMNotebook = ({notes, pdfNotes, serverPdfs, serverImages, allTags, onAddN
     const pCount = ctxPdfs.length;
     const iCount = ctxImages.length;
     const eCount = ctxExtPdfs.length;
-    if (!nCount && !pCount && !iCount && !eCount) return null;
+    if (!nCount && !pCount && !iCount && !eCount) return null; // geen context
     const parts = [];
     if (nCount) parts.push(nCount+" notitie"+(nCount>1?"s":""));
     if (pCount) parts.push(pCount+" PDF"+(pCount>1?"'s":""));
@@ -2567,9 +2567,9 @@ const LLMNotebook = ({notes, pdfNotes, serverPdfs, serverImages, allTags, onAddN
     // Alle PDFs tonen in de context-selector, ook die zonder annotaties
     return (serverPdfs||[]).map(p => ({
       ...p,
-      annotCount: pdfNotes.filter(a => a.file === p.name).length,
+      annotCount: (pdfNotes||[]).filter(a => a.file === p.name).length,
     }));
-  }, [serverPdfs, pdfNotes]);
+  }, [serverPdfs, pdfNotes]); // pdfNotes kan [] zijn
 
   // ── Selecteer alles / niets ────────────────────────────────────────────────
   const selectAllNotes = () => setCtxNotes(filteredNotes.map(n => n.id));
@@ -2899,7 +2899,7 @@ REGELS:
                 border:"1px solid rgba(138,198,242,0.25)",lineHeight:"1.4",
                 whiteSpace:"nowrap",
               }}, ctxNotes.length),
-              tagFilters.size>0 && React.createElement("span",{style:{
+              tagFilter && React.createElement("span",{style:{
                 fontSize:"9px",background:"rgba(159,202,86,0.2)",
                 color:W.green,borderRadius:"8px",padding:"1px 4px",
                 border:"1px solid rgba(159,202,86,0.35)",
@@ -2929,7 +2929,7 @@ REGELS:
                 background:"rgba(138,198,242,0.08)",borderRadius:"4px",padding:"4px 8px",
                 border:"1px solid rgba(138,198,242,0.2)"}},
                 `📚 ${ctxNotes.length} notitie${ctxNotes.length!==1?"s":""} in context`
-                + (tagFilters.size>0 ? ` · filter: ${[...tagFilters].map(t=>"#"+t).join(", ")}` : " · alle")
+                + (tagFilter ? ` · filter: #${tagFilter}` : " · alle")
               ),
               // Tag-filter
               allNoteTags.length > 0 && React.createElement("div",null,
@@ -3096,7 +3096,7 @@ REGELS:
           tagFilter && React.createElement("span",{style:{
             fontSize:"11px",background:"rgba(159,202,86,0.2)",color:W.green,
             borderRadius:"8px",padding:"1px 6px",border:"1px solid rgba(159,202,86,0.35)"
-          }}, tagFilters.size>0 ? [...tagFilters].map(t=>"#"+t).join(" ") : "")
+          }}, tagFilter || "")
         ),
 
         // Context badge — altijd zichtbaar
@@ -3107,7 +3107,7 @@ REGELS:
         }, `📚 ${ctxNotes.length} notitie${ctxNotes.length!==1?"s":""}` +
            (ctxPdfs.length ? ` + ${ctxPdfs.length} PDF` : "") +
            (ctxExtPdfs.length ? ` + ${ctxExtPdfs.length} ext.` : "") +
-           (tagFilter ? ` · ${[...tagFilters].map(t=>"#"+t).join(", ")}` : "")
+           (tagFilter ? ` · #${tagFilter}` : "")
         ),
 
         // Externe PDF's knop
@@ -4371,20 +4371,33 @@ const FuzzySearch = ({ notes, allTags, onOpenNote, onAddNote, onUpdateNote, onPa
 
   // Laad PDF index status bij mount + poll terwijl bezig
   React.useEffect(() => {
+    let iv = null;
+    // Controleer eerst of het endpoint bestaat — logt anders elke keer een 404
+    let endpointMissing = false;
     const check = () => {
-      fetch("/api/pdf-index/status").then(r=>r.json()).then(d=>{
-        if(d.ok) setPdfIndexStatus(d);
-      }).catch(()=>{});
+      if (endpointMissing) return;
+      fetch("/api/pdf-index/status")
+        .then(r => {
+          if (!r.ok) { endpointMissing = true; clearInterval(iv); return null; }
+          return r.json();
+        })
+        .then(d => { if(d?.ok) setPdfIndexStatus(d); })
+        .catch(()=>{});
     };
     check();
-    // Poll elke 3s zolang indexering bezig is
-    const iv = setInterval(() => {
-      fetch("/api/pdf-index/status").then(r=>r.json()).then(d=>{
-        if(d.ok) {
-          setPdfIndexStatus(d);
-          if (!d.building) clearInterval(iv);
-        }
-      }).catch(()=>{});
+    iv = setInterval(() => {
+      fetch("/api/pdf-index/status")
+        .then(r => {
+          if (!r.ok) { clearInterval(iv); return null; }
+          return r.json();
+        })
+        .then(d => {
+          if(d?.ok) {
+            setPdfIndexStatus(d);
+            if (!d.building) clearInterval(iv);
+          }
+        })
+        .catch(()=>{ clearInterval(iv); });
     }, 3000);
     return () => clearInterval(iv);
   }, []);

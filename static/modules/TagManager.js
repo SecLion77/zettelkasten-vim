@@ -173,15 +173,16 @@ const SmartTagEditor=({tags=[],onChange,allTags=[],content="",llmModel=""})=>{
       },
         ...tags.map(t=>React.createElement("span",{key:t,style:{
           display:"inline-flex",alignItems:"center",gap:"3px",
-          background:"rgba(184,224,106,0.14)",border:"1px solid rgba(184,224,106,0.42)",
+          background:W2.tagBg||"rgba(184,224,106,0.14)",
+          border:`1px solid ${W2.tagBorder||"rgba(184,224,106,0.42)"}`,
           borderRadius:"11px",padding:"3px 10px",fontSize:"12px",
-          color:"#b8e06a",fontWeight:"500",flexShrink:0,
+          color:W2.tagColor||"#b8e06a",fontWeight:"500",flexShrink:0,
         }},
           "#"+t,
           React.createElement("span",{
             onMouseDown:e=>{e.preventDefault();e.stopPropagation();remove(t);},
-            style:{cursor:"pointer",color:"rgba(184,224,106,0.55)",fontSize:"11px",
-                   lineHeight:1,marginLeft:"2px",fontWeight:"bold"}
+            style:{cursor:"pointer",color:W2.tagColor||"#b8e06a",opacity:0.6,
+                   fontSize:"11px",lineHeight:1,marginLeft:"2px",fontWeight:"bold"}
           },"✕")
         )),
         React.createElement("input",{
@@ -291,15 +292,15 @@ const SmartTagEditor=({tags=[],onChange,allTags=[],content="",llmModel=""})=>{
             disabled:alreadyAdded,
             style:{
               background: alreadyAdded
-                ? "rgba(159,202,86,0.1)"
+                ? (W2.tagBg||W2.commentBg||"rgba(159,202,86,0.1)")
                 : "rgba(138,198,242,0.12)",
               border: `1px solid ${alreadyAdded
-                ? "rgba(159,202,86,0.35)"
+                ? (W2.tagBorder||W2.commentBorder||"rgba(159,202,86,0.35)")
                 : "rgba(138,198,242,0.35)"}`,
               borderRadius:"20px",
               padding:"4px 13px",
               fontSize:"12px",fontWeight:"500",
-              color: alreadyAdded ? "#b8e06a" : W2.blue,
+              color: alreadyAdded ? (W2.tagColor||W2.comment||"#9fca56") : W2.blue,
               cursor: alreadyAdded ? "default" : "pointer",
               display:"flex",alignItems:"center",gap:"4px",
             }
@@ -621,7 +622,7 @@ const TagManagerPanel=({allTags=[],notes=[],onMergeTags,onRenameTag,onDeleteTag,
             m.reden&&React.createElement("div",{style:{fontSize:"11px",color:W2.fgMuted,marginBottom:"8px"}},m.reden),
             React.createElement("div",{style:{display:"flex",gap:"6px"}},
               React.createElement("button",{onClick:()=>{onMergeTags(m.from,m.to);setAiMerge(p=>p.filter((_,j)=>j!==i));},style:{
-                background:"rgba(159,202,86,0.12)",border:"1px solid rgba(159,202,86,0.28)",
+                background:W2.commentBg||"rgba(159,202,86,0.12)",border:`1px solid ${W2.commentBorder||"rgba(159,202,86,0.28)"}`,
                 borderRadius:"4px",padding:"3px 14px",color:W2.comment,fontSize:"12px",cursor:"pointer",
               }},"✓ Toepassen"),
               React.createElement("button",{onClick:()=>setAiMerge(p=>p.filter((_,j)=>j!==i)),style:{
@@ -651,16 +652,16 @@ const TagManagerPanel=({allTags=[],notes=[],onMergeTags,onRenameTag,onDeleteTag,
                   // Tags als pills
                   React.createElement("div",{style:{display:"flex",alignItems:"center",gap:"6px",flexWrap:"wrap",marginBottom:"7px"}},
                     ...group.map(t=>React.createElement("span",{key:t,style:{
-                      background: t===bestTarget?"rgba(159,202,86,0.15)":"rgba(234,231,136,0.1)",
-                      border:`1px solid ${t===bestTarget?"rgba(159,202,86,0.35)":"rgba(234,231,136,0.22)"}`,
+                      background: t===bestTarget?(W2.tagBg||"rgba(159,202,86,0.15)"):"rgba(234,231,136,0.1)",
+                      border:`1px solid ${t===bestTarget?(W2.tagBorder||"rgba(159,202,86,0.35)"):"rgba(234,231,136,0.22)"}`,
                       borderRadius:"10px",padding:"2px 9px",fontSize:"12px",
-                      color:t===bestTarget?W2.comment:W2.yellow,
+                      color:t===bestTarget?(W2.tagColor||W2.comment):W2.yellow,
                       fontWeight:t===bestTarget?"bold":"normal",
                     }},
                       "#"+t,
                       React.createElement("span",{style:{opacity:0.6,marginLeft:"3px",fontSize:"11px"}},"("+freq(t)+"×)"),
                       t===bestTarget&&React.createElement("span",{style:{marginLeft:"4px",fontSize:"10px",
-                        color:"rgba(159,202,86,0.7)"}},"← doel")
+                        color:W2.tagColor||"rgba(159,202,86,0.7)"}},"← doel")
                     ))
                   ),
                   // Actieknoppen
@@ -669,7 +670,7 @@ const TagManagerPanel=({allTags=[],notes=[],onMergeTags,onRenameTag,onDeleteTag,
                       // BUGFIX: was onMergeTags(group.slice(1), [group[0]]) — array ipv string
                       onClick:()=>onMergeTags(others, bestTarget),
                       style:{
-                        background:"rgba(159,202,86,0.12)",border:"1px solid rgba(159,202,86,0.28)",
+                        background:W2.commentBg||"rgba(159,202,86,0.12)",border:`1px solid ${W2.commentBorder||"rgba(159,202,86,0.28)"}`,
                         borderRadius:"4px",padding:"4px 13px",color:W2.comment,
                         fontSize:"12px",cursor:"pointer",whiteSpace:"nowrap",
                       }
@@ -734,7 +735,7 @@ const TagManagerPanel=({allTags=[],notes=[],onMergeTags,onRenameTag,onDeleteTag,
               React.createElement("div",{style:{flex:1,background:W2.bg3,borderRadius:"3px",height:"14px",overflow:"hidden",position:"relative"}},
                 React.createElement("div",{style:{
                   width:`${(freq(t)/max)*100}%`,height:"100%",
-                  background:"rgba(159,202,86,0.5)",borderRadius:"3px",
+                  background:W2.tagColor||"rgba(159,202,86,0.5)",opacity:0.6,borderRadius:"3px",
                   transition:"width 0.3s",
                 }}),
                 React.createElement("span",{style:{
@@ -857,7 +858,7 @@ const TagManagerPanel=({allTags=[],notes=[],onMergeTags,onRenameTag,onDeleteTag,
                 overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flexShrink:0}},"#"+t),
               React.createElement("div",{style:{flex:1,background:W2.bg3,borderRadius:"3px",height:"6px",overflow:"hidden"}},
                 React.createElement("div",{style:{width:`${(freq(t)/max)*100}%`,height:"100%",
-                  background:"rgba(159,202,86,0.45)",borderRadius:"3px"}})
+                  background:W2.tagColor||"rgba(159,202,86,0.45)",opacity:0.6,borderRadius:"3px"}})
               ),
               React.createElement("span",{style:{fontSize:"11px",color:W2.fgMuted,width:"28px",textAlign:"right",flexShrink:0}},freq(t)+"×")
             ));

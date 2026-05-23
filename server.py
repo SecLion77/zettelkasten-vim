@@ -1838,7 +1838,25 @@ class ZKHandler(BaseHTTPRequestHandler):
             "/api/api-keys":        lambda: self._get_api_keys(),
             "/api/custom-models":   lambda: self._get_custom_models(),
             "/api/health":           lambda: self._send(200, {"ok": True, "status": "running"}),
+            "/api/pdf-index/status": lambda: self._pdf_index_status_get(),
         }
+
+    def _pdf_index_status_get(self):
+        """Status van de PDF zoekindex — GET versie voor de Notebook tab."""
+        try:
+            idx = VaultManager._pdf_search_index_cache
+            return self._send(200, {
+                "ok": True,
+                "indexed": len(idx),
+                "building": VaultManager._pdf_index_building,
+                "pdfs": [{"name": k, "pages": len(v.get("pages", []))}
+                          for k, v in idx.items()]
+            })
+        except AttributeError:
+            # Index nog niet beschikbaar — geef lege status terug
+            return self._send(200, {"ok": True, "indexed": 0, "building": False, "pdfs": []})
+        except Exception as e:
+            return self._send(200, {"ok": False, "error": str(e)})
 
     def _get_custom_models(self):
         """Geeft alle custom modellen terug."""
@@ -1948,6 +1966,80 @@ class ZKHandler(BaseHTTPRequestHandler):
             fp = STATIC_DIR / "app.js"
             if fp.exists(): return self._send_nocache(fp.read_bytes(), "application/javascript")
 
+        # ── /api/version — build-hash voor update-detectie ─────────────────────
+        if p == "/api/version":
+            import hashlib, os as _os
+            h = hashlib.md5()
+            for fname in sorted(["app.js"] +
+                [f"modules/{f}" for f in _os.listdir(str(STATIC_DIR / "modules"))
+                 if f.endswith(".js")] if (STATIC_DIR / "modules").exists() else []):
+                fp2 = STATIC_DIR / fname
+                if fp2.exists():
+                    h.update(fp2.read_bytes())
+            mtime = int((STATIC_DIR/"app.js").stat().st_mtime) if (STATIC_DIR/"app.js").exists() else 0
+            import json as _json, time as _time
+            data = _json.dumps({
+                "hash":    h.hexdigest()[:8],
+                "sw":      "zk-sw-v1",
+                "mtime":   mtime,
+                "ts":      int(_time.time()),
+            }).encode()
+            self.send_response(200)
+            self.send_header("Content-Type",  "application/json")
+
+
+        # ── /api/build-version — automatische versie op basis van bestandsdatum ───
+        # Verandert automatisch als app.js of een module aangepast wordt.
+        if p == "/api/build-version":
+            mtimes = []
+            for fname in ["app.js", "modules/offlineStore.js", "modules/MermaidEditor.js"]:
+                fp3 = STATIC_DIR / fname
+                if fp3.exists():
+                    mtimes.append(int(fp3.stat().st_mtime))
+            build_ts = max(mtimes) if mtimes else 0
+            data = json.dumps({"ts": build_ts}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type",  "application/json")
+            self.send_header("Content-Length", len(data))
+            self.send_header("Cache-Control", "no-cache, no-store")
+            self.end_headers()
+            self.wfile.write(data)
+            return
+
+        # ── /api/notes-version — change-hash voor live-sync tussen apparaten ───
+        if p == "/api/notes-version":
+            import hashlib as _hl, json as _json2, time as _time2
+            notes_dir = ZKHandler.vault.notes_dir
+            h = _hl.md5()
+            count = 0
+            latest = 0
+            if notes_dir.exists():
+                for f in sorted(notes_dir.glob("*.md")):
+                    mt = f.stat().st_mtime
+                    h.update(f"{f.name}:{mt}".encode())
+                    if mt > latest:
+                        latest = mt
+                    count += 1
+            data = _json2.dumps({
+                "hash":   h.hexdigest()[:10],
+                "count":  count,
+                "latest": int(latest),
+            }).encode()
+            self.send_response(200)
+            self.send_header("Content-Type",   "application/json")
+            self.send_header("Content-Length",  len(data))
+            self.send_header("Cache-Control",  "no-cache, no-store")
+            self.end_headers()
+            self.wfile.write(data)
+            return
+
+            self.send_header("Content-Length", len(data))
+            self.send_header("Cache-Control", "no-cache, no-store")
+            self.end_headers()
+            self.wfile.write(data)
+            return
+
+
         # ── PWA bestanden ──────────────────────────────────────────────────────
         # Service Worker: MOET no-cache zijn zodat iOS altijd de nieuwste versie pakt
         if p == "/service-worker.js":
@@ -1991,6 +2083,12 @@ class ZKHandler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(data)
                 return
+
+        # sync.js — live sync module (altijd no-cache)
+        if p == "/sync.js" or p.startswith("/sync.js?"):
+            fp = STATIC_DIR / "sync.js"
+            if fp.exists():
+                return self._send_nocache(fp.read_bytes(), "application/javascript")
 
         # Modules-bestanden (SOLID refactor — stap 1+)
         if p.startswith("/modules/"):
@@ -2220,7 +2318,7 @@ class ZKHandler(BaseHTTPRequestHandler):
         if p=="/api/config":
             body=self._body()
             allowed={"pdf_personal_use","pdf_personal_email","review_data",
-                     "custom_models"}
+                     "custom_models","pins"}
             update = {}
             for k, v in body.items():
                 if k in allowed:

@@ -32,14 +32,36 @@ const NoteList = ({
   const setDateFilter = onDateFilterChange || (() => {});
   const [hoverNote, setHoverNote] = useState(null); // {note, rect} voor peek-tooltip
   const [pinnedIds, setPinnedIds] = useState(() => {
+    // Laad direct uit localStorage voor snelle eerste render
     try { return JSON.parse(localStorage.getItem("zk_pins") || "[]"); }
     catch { return []; }
   });
+
+  // Laad pins van server bij mount — synchroniseert iPad ↔ laptop
+  useEffect(() => {
+    fetch("/api/config", { cache: "no-store" })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        const serverPins = d?.config?.pins;
+        if (Array.isArray(serverPins)) {
+          setPinnedIds(serverPins);
+          try { localStorage.setItem("zk_pins", JSON.stringify(serverPins)); } catch {}
+        }
+      })
+      .catch(() => {}); // offline: blijf localStorage gebruiken
+  }, []);
+
   const togglePin = (id, e) => {
     e.stopPropagation();
     setPinnedIds(prev => {
       const next = prev.includes(id) ? prev.filter(x => x !== id) : [id, ...prev];
+      // Sla op in localStorage (instant) én server (sync naar iPad)
       try { localStorage.setItem("zk_pins", JSON.stringify(next)); } catch {}
+      fetch("/api/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pins: next }),
+      }).catch(() => {}); // stil falen als offline
       return next;
     });
   };
@@ -423,14 +445,14 @@ const NoteList = ({
     // ── Canvas selectie balk ──────────────────────────────────────────────────
     canvasSel !== null && React.createElement("div", {
       style:{display:"flex",alignItems:"center",gap:"8px",padding:"7px 10px",
-             background: W.tagBg||"rgba(159,202,86,0.08)",
-             borderBottom:`1px solid ${W.tagBorder||"rgba(159,202,86,0.25)"}`,
+             background: W.tagBg||W.commentBg||"rgba(159,202,86,0.08)",
+             borderBottom:`1px solid ${W.tagBorder||W.commentBorder||"rgba(159,202,86,0.25)"}`,
              flexShrink:0, minHeight:"36px"}
     },
       (canvasSel?.size ?? 0) === 0
         ? React.createElement("span",{style:{fontSize:"12px",color:W.fgMuted,flex:1,fontStyle:"italic"}},
             "Tik op notities om te selecteren…")
-        : React.createElement("span",{style:{fontSize:"12px",color:W.tagColor||"#9fca56",flex:1,fontWeight:"500"}},
+        : React.createElement("span",{style:{fontSize:"12px",color:W.tagColor||W.comment||"#9fca56",flex:1,fontWeight:"500"}},
             (canvasSel?.size ?? 0)+" notitie"+((canvasSel?.size ?? 0)===1?"":"s")+" geselecteerd"),
       (canvasSel?.size ?? 0) > 0 && React.createElement("button",{
         onClick:()=>{
@@ -438,9 +460,9 @@ const NoteList = ({
           setCanvasSel(null);
         },
         style:{fontSize:"12px",padding:"4px 12px",borderRadius:"5px",
-               background:W.tagBg||"rgba(159,202,86,0.15)",
-               color:W.tagColor||"#9fca56",
-               border:`1px solid ${W.tagBorder||"rgba(159,202,86,0.35)"}`,
+               background:W.tagBg||W.commentBg||"rgba(159,202,86,0.15)",
+               color:W.tagColor||W.comment||"#9fca56",
+               border:`1px solid ${W.tagBorder||W.commentBorder||"rgba(159,202,86,0.35)"}`,
                cursor:"pointer",fontWeight:"600",whiteSpace:"nowrap"}
       },"📋 → Canvas"),
       React.createElement("button",{
@@ -539,16 +561,22 @@ const NoteList = ({
                     title: "Offline opgeslagen — wordt gesynchroniseerd zodra de server bereikbaar is",
                     style: { fontSize: "11px", flexShrink: 0, opacity: 0.7 }
                   }, "⏳"),
-                // Gelezen-indicator
+                // Gelezen-indicator — ook bij pending offline-state
                 n.isRead && React.createElement("span", {
-                  title: "Gelezen",
+                  title: n._pending ? "Gelezen (wordt gesynchroniseerd)" : "Gelezen",
                   style: {
                     fontSize: "10px", flexShrink: 0,
-                    color: W.comment, background: W.commentBg||"rgba(159,202,86,.08)",
-                    border: `1px solid ${W.tagBorder||"rgba(159,202,86,.25)"}`,
+                    color: n._pending ? W.fgMuted : (W.tagColor||"#9fca56"),
+                    background: n._pending
+                      ? "rgba(255,255,255,.05)"
+                      : (W.tagBg||"rgba(159,202,86,.08)"),
+                    border: `1px solid ${n._pending
+                      ? W.splitBg
+                      : (W.tagBorder||"rgba(159,202,86,.25)")}`,
                     borderRadius: "8px", padding: "0 5px", lineHeight: "16px",
+                    opacity: n._pending ? 0.6 : 1,
                   }
-                }, "✓"),
+                }, n._pending ? "✓…" : "✓"),
                 pinnedIds.includes(n.id) && React.createElement("span", {
                   title: "Gepind — klik om te ontkoppelen",
                   onClick: (e) => togglePin(n.id, e),

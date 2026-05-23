@@ -5,6 +5,70 @@
 // Wetenschappelijk: ruimtelijk denken ondersteunt creatief probleemoplossen
 // (Schon & Wiggins 1992: "zie, beweeg, zie opnieuw")
 
+// ── Buurtnetwerk: bereken verbindingsgewichten voor een notitie ──────────────
+function buildNeighborhood(noteId, notes, maxLevel = 2) {
+  if (!noteId || !notes?.length) return [];
+
+  // Bouw opzoektabel: id → note
+  const byId = {};
+  notes.forEach(n => { byId[n.id] = n; });
+
+  // Extraheer wiki-links uit inhoud
+  const extractLinks = (content = "") => {
+    const m = content.match(/\[\[([^\]]+)\]\]/g) || [];
+    return m.map(s => s.slice(2, -2).split("|")[0].trim());
+  };
+
+  // Bereken gewicht tussen ego en een kandidaat-note
+  const calcWeight = (ego, other) => {
+    let w = 0;
+    const egoLinks  = extractLinks(ego.content);
+    const otherLinks = extractLinks(other.content);
+    // Wiki-link van ego naar other
+    if (egoLinks.includes(other.id))   w += 3;
+    // Backlink: other linkt naar ego
+    if (otherLinks.includes(ego.id))   w += 2;
+    // Gedeelde tags
+    const egoTags   = new Set(ego.tags   || []);
+    const otherTags = new Set(other.tags  || []);
+    egoTags.forEach(t => { if (otherTags.has(t)) w += 1; });
+    return w;
+  };
+
+  const ego = byId[noteId];
+  if (!ego) return [];
+
+  // 1e niveau
+  const level1 = notes
+    .filter(n => n.id !== noteId)
+    .map(n => ({ note: n, weight: calcWeight(ego, n), level: 1 }))
+    .filter(x => x.weight > 0)
+    .sort((a, b) => b.weight - a.weight)
+    .slice(0, 8);
+
+  if (maxLevel < 2) return level1;
+
+  // 2e niveau: buren van buren, nog niet in 1e niveau
+  const seen = new Set([noteId, ...level1.map(x => x.note.id)]);
+  const level2 = [];
+  level1.slice(0, 3).forEach(({ note: neighbor }) => {
+    notes
+      .filter(n => !seen.has(n.id))
+      .map(n => ({ note: n, weight: calcWeight(neighbor, n), level: 2, via: neighbor.title }))
+      .filter(x => x.weight > 0)
+      .sort((a, b) => b.weight - a.weight)
+      .slice(0, 2)
+      .forEach(x => {
+        if (!seen.has(x.note.id)) {
+          seen.add(x.note.id);
+          level2.push(x);
+        }
+      });
+  });
+
+  return [...level1, ...level2.sort((a,b) => b.weight - a.weight).slice(0,4)];
+}
+
 const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", serverImages = [], pendingNotes = null, onClearPending, onShowInGraph }) => {
   const { useState, useEffect, useRef, useCallback } = React;
 
@@ -29,6 +93,14 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
   const [searchMode, setSearchMode]     = useState("fuzzy"); // "fuzzy" | "exact"
   const [activeTagFilters, setActiveTagFilters] = useState(new Set());
   const [ctxMenu, setCtxMenu]           = useState(null);  // {x,y, cardId|null}
+  const [showLevel2, setShowLevel2]     = useState(false);
+  const [editingCon, setEditingCon]     = useState(null);
+  const [hoveredItem, setHoveredItem]   = useState(null); // radial menu hover
+  // ringPath[i] = {noteId, idx, a0, a1} voor elk uitgevouwen ringniveau
+  const [ringPath, setRingPath]           = useState([]);
+  const [hoverPreview, setHoverPreview]   = useState(null);
+  const ringTimerRef  = React.useRef(null);   // debounce ring-expansie
+  const svgLeaveTimer = React.useRef(null);   // vertraagd sluiten
   const ctxMenuRef                      = useRef(null);
   const [renamingBoard, setRenamingBoard] = useState(null); // bid tijdens hernoemen
   const [peekNoteId, setPeekNoteId]     = useState(null); // notitie peek panel
@@ -44,26 +116,61 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
   const cvRef     = useRef(null);
   const viewRef   = useRef({ ox: 0, oy: 0, scale: 1 });
   const pendingRef = useRef(null); // noteIds die op canvas moeten komen
-  const dirtyRef  = useRef(true);
+  const dirtyRef      = useRef(true);
+  const touchRef      = useRef(null);
+  const pinchRef      = useRef(null);
+  const longPressRef  = useRef(null);
+  const lastTapRef    = useRef(0);
   const isPanning = useRef(false);
   const panStart  = useRef(null);
   const dragging  = useRef(null);   // { id, startX, startY, startCX, startCY }
   const afRef     = useRef(null);
   const stateRef  = useRef({ cards: [], connections: [] });
 
+  // Strip markdown voor plain-text preview
+  const stripMd = (t = "") => t
+    .replace(/\*\*(.+?)\*\*/g, "$1")   // bold
+    .replace(/\*(.+?)\*/g, "$1")         // italic
+    .replace(/\[\[.+?\]\]/g, "")       // wiki-links
+    .replace(/^#+\s+/gm, "")             // headers
+    .replace(/^[-*]\s+/gm, "")           // lijstitems
+    .replace(/`[^`]+`/g, "")             // code
+    .replace(/\n{2,}/g, "\n")           // dubbele newlines
+    .trim();
+
   // Kleuren voor kaarten (Wombat-palette)
   const COLORS = [
-    { bg: "#2a2a1e", border: "#9fca56", text: "#ffffd7", name: "geel" },
-    { bg: "#1e242a", border: "#8ac6f2", text: "#e3e0d7", name: "blauw" },
-    { bg: "#2a1e1e", border: "#e5786d", text: "#ffe0dc", name: "rood" },
-    { bg: "#1e2a1e", border: "#95e454", text: "#e3e0d7", name: "groen" },
-    { bg: "#261e2a", border: "#d7a0ff", text: "#f0e3ff", name: "paars" },
-    { bg: "#2a2a2a", border: "#857b6f", text: "#e3e0d7", name: "grijs" },
+    { bg: "#2a2a1e", border: "#9fca56", text: "#ffffd7", name: "geel",
+      label: "Idee / vluchtig",    desc: "Nieuwe gedachten, vluchtige notities" },
+    { bg: "#1e242a", border: "#8ac6f2", text: "#e3e0d7", name: "blauw",
+      label: "Bron / notitie",     desc: "Literatuur, bronnen, gelinkte notities" },
+    { bg: "#2a1e1e", border: "#e5786d", text: "#ffe0dc", name: "rood",
+      label: "Vraag / spanning",   desc: "Openstaande vragen, tegenstrijdigheden" },
+    { bg: "#1e2a1e", border: "#95e454", text: "#e3e0d7", name: "groen",
+      label: "Conclusie / inzicht", desc: "Eigen inzichten, permanente kennis" },
+    { bg: "#261e2a", border: "#d7a0ff", text: "#f0e3ff", name: "paars",
+      label: "Onbekend / onderzoek", desc: "Te onderzoeken, hypotheses" },
+    { bg: "#2a2a2a", border: "#857b6f", text: "#e3e0d7", name: "grijs",
+      label: "Neutraal / overig",  desc: "Structuur, containers, vrije kaarten" },
   ];
 
   const genId = () => Date.now().toString(36) + Math.random().toString(36).slice(2);
 
   // Sluit contextmenu bij klik buiten
+  // Injecteer animatie-CSS voor het radiale menu
+  React.useEffect(() => {
+    if (document.getElementById("zk-radial-css")) return;
+    const s = document.createElement("style");
+    s.id = "zk-radial-css";
+    s.textContent = `
+      @keyframes zk-radial-in {
+        from { opacity:0; transform:scale(0.55) rotate(-8deg); }
+        to   { opacity:1; transform:scale(1)   rotate(0deg);  }
+      }
+    `;
+    document.head.appendChild(s);
+  }, []);
+
   React.useEffect(() => {
     if (!ctxMenu) return;
     const close = (e) => {
@@ -76,7 +183,7 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
   // Esc sluit peek panel
   React.useEffect(() => {
     const onKey = (e) => {
-      if (e.key === "Escape") { setPeekNoteId(null); setCtxMenu(null); }
+      if (e.key === "Escape") { setPeekNoteId(null); setCtxMenu(null); setRingPath([]); setHoverPreview(null); }
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
@@ -242,31 +349,75 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
           if (!a || !b) return;
           const ax = toScreen(a.x + a.w/2, a.y + a.h/2);
           const bx = toScreen(b.x + b.w/2, b.y + b.h/2);
+          const wt = Math.min(Math.max(con.weight || 1, 1), 10);
+          const lw = (0.8 + (wt / 10) * 3.2) * v.scale;
           ctx.beginPath();
-          ctx.strokeStyle = con.color || "rgba(138,198,242,0.4)";
-          ctx.lineWidth = (1.5 * v.scale);
+          ctx.strokeStyle = con.color || "rgba(138,198,242,0.55)";
+          ctx.lineWidth = lw;
           ctx.setLineDash([]);
-          // Gebogen lijn
           const mx = (ax.x + bx.x) / 2, my = (ax.y + bx.y) / 2 - 20 * v.scale;
           ctx.moveTo(ax.x, ax.y);
           ctx.quadraticCurveTo(mx, my, bx.x, bx.y);
           ctx.stroke();
-          // Pijlpunt
           const angle = Math.atan2(bx.y - my, bx.x - mx);
-          const hs = 8 * v.scale;
-          ctx.fillStyle = con.color || "rgba(138,198,242,0.6)";
+          const hs = (5 + wt * 0.5) * v.scale;
+          ctx.fillStyle = con.color || "rgba(138,198,242,0.7)";
           ctx.beginPath();
           ctx.moveTo(bx.x, bx.y);
           ctx.lineTo(bx.x - hs * Math.cos(angle - 0.4), bx.y - hs * Math.sin(angle - 0.4));
           ctx.lineTo(bx.x - hs * Math.cos(angle + 0.4), bx.y - hs * Math.sin(angle + 0.4));
           ctx.closePath();
           ctx.fill();
-          // Label
-          if (con.label) {
-            ctx.font = `${11 * v.scale}px 'DM Sans', sans-serif`;
-            ctx.fillStyle = "rgba(200,190,180,0.8)";
+          const conMX = (ax.x + bx.x) / 2;
+          const conMY = (ax.y + bx.y) / 2 - 10 * v.scale;
+          if (con.weight && con.weight > 1) {
+            const wStr = String(con.weight);
+            ctx.font = `${9 * v.scale}px 'DM Sans', sans-serif`;
             ctx.textAlign = "center";
-            ctx.fillText(con.label, (ax.x + bx.x)/2, (ax.y + bx.y)/2 - 6 * v.scale);
+            const pw = ctx.measureText(wStr).width + 7 * v.scale;
+            ctx.fillStyle = "rgba(18,18,22,0.82)";
+            ctx.beginPath();
+            if (ctx.roundRect) ctx.roundRect(conMX-pw/2,conMY-8*v.scale,pw,13*v.scale,4*v.scale);
+            else ctx.rect(conMX-pw/2,conMY-8*v.scale,pw,13*v.scale);
+            ctx.fill();
+            ctx.fillStyle = con.color || "rgba(138,198,242,0.9)";
+            ctx.fillText(wStr, conMX, conMY + 3 * v.scale);
+          }
+          // Klikbare-zone indicator: potlood-pill bij midpunt
+          if (!con.label) {
+            const pSize = 11 * v.scale;
+            // Achtergrond pill
+            ctx.fillStyle = 'rgba(18,18,22,0.65)';
+            ctx.beginPath();
+            if (ctx.roundRect) ctx.roundRect(conMX - pSize, conMY - pSize*0.7, pSize*2, pSize*1.4, pSize*0.5);
+            else ctx.rect(conMX - pSize, conMY - pSize*0.7, pSize*2, pSize*1.4);
+            ctx.fill();
+            // Rand
+            ctx.strokeStyle = 'rgba(138,198,242,0.45)';
+            ctx.lineWidth = 0.8;
+            ctx.stroke();
+            // Icoon
+            ctx.font = `${Math.round(pSize * 0.85)}px 'DM Sans', sans-serif`;
+            ctx.textAlign = 'center';
+            ctx.fillStyle = 'rgba(138,198,242,0.75)';
+            ctx.fillText('✏', conMX, conMY + pSize * 0.35);
+          }
+          if (con.label) {
+            const lbY = conMY + ((con.weight && con.weight>1) ? 15:2)*v.scale;
+            ctx.font = `${12 * v.scale}px 'DM Sans', sans-serif`;
+            const tlw = ctx.measureText(con.label).width + 12*v.scale;
+            // Achtergrond pill met border
+            ctx.fillStyle = "rgba(14,14,18,0.85)";
+            ctx.beginPath();
+            if (ctx.roundRect) ctx.roundRect(conMX-tlw/2,lbY-9*v.scale,tlw,17*v.scale,5*v.scale);
+            else ctx.rect(conMX-tlw/2,lbY-9*v.scale,tlw,17*v.scale);
+            ctx.fill();
+            ctx.strokeStyle = "rgba(138,198,242,0.35)";
+            ctx.lineWidth = 0.8;
+            ctx.stroke();
+            // Tekst
+            ctx.fillStyle = "rgba(227,224,215,0.95)";
+            ctx.fillText(con.label, conMX, lbY + 4*v.scale);
           }
         });
 
@@ -319,9 +470,10 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
             ctx.shadowBlur  = 12 * v.scale;
           }
 
-          // Achtergrond
-          ctx.fillStyle = c.noteId ? "rgba(138,198,242,0.08)" : col.bg;
-          ctx.strokeStyle = isSel ? col.border : (c.noteId ? "#8ac6f2" : col.border + "80");
+          // Achtergrond — gebruik altijd de colorIdx van de kaart
+          // (noteId-kaarten tonen een klein blauw icoon ipv een vaste blauwe kleur)
+          ctx.fillStyle = col.bg;
+          ctx.strokeStyle = isSel ? col.border : col.border + "80";
           ctx.lineWidth = isSel ? 1.5 : 0.8;
           roundRect(ctx, sx.x, sx.y, sw, sh, 6 * v.scale);
           ctx.fill();
@@ -708,6 +860,31 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
       return;
     }
 
+    // Klik op verbindingslijn midpunt → label bewerken
+    if (!card) {
+      const v2 = viewRef.current;
+      const conList = stateRef.current?.connections || connections;
+      const clickedCon = conList.find(co => {
+        const ca = cards.find(cd => cd.id === co.from);
+        const cb = cards.find(cd => cd.id === co.to);
+        if (!ca || !cb) return false;
+        const cmx = ((ca.x+ca.w/2)+(cb.x+cb.w/2))/2*v2.scale+v2.ox;
+        const cmy = ((ca.y+ca.h/2)+(cb.y+cb.h/2))/2*v2.scale+v2.oy-10*v2.scale; // match tekening
+        return Math.abs(sx-cmx)<52 && Math.abs(sy-cmy)<38;
+      });
+      if (clickedCon) {
+        const ca = cards.find(cd=>cd.id===clickedCon.from);
+        const cb = cards.find(cd=>cd.id===clickedCon.to);
+        const v2 = viewRef.current; // v2 al gedeclareerd hierboven
+        const scx = ((ca.x+ca.w/2)+(cb.x+cb.w/2))/2*v2.scale+v2.ox;
+        const scy = ((ca.y+ca.h/2)+(cb.y+cb.h/2))/2*v2.scale+v2.oy-10*v2.scale;
+        const cvRect = cvRef.current?.getBoundingClientRect();
+        setEditingCon({ conId:clickedCon.id, label:clickedCon.label||'',
+          x: scx+(cvRect?.left||0), y: scy+(cvRect?.top||0) });
+        return;
+      }
+    }
+
     // Select tool
     if (card) {
       setSelected(card.id);
@@ -717,6 +894,17 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
         startCX: card.x, startCY: card.y,
       };
     } else {
+      // Sla label op als editor open was (klik buiten = bevestigen)
+      if (editingCon) {
+        const nextCons = stateRef.current.connections.map(c =>
+          c.id === editingCon.conId ? { ...c, label: editingCon.label } : c
+        );
+        stateRef.current = { ...stateRef.current, connections: nextCons };
+        setCons(nextCons);
+        saveBoard(stateRef.current.cards, nextCons);
+        dirtyRef.current = true;
+        setEditingCon(null);
+      }
       setSelected(null);
       setConnectFrom(null);
     }
@@ -762,7 +950,147 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
     if (card) setEditingId(card.id);
   }, [cards]);
 
-  const handleWheel = useCallback((e) => {
+  // ── Touch: één vinger → drag/pan | twee vingers → pinch+pan ─────────────────
+  const handleTouchStart = useCallback((e) => {
+    if (editingId) return;
+    const cv  = cvRef.current;
+    const r   = cv.getBoundingClientRect();
+    const now = Date.now();
+
+    if (e.touches.length === 2) {
+      // Annuleer lang-indrukken en start pinch
+      clearTimeout(longPressRef.current);
+      touchRef.current = null;
+      const t0 = e.touches[0], t1 = e.touches[1];
+      const d0 = Math.hypot(t1.clientX-t0.clientX, t1.clientY-t0.clientY);
+      const mx = (t0.clientX+t1.clientX)/2 - r.left;
+      const my = (t0.clientY+t1.clientY)/2 - r.top;
+      pinchRef.current = { d0, scale0: viewRef.current.scale, mx, my,
+                           ox0: viewRef.current.ox, oy0: viewRef.current.oy };
+      e.preventDefault(); return;
+    }
+
+    if (e.touches.length !== 1) return;
+    const t   = e.touches[0];
+    const sx  = t.clientX - r.left, sy = t.clientY - r.top;
+    const card = cardAt(sx, sy);
+
+    // Dubbeltik detectie
+    if (now - lastTapRef.current < 300 && card) {
+      clearTimeout(longPressRef.current);
+      setEditingId(card.id);
+      lastTapRef.current = 0;
+      e.preventDefault(); return;
+    }
+    lastTapRef.current = now;
+
+    // Lang-indrukken → contextmenu (alleen op lege canvas of kaart)
+    longPressRef.current = setTimeout(() => {
+      const cv2 = cvRef.current;
+      const r2  = cv2.getBoundingClientRect();
+      const lx  = t.clientX - r2.left, ly = t.clientY - r2.top;
+      const c2  = cardAt(lx, ly);
+      setCtxMenu({
+        canvasX: lx, canvasY: ly,
+        screenX: t.clientX, screenY: t.clientY,
+        cardId: c2?.id || null,
+      });
+      touchRef.current = null;
+    }, 500);
+
+    touchRef.current = {
+      id: t.identifier, sx, sy,
+      ox: viewRef.current.ox, oy: viewRef.current.oy,
+      cardId: card?.id || null,
+      startCX: card?.x ?? 0, startCY: card?.y ?? 0,
+      moved: false, t0: now,
+    };
+    e.preventDefault();
+  }, [editingId, cards]);
+
+  const handleTouchMove = useCallback((e) => {
+    if (e.touches.length === 2 && pinchRef.current) {
+      const cv = cvRef.current;
+      const r  = cv.getBoundingClientRect();
+      const t0 = e.touches[0], t1 = e.touches[1];
+      const d  = Math.hypot(t1.clientX-t0.clientX, t1.clientY-t0.clientY);
+      const pr = pinchRef.current;
+      const mx = (t0.clientX+t1.clientX)/2 - r.left;
+      const my = (t0.clientY+t1.clientY)/2 - r.top;
+      const newScale = Math.max(0.15, Math.min(4, pr.scale0 * (d / pr.d0)));
+      // Zoom op het midpunt
+      const ds = newScale - pr.scale0;
+      const ox = pr.ox0 - pr.mx * ds / pr.scale0 * newScale / newScale;
+      const oy = pr.oy0 - pr.my * ds / pr.scale0 * newScale / newScale;
+      // Pan mee met beweging van het midpunt
+      const panX = mx - pr.mx;
+      const panY = my - pr.my;
+      viewRef.current = {
+        ...viewRef.current,
+        scale: newScale,
+        ox: pr.ox0 + panX - (pr.mx) * (newScale/pr.scale0 - 1),
+        oy: pr.oy0 + panY - (pr.my) * (newScale/pr.scale0 - 1),
+      };
+      dirtyRef.current = true;
+      e.preventDefault(); return;
+    }
+
+    if (!touchRef.current || e.touches.length !== 1) return;
+    const cv = cvRef.current;
+    const r  = cv.getBoundingClientRect();
+    const t  = e.touches[0];
+    const sx = t.clientX - r.left, sy = t.clientY - r.top;
+    const tr = touchRef.current;
+
+    const dx = sx - tr.sx, dy = sy - tr.sy;
+    if (!tr.moved && Math.hypot(dx, dy) > 6) {
+      clearTimeout(longPressRef.current); // niet lang-indrukken
+      tr.moved = true;
+    }
+    if (!tr.moved) return;
+
+    if (tr.cardId) {
+      // Kaart verslepen
+      const wdx = dx / viewRef.current.scale;
+      const wdy = dy / viewRef.current.scale;
+      const next = cards.map(c =>
+        c.id === tr.cardId
+          ? { ...c, x: tr.startCX + wdx, y: tr.startCY + wdy }
+          : c
+      );
+      setCards(next);
+      stateRef.current = { ...stateRef.current, cards: next };
+      dirtyRef.current = true;
+    } else {
+      // Canvas panning
+      viewRef.current = { ...viewRef.current, ox: tr.ox + dx, oy: tr.oy + dy };
+      dirtyRef.current = true;
+    }
+    e.preventDefault();
+  }, [cards]);
+
+  const handleTouchEnd = useCallback((e) => {
+    clearTimeout(longPressRef.current);
+    pinchRef.current = null;
+
+    if (touchRef.current?.cardId && !touchRef.current.moved) {
+      // Kaart aantikken → selecteren
+      setSelected(touchRef.current.cardId);
+    }
+    if (touchRef.current?.cardId) {
+      saveBoard(stateRef.current.cards, stateRef.current.connections);
+    }
+    touchRef.current = null;
+    e.preventDefault();
+  }, []);
+
+  const handleTouchCancel = useCallback(() => {
+    clearTimeout(longPressRef.current);
+    pinchRef.current = null;
+    touchRef.current = null;
+  }, []);
+
+    const handleWheel = useCallback((e) => {
     e.preventDefault();
     const cv = cvRef.current;
     const r  = cv.getBoundingClientRect();
@@ -1149,16 +1477,14 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
               style: { width: "10px", height: "10px", borderRadius: "50%",
                        background: col.border, flexShrink: 0 }
             }),
-            React.createElement("span", {
-              style: { fontSize: "11px", color: W.fgMuted }
-            }, [
-              "Idee / vluchtig",
-              "Bron / notitie",
-              "Vraag / spanning",
-              "Conclusie / inzicht",
-              "Onbekend / onderzoeken",
-              "Neutraal / overig",
-            ][i])
+            React.createElement("div", { style: { display:"flex", flexDirection:"column", gap:"1px" } },
+              React.createElement("span", {
+                style: { fontSize: "11px", color: W.fg || "#e3e0d7" }
+              }, col.label),
+              React.createElement("span", {
+                style: { fontSize: "9px", color: W.fgMuted, lineHeight: 1.3 }
+              }, col.desc)
+            )
           )),
           React.createElement("div", {
             style: { borderTop: `1px solid #2a2a2a`, marginTop: "8px",
@@ -1442,23 +1768,33 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
 
       // Kleur picker voor geselecteerde kaart
       selCard && React.createElement("div", {
-        style: { display: "flex", gap: "4px", alignItems: "center" }
+        style: { display: "flex", gap: "5px", alignItems: "center" }
       },
-        COLORS.map((col, i) =>
-          React.createElement("button", {
+        COLORS.map((col, i) => {
+          const isActive = (selCard.colorIdx || 0) === i;
+          return React.createElement("button", {
             key: i,
-            onClick: () => updateCard(selCard.id, { colorIdx: i }),
-            title: col.name,
+            // Kleur wijzigen + dirtyRef markeren zodat canvas direct herlaadt
+            onClick: (e) => {
+              e.stopPropagation();
+              updateCard(selCard.id, { colorIdx: i });
+              dirtyRef.current = true; // forceer directe hertekening
+            },
+            title: `${col.label}\n${col.desc}`,
             style: {
-              width: "14px", height: "14px", borderRadius: "50%",
+              width: isActive ? "18px" : "14px",
+              height: isActive ? "18px" : "14px",
+              borderRadius: "50%",
               background: col.border,
-              border: selCard.colorIdx === i ? `2px solid white` : "1.5px solid transparent",
+              border: isActive ? `2px solid white` : `1.5px solid rgba(255,255,255,0.2)`,
               cursor: "pointer", padding: 0,
-              opacity: selCard.colorIdx === i ? 1 : 0.55,
-              transition: "all .1s",
+              opacity: isActive ? 1 : 0.6,
+              transition: "all .15s",
+              boxShadow: isActive ? `0 0 6px ${col.border}` : "none",
+              outline: "none",
             }
-          })
-        ),
+          });
+        }),
         React.createElement("div", { style: { width: "1px", height: "16px", background: "#2a2a2a", margin: "0 2px" } })
       ),
 
@@ -1589,6 +1925,10 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
         onMouseDown:  handleMouseDown,
         onMouseMove:  handleMouseMove,
         onMouseUp:    handleMouseUp,
+        onTouchStart: handleTouchStart,
+        onTouchMove:  handleTouchMove,
+        onTouchEnd:   handleTouchEnd,
+        onTouchCancel:handleTouchCancel,
         onDoubleClick: handleDblClick,
         onWheel:      handleWheel,
         onContextMenu: (e) => {
@@ -1672,422 +2012,551 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
       }, "Klik nu op de tweede kaart om te verbinden — of Escape om te annuleren"),
 
       // ── Contextmenu ────────────────────────────────────────────────────────
-      ctxMenu && React.createElement("div", {
-        ref: ctxMenuRef,
+      // ── Verbindingslabel editor ────────────────────────────────────────────
+      editingCon && React.createElement("div", {
         style: {
-          position: "absolute",
-          left: Math.min(ctxMenu.screenX - (cvRef.current?.getBoundingClientRect().left||0), (cvRef.current?.offsetWidth||600) - 200),
-          top:  Math.min(ctxMenu.screenY - (cvRef.current?.getBoundingClientRect().top||0),  (cvRef.current?.offsetHeight||400) - 320),
-          background: "#1e1e1e",
-          border: "1px solid #333",
-          borderRadius: "8px",
-          boxShadow: "0 8px 32px rgba(0,0,0,0.7)",
-          zIndex: 200,
-          minWidth: "188px",
-          overflow: "hidden",
-          animation: "fadeIn .1s ease-out",
-          paddingBottom: "4px",
+          position: "fixed",
+          left: Math.max(8, editingCon.x - 130),
+          top:  Math.max(8, editingCon.y - 22),
+          zIndex: 9999,
+          background: W.bg2 || "#1a1a1a",
+          border: "1px solid " + (W.blue || "#8ac6f2"),
+          borderRadius: "10px",
+          padding: "8px 12px",
+          display: "flex",
+          gap: "8px",
+          alignItems: "center",
+          boxShadow: "0 8px 32px rgba(0,0,0,0.8)",
+          minWidth: "280px",
         }
       },
-        // Header
-        React.createElement("div", {
-          style: { padding: "7px 12px 6px", fontSize: "10px", color: W.fgMuted,
-                   letterSpacing: "1px", textTransform: "uppercase",
-                   borderBottom: "1px solid #2a2a2a", marginBottom: "4px" }
-        }, ctxMenu.cardId ? "Kaart" : "Canvas"),
-
-        // ── KAART-specifieke acties ─────────────────────────────────────────
-        ctxMenu.cardId && (() => {
-          const card = cards.find(c => c.id === ctxMenu.cardId);
-          if (!card) return null;
-          const menuItems = [
-            {
-              label: "✎  Bewerken",
-              key: "edit",
-              action: () => { setEditingId(card.id); setSelected(card.id); setCtxMenu(null); }
-            },
-            {
-              label: "⤳  Verbinden met…",
-              key: "connect",
-              action: () => { setTool("connect"); setConnectFrom(card.id); setCtxMenu(null); }
-            },
-            {
-              label: "⬡  → Notitie maken",
-              key: "tonote",
-              hidden: !!card.noteId,
-              action: () => { cardToNote(card); setCtxMenu(null); }
-            },
-            {
-              label: "⬡  Notitie openen",
-              key: "opennote",
-              hidden: !card.noteId,
-              color: W.blue,
-              action: () => {
-                if (card.noteId) setPeekNoteId(card.noteId);
-                setCtxMenu(null);
-              }
-            },
-            { separator: true, key: "sep1" },
-            {
-              label: "Kleur:",
-              key: "colors",
-              isColorPicker: true,
-            },
-            { separator: true, key: "sep2" },
-            {
-              label: "⊞  Dupliceren",
-              key: "dup",
-              action: () => {
-                const { x, y } = toWorld(ctxMenu.canvasX + 20, ctxMenu.canvasY + 20);
-                addCard(x + 20, y + 20, card.text, card.colorIdx, null);
-                setCtxMenu(null);
-              }
-            },
-            {
-              label: "✕  Verwijderen",
-              key: "delete",
-              color: W.orange,
-              action: () => { deleteCard(card.id); setCtxMenu(null); }
-            },
-          ];
-
-          return menuItems.map(item => {
-            if (item.hidden) return null;
-            if (item.separator) return React.createElement("div", {
-              key: item.key,
-              style: { height: "1px", background: "#2a2a2a", margin: "3px 0" }
-            });
-            if (item.isColorPicker) return React.createElement("div", {
-              key: item.key,
-              style: { padding: "3px 12px 5px", display: "flex", alignItems: "center", gap: "6px" }
-            },
-              React.createElement("span", { style: { fontSize: "11px", color: W.fgMuted } }, "Kleur:"),
-              COLORS.map((col, i) =>
-                React.createElement("button", {
-                  key: i,
-                  onClick: () => { updateCard(card.id, { colorIdx: i }); setCtxMenu(null); },
-                  title: col.name,
-                  style: {
-                    width: "14px", height: "14px", borderRadius: "50%",
-                    background: col.border, border: card.colorIdx === i ? "2px solid white" : "1.5px solid transparent",
-                    cursor: "pointer", padding: 0,
-                    opacity: card.colorIdx === i ? 1 : 0.6,
-                  }
-                })
-              )
-            );
-            return React.createElement("div", {
-              key: item.key,
-              onClick: item.action,
-              style: {
-                padding: "7px 12px",
-                fontSize: "12px",
-                color: item.color || W.fg,
-                cursor: "pointer",
-                display: "flex", alignItems: "center", gap: "6px",
-                transition: "background .08s",
-              },
-              onMouseEnter: e => e.currentTarget.style.background = "rgba(255,255,255,0.06)",
-              onMouseLeave: e => e.currentTarget.style.background = "transparent",
-            }, item.label);
-          });
-        })(),
-
-        // ── CANVAS-level acties (geen kaart geklikt) ────────────────────────
-        !ctxMenu.cardId && (() => {
-          const { x, y } = toWorld(ctxMenu.canvasX, ctxMenu.canvasY);
-          const canvasItems = [
-            {
-              label: "✎  Nieuwe kaart hier",
-              key: "new",
-              action: () => {
-                const card = addCard(x, y, "", 0);
-                setEditingId(card.id); setSelected(card.id);
-                setCtxMenu(null);
-              }
-            },
-            {
-              label: "📋  Notitie als kaart",
-              key: "notepaste",
-              action: () => { setSidebarOpen(true); setSidebarTab("notes"); setCtxMenu(null); }
-            },
-            { separator: true, key: "sep1" },
-            {
-              label: "🎨  Gele kaart",
-              key: "yellow",
-              action: () => { addCard(x, y, "", 0); setCtxMenu(null); }
-            },
-            {
-              label: "🎨  Blauwe kaart",
-              key: "blue",
-              action: () => { addCard(x, y, "", 1); setCtxMenu(null); }
-            },
-            {
-              label: "🎨  Rode kaart (vraag)",
-              key: "red",
-              action: () => { addCard(x, y, "", 2); setCtxMenu(null); }
-            },
-            {
-              label: "🎨  Groene kaart (conclusie)",
-              key: "green",
-              action: () => { addCard(x, y, "", 3); setCtxMenu(null); }
-            },
-            { separator: true, key: "sep2" },
-            {
-              label: "⊙  Zoom resetten",
-              key: "reset",
-              action: () => { viewRef.current = { ox: 0, oy: 0, scale: 1 }; dirtyRef.current = true; setCtxMenu(null); }
-            },
-            {
-              label: "🗑  Alles verwijderen",
-              key: "clear",
-              color: W.orange,
-              action: () => {
-                if (confirm("Weet je zeker dat je alle kaarten wilt verwijderen?")) {
-                  setCards([]); setCons([]); saveBoard([], []);
-                }
-                setCtxMenu(null);
-              }
-            },
-          ];
-
-          return canvasItems.map(item => {
-            if (item.separator) return React.createElement("div", {
-              key: item.key,
-              style: { height: "1px", background: "#2a2a2a", margin: "3px 0" }
-            });
-            return React.createElement("div", {
-              key: item.key,
-              onClick: item.action,
-              style: {
-                padding: "7px 12px",
-                fontSize: "12px",
-                color: item.color || W.fg,
-                cursor: "pointer",
-                transition: "background .08s",
-              },
-              onMouseEnter: e => e.currentTarget.style.background = "rgba(255,255,255,0.06)",
-              onMouseLeave: e => e.currentTarget.style.background = "transparent",
-            }, item.label);
-          });
-        })()
-      ),
-    )
-    ),  // sluit hoofd canvas kolom
-
-    // ── AI analyse panel — slide-in rechts ──────────────────────────────
-    aiPanel && llmModel && React.createElement("div", {
-      style: {
-        position: "absolute", top: 0, right: peekNoteId ? "360px" : 0,
-        bottom: 0, width: "340px",
-        background: "#1a1a1a",
-        borderLeft: "1px solid #2a2a2a",
-        display: "flex", flexDirection: "column",
-        zIndex: 290,
-        boxShadow: "-8px 0 32px rgba(0,0,0,0.5)",
-        animation: "slideInRight .18s ease-out",
-      }
-    },
-      // Header met modi
-      React.createElement("div", {
-        style: { padding: "8px 12px", borderBottom: "1px solid #2a2a2a",
-                 flexShrink: 0 }
-      },
-        React.createElement("div", {
-          style: { display: "flex", alignItems: "center",
-                   justifyContent: "space-between", marginBottom: "6px" }
-        },
-          React.createElement("span", {
-            style: { fontSize: "10px", color: W.purple, fontWeight: "600",
-                     letterSpacing: "1px", textTransform: "uppercase" }
-          }, "✦ AI Canvas"),
-          React.createElement("button", {
-            onClick: () => setAiPanel(false),
-            style: { background: "none", border: "none", color: W.fgMuted,
-                     cursor: "pointer", fontSize: "16px", padding: 0 }
-          }, "×")
-        ),
-        // Modi tabs
-        React.createElement("div", {
-          style: { display: "flex", gap: "3px" }
-        },
-          [
-            { id: "analyse",  label: "Analyseer" },
-            { id: "synthese", label: "Synthese"  },
-            { id: "chat",     label: "Chat"      },
-          ].map(({ id, label }) =>
-            React.createElement("button", {
-              key: id,
-              onClick: () => { setAiMode(id); setAiResult(""); setAiHistory([]); },
-              style: {
-                flex: 1, padding: "4px 0", fontSize: "11px", cursor: "pointer",
-                background: aiMode === id ? "rgba(215,135,255,0.12)" : "transparent",
-                border: `1px solid ${aiMode === id ? "rgba(215,135,255,0.4)" : "#2a2a2a"}`,
-                borderRadius: "4px",
-                color: aiMode === id ? W.purple : W.fgMuted,
-                fontWeight: aiMode === id ? "600" : "400",
-                transition: "all .1s",
-              }
-            }, label)
-          )
-        )
-      ),
-
-      // Modus-beschrijving
-      React.createElement("div", {
-        style: { padding: "8px 12px 6px", flexShrink: 0,
-                 borderBottom: "1px solid #1e1e1e" }
-      },
-        React.createElement("div", {
-          style: { fontSize: "10px", color: W.fgMuted, lineHeight: "1.5" }
-        }, {
-          analyse:  "Wat zijn de clusters, spanningsvelden en ontbrekende verbindingen op dit canvas?",
-          synthese: "Verwerk de kaarten tot één samenhangende notitie die direct in de vault past.",
-          chat:     "Stel vragen over het canvas. De AI kent de inhoud van alle kaarten.",
-        }[aiMode])
-      ),
-
-      // Resultaat / chat gebied
-      React.createElement("div", {
-        style: { flex: 1, overflowY: "auto", padding: "10px 12px",
-                 WebkitOverflowScrolling: "touch" }
-      },
-        // Chat modus
-        aiMode === "chat" && aiHistory.map((msg, i) =>
-          React.createElement("div", {
-            key: i,
-            style: {
-              marginBottom: "10px",
-              display: "flex",
-              justifyContent: msg.role === "user" ? "flex-end" : "flex-start",
+        React.createElement("span", {
+          style: { fontSize: "13px", color: W.fgMuted || "#857b6f", flexShrink: 0 }
+        }, "✏"),
+        React.createElement("input", {
+          autoFocus: true,
+          value: editingCon.label,
+          placeholder: "Label voor deze verbinding…",
+          onChange: function(e) {
+            setEditingCon(function(p) { return Object.assign({}, p, { label: e.target.value }); });
+          },
+          onKeyDown: function(e) {
+            if (e.key === "Enter") {
+              var nextCons = stateRef.current.connections.map(function(c) {
+                return c.id === editingCon.conId ? Object.assign({}, c, { label: editingCon.label }) : c;
+              });
+              stateRef.current = Object.assign({}, stateRef.current, { connections: nextCons });
+              setCons(nextCons);
+              saveBoard(stateRef.current.cards, nextCons);
+              dirtyRef.current = true;
+              setEditingCon(null);
+            }
+            if (e.key === "Escape") {
+              setEditingCon(null);
             }
           },
-            React.createElement("div", {
-              style: {
-                maxWidth: "85%", padding: "7px 10px",
-                fontSize: "12px", lineHeight: "1.6",
-                borderRadius: msg.role === "user" ? "10px 10px 2px 10px" : "10px 10px 10px 2px",
-                background: msg.role === "user"
-                  ? "rgba(215,135,255,0.15)"
-                  : "rgba(255,255,255,0.05)",
-                color: msg.role === "user" ? W.purple : W.fg,
-                border: `1px solid ${msg.role === "user" ? "rgba(215,135,255,0.3)" : "#2a2a2a"}`,
-              }
-            }, msg.content)
-          )
-        ),
-
-        // Analyse / synthese resultaat
-        aiMode !== "chat" && aiResult && React.createElement("div", {
-          style: { fontSize: "12px", color: W.fg, lineHeight: "1.75",
-                   whiteSpace: "pre-wrap", fontFamily: "'DM Sans', system-ui, sans-serif" }
-        }, aiResult),
-
-        // Laden indicator
-        aiStreaming && React.createElement("div", {
-          style: { display: "flex", gap: "4px", alignItems: "center",
-                   color: W.purple, fontSize: "12px", padding: "6px 0",
-                   animation: "ai-pulse 1.4s ease-in-out infinite" }
-        }, "✦ denken…"),
-
-        // Lege staat
-        !aiResult && !aiStreaming && aiMode !== "chat" && cards.length >= 2 &&
-          React.createElement("div", {
-            style: { color: W.fgMuted, fontSize: "12px", fontStyle: "italic",
-                     padding: "10px 0" }
-          }, "Klik op de knop hieronder om te starten.")
+          style: {
+            flex: 1,
+            background: "transparent",
+            border: "none",
+            borderBottom: "1px solid " + (W.splitBg || "#444"),
+            color: W.fg || "#e3e0d7",
+            fontSize: "14px",
+            outline: "none",
+            fontFamily: "'DM Sans', sans-serif",
+            paddingBottom: "2px",
+          }
+        }),
+        React.createElement("button", {
+          onClick: function() {
+            var nextCons = stateRef.current.connections.map(function(c) {
+              return c.id === editingCon.conId ? Object.assign({}, c, { label: editingCon.label }) : c;
+            });
+            stateRef.current = Object.assign({}, stateRef.current, { connections: nextCons });
+            setCons(nextCons);
+            saveBoard(stateRef.current.cards, nextCons);
+            dirtyRef.current = true;
+            setEditingCon(null);
+          },
+          style: {
+            background: "transparent", border: "none",
+            color: W.blue || "#8ac6f2", fontSize: "16px", cursor: "pointer",
+          }
+        }, "✓"),
+        editingCon.label && React.createElement("button", {
+          title: "Wis label",
+          onClick: function() {
+            var nextCons = stateRef.current.connections.map(function(c) {
+              return c.id === editingCon.conId ? Object.assign({}, c, { label: "" }) : c;
+            });
+            stateRef.current = Object.assign({}, stateRef.current, { connections: nextCons });
+            setCons(nextCons);
+            saveBoard(stateRef.current.cards, nextCons);
+            dirtyRef.current = true;
+            setEditingCon(null);
+          },
+          style: {
+            background: "transparent", border: "none",
+            color: W.fgMuted || "#857b6f", fontSize: "13px", cursor: "pointer",
+          }
+        }, "✕")
       ),
 
-      // Footer met acties
-      React.createElement("div", {
-        style: { borderTop: "1px solid #2a2a2a", padding: "8px 10px",
-                 flexShrink: 0, display: "flex", flexDirection: "column", gap: "6px" }
-      },
-        // Chat input
-        aiMode === "chat" && React.createElement("div", {
-          style: { display: "flex", gap: "5px" }
-        },
-          React.createElement("input", {
-            placeholder: "Stel een vraag over het canvas…",
-            value: aiChatInput,
-            onChange: e => setAiChatInput(e.target.value),
-            onKeyDown: e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); runAiChat(aiChatInput); } },
-            disabled: aiStreaming,
-            style: {
-              flex: 1, background: "#111", border: "1px solid #2a2a2a",
-              borderRadius: "5px", color: W.fg, padding: "5px 8px",
-              fontSize: "12px", outline: "none",
-            }
-          }),
-          React.createElement("button", {
-            onClick: () => runAiChat(aiChatInput),
-            disabled: !aiChatInput.trim() || aiStreaming,
-            style: {
-              background: "rgba(215,135,255,0.12)",
-              border: "1px solid rgba(215,135,255,0.3)",
-              borderRadius: "5px", color: W.purple,
-              padding: "5px 10px", fontSize: "12px", cursor: "pointer",
-              opacity: (!aiChatInput.trim() || aiStreaming) ? 0.4 : 1,
-            }
-          }, "→")
-        ),
+      // ── Radiaal menu (SVG arc) — thema-bewust + recursief ──────────────────
+      ctxMenu && (() => {
+        const cx   = ctxMenu.canvasX;
+        const cy   = ctxMenu.canvasY;
+        const card = ctxMenu.cardId ? cards.find(c => c.id === ctxMenu.cardId) : null;
 
-        // Analyse / Synthese start knop
-        aiMode !== "chat" && React.createElement("button", {
-          onClick: aiMode === "analyse" ? runAiAnalyse : runAiSynthese,
-          disabled: aiStreaming || cards.length < 2,
-          style: {
-            background: "rgba(215,135,255,0.1)",
-            border: "1px solid rgba(215,135,255,0.3)",
-            borderRadius: "5px", color: W.purple,
-            padding: "6px", fontSize: "12px", cursor: "pointer",
-            opacity: (aiStreaming || cards.length < 2) ? 0.5 : 1,
-            transition: "all .12s",
-            animation: aiStreaming ? "ai-pulse 1.4s ease-in-out infinite" : "none",
+        // Thema-kleuren
+        const isDark = W.dark !== false;
+        const bg0  = W.bg2  || "rgba(22,22,28,0.97)";
+        const sep = isDark
+          ? (W.splitBg || "rgba(255,255,255,0.10)")
+          : (W.splitBg || "rgba(0,0,0,0.15)");
+        const blue = W.blue || "#8ac6f2";
+        const green= W.tagColor || "#9fca56";
+        const orange=W.orange || "#e5786d";
+        const mut  = W.fgMuted || "#857b6f";
+        const fg   = W.fg || "#e3e0d7";
+        // RGB helpers voor rgba() constructie
+        const _h2r = (hex) => { try {
+          const h=(hex||"#8ac6f2").replace("#","");
+          return `${parseInt(h.slice(0,2),16)},${parseInt(h.slice(2,4),16)},${parseInt(h.slice(4,6),16)}`;
+        } catch{return "138,198,242";} };
+        const blueRgb   = _h2r(blue);
+        const greenRgb  = _h2r(green);
+        const orangeRgb = _h2r(orange);
+        const purpleRgb = _h2r(W.purple || "#d787ff");
+        const ring0rgb  = blueRgb;
+        const ring1rgb  = greenRgb;
+
+        // ── Arc-pad helpers ───────────────────────────────────────────────
+        const arc = (r1, r2, a0d, a1d, gap=2.8) => {
+          const s=(a0d+gap)*Math.PI/180, e=(a1d-gap)*Math.PI/180;
+          const lg=(a1d-a0d-gap*2)>180?1:0;
+          const px=(r,a)=>({x:r*Math.cos(a),y:r*Math.sin(a)});
+          const p1=px(r2,s),p2=px(r2,e),p3=px(r1,e),p4=px(r1,s);
+          return `M${p1.x},${p1.y} A${r2},${r2} 0 ${lg} 1 ${p2.x},${p2.y} L${p3.x},${p3.y} A${r1},${r1} 0 ${lg} 0 ${p4.x},${p4.y}Z`;
+        };
+        const mid=(r1,r2,a0,a1)=>{
+          const a=((a0+a1)/2)*Math.PI/180, r=(r1+r2)/2;
+          return {x:r*Math.cos(a),y:r*Math.sin(a),a};
+        };
+
+        // ── Binnenring acties ─────────────────────────────────────────────
+        const innerItems = card ? [
+          {key:"edit", icon:"✎",label:"Bewerken",
+           bg:isDark?`rgba(${blueRgb},0.18)`:`rgba(${blueRgb},0.22)`,
+           hbg:isDark?`rgba(${blueRgb},0.38)`:`rgba(${blueRgb},0.45)`,ic:blue,
+           action:()=>{setEditingId(card.id);setSelected(card.id);setCtxMenu(null);}},
+          {key:"conn", icon:"⤳",label:"Verbinden",
+           bg:isDark?`rgba(${blueRgb},0.12)`:`rgba(${blueRgb},0.16)`,
+           hbg:isDark?`rgba(${blueRgb},0.28)`:`rgba(${blueRgb},0.38)`,ic:blue,
+           action:()=>{setTool("connect");setConnectFrom(card.id);setCtxMenu(null);}},
+          {key:"note", icon:"⬡",label:card.noteId?"Notitie":"→ Notitie",
+           bg:isDark?"rgba(159,202,86,0.15)":"rgba(42,94,40,0.14)",
+           hbg:isDark?"rgba(159,202,86,0.32)":"rgba(42,94,40,0.30)",ic:green,
+           action:()=>{card.noteId?setPeekNoteId(card.noteId):cardToNote(card);setCtxMenu(null);}},
+          {key:"graph",icon:"🕸",label:"Graaf",
+           bg:isDark?"rgba(138,198,242,0.12)":"rgba(26,58,106,0.12)",
+           hbg:isDark?"rgba(138,198,242,0.28)":"rgba(26,58,106,0.28)",ic:blue,
+           hidden:!card.noteId,
+           action:()=>{if(card.noteId&&onShowInGraph)onShowInGraph(card.noteId);setCtxMenu(null);}},
+          {key:"dup",  icon:"⊞",label:"Dupliceer",
+           bg:isDark?"rgba(159,202,86,0.10)":"rgba(42,94,40,0.10)",
+           hbg:isDark?"rgba(159,202,86,0.22)":"rgba(42,94,40,0.24)",ic:green,
+           action:()=>{const{x,y}=toWorld(cx+20,cy+20);addCard(x+20,y+20,card.text,card.colorIdx,null);setCtxMenu(null);}},
+          {key:"del",  icon:"✕",label:"Verwijder",
+           bg:"rgba(229,120,109,0.18)",hbg:"rgba(229,120,109,0.38)",ic:orange,
+           action:()=>{deleteCard(card.id);setCtxMenu(null);}},
+        ].filter(x=>!x.hidden) : [
+          {key:"new",icon:"+",label:"Nieuwe kaart",
+           bg:`rgba(${ring1rgb},0.15)`,hbg:`rgba(${ring1rgb},0.32)`,ic:green,
+           action:()=>{const{x,y}=toWorld(cx,cy);const c=addCard(x,y,"",0);setEditingId(c.id);setSelected(c.id);setCtxMenu(null);}},
+          {key:"fit",icon:"⊡",label:"Alles zichtbaar",
+           bg:`rgba(${ring0rgb},0.12)`,hbg:`rgba(${ring0rgb},0.28)`,ic:blue,
+           action:()=>{setCtxMenu(null);}},
+        ];
+        const filteredInner=innerItems.filter(x=>!x.hidden);
+        const innerN=filteredInner.length, innerSpan=360/innerN;
+
+        // ── Ring-data (4 niveaus) ─────────────────────────────────────────
+        const MAX_DEPTH = 4;
+        const RING_RADII = [[125,205],[210,285],[290,365],[370,445]];
+        const RING_COLORS = isDark ? [
+          [`rgba(${blueRgb},`,  `rgba(${blueRgb},`],
+          [`rgba(${greenRgb},`, `rgba(${greenRgb},`],
+          [`rgba(${orangeRgb},`,`rgba(${orangeRgb},`],
+          [`rgba(${purpleRgb},`,`rgba(${purpleRgb},`],
+        ] : [
+          // Lichte thema: hogere opacity zodat slices zichtbaar zijn op crème
+          [`rgba(${blueRgb},`,  `rgba(${blueRgb},`],
+          [`rgba(${greenRgb},`, `rgba(${greenRgb},`],
+          [`rgba(${orangeRgb},`,`rgba(${orangeRgb},`],
+          [`rgba(${purpleRgb},`,`rgba(${purpleRgb},`],
+        ];
+
+        // Bouw de nodes per ring op basis van ringPath
+        const egoNoteId = card?.noteId || null;
+        const ringNodes = []; // ringNodes[0] = lvl1 nodes, etc.
+        const seenIds   = new Set([egoNoteId].filter(Boolean));
+
+        for (let depth = 0; depth < MAX_DEPTH; depth++) {
+          const parentNoteId = depth === 0
+            ? egoNoteId
+            : ringPath[depth-1]?.noteId;
+          if (!parentNoteId) { ringNodes.push([]); continue; }
+          // Toon ring als dit niveau op het pad zit (depth>0) of het niveau 0 is
+          if (depth > 0 && !ringPath[depth-1]) { ringNodes.push([]); continue; }
+          const nbrs = buildNeighborhood(parentNoteId, notes, 1)
+            .filter(x => !seenIds.has(x.note.id))
+            .slice(0, 8);
+          nbrs.forEach(x => seenIds.add(x.note.id));
+          ringNodes.push(nbrs);
+        }
+
+        // Buitenring: ook tonen als ring 1 heeft items
+        const outerN      = ringNodes[0].length;
+        const outerTotal  = outerN > 0 ? Math.min(outerN*42,270) : 0;
+        const outerStart  = -90 - outerTotal/2;
+        const outerSpan   = outerN > 0 ? outerTotal/outerN : 0;
+
+        // Geef elke ring zijn eigen boog-parameters (gecentreerd op het pad)
+        const ringArcs = ringNodes.map((nodes, depth) => {
+          if (!nodes.length) return {start:0,span:0,total:0};
+          if (depth === 0) return {start:outerStart, span:outerSpan, total:outerTotal};
+          const parent = ringPath[depth-1];
+          if (!parent) return {start:0,span:0,total:0};
+          const total = Math.min(nodes.length*40, 180);
+          const span  = nodes.length > 0 ? total/nodes.length : 0;
+          const start = (parent.a0+parent.a1)/2 - total/2;
+          return {start, span, total};
+        });
+
+        const maxW = ringNodes.map(nodes =>
+          nodes.length ? Math.max(...nodes.map(x=>x.weight),1) : 1
+        );
+
+        const svgSize = 500;
+        const half    = svgSize/2;
+
+        const typeColorIdx2 = {fleeting:0,literature:1,permanent:3,index:4};
+        const typeColorMap2 = {fleeting:"#e8a44a",literature:"#8ac6f2",permanent:"#9fca56",index:"#d7a0ff"};
+        const typeLabels2   = {fleeting:"Vluchtig",literature:"Literatuur",permanent:"Permanent",index:"Index"};
+
+        const addNeighbor = (nb, weight, fromCardId) => {
+          const curCards = stateRef.current.cards;
+          const existing = curCards.find(c=>c.noteId===nb.id);
+          const{x:wx,y:wy}=toWorld(cx+(Math.random()-0.5)*80+180,cy+(Math.random()-0.5)*80);
+          const nbColorIdx = typeColorIdx2[nb.noteType] ?? 1;
+          // addCard geeft direct de nieuwe kaart terug — geen setTimeout nodig
+          const targetCard = existing || addCard(wx, wy, nb.title||nb.id, nbColorIdx, nb.id);
+          if (targetCard && fromCardId && targetCard.id !== fromCardId) {
+            const con = {id:genId(), from:fromCardId, to:targetCard.id, weight};
+            const alreadyLinked = stateRef.current.connections.some(
+              c=>(c.from===fromCardId&&c.to===targetCard.id)||(c.from===targetCard.id&&c.to===fromCardId)
+            );
+            if (!alreadyLinked) {
+              const nextCons = [...stateRef.current.connections, con];
+              stateRef.current = {...stateRef.current, connections: nextCons};
+              setCons(nextCons);
+              saveBoard(stateRef.current.cards, nextCons);
+            }
           }
-        }, aiStreaming ? "✦ bezig…" : aiMode === "analyse" ? "✦ Analyseer canvas" : "✦ Genereer notitie"),
+          dirtyRef.current = true;
+          setCtxMenu(null); setRingPath([]); setHoverPreview(null);
+        };
 
-        // Resultaat-acties (alleen als er een resultaat is)
-        aiResult && !aiStreaming && React.createElement("div", {
-          style: { display: "flex", gap: "5px" }
+        return React.createElement("div", {
+          style:{position:"absolute",left:cx-half,top:cy-half,
+                 width:svgSize,height:svgSize,pointerEvents:"none",zIndex:250}
         },
-          // Sla op als notitie
-          onCreateNote && React.createElement("button", {
-            onClick: saveResultAsNote,
-            title: "Sla analyse/synthese op als notitie in de vault",
-            style: {
-              flex: 1, fontSize: "11px", padding: "5px",
-              background: "rgba(159,202,86,0.1)",
-              border: "1px solid rgba(159,202,86,0.3)",
-              borderRadius: "5px", color: W.comment, cursor: "pointer",
-            }
-          }, "→ vault"),
-          // Kopieer naar klembord
-          React.createElement("button", {
-            onClick: () => {
-              navigator.clipboard?.writeText(aiResult);
+          // ── Preview kaart ──────────────────────────────────────────────
+          hoverPreview && (() => {
+            const nb   = hoverPreview.note;
+            const ang  = (hoverPreview.sliceAngle%360+360)%360;
+            const preview = stripMd(nb.content||"").slice(0,200);
+            const tags    = (nb.tags||[]).slice(0,6);
+            const tCol    = typeColorMap2[nb.noteType]||null;
+            const showRight = ang>90&&ang<270;
+            return React.createElement("div",{
+              style:{
+                position:"absolute", left:showRight?-(300+20):svgSize+8, top:half-160,
+                width:"298px", background:W.bg2||"#1e1e24",
+                border:`1px solid ${W.splitBg||"#2a2a2a"}`,
+                borderRadius:"10px", boxShadow:"0 8px 32px rgba(0,0,0,0.75)",
+                overflow:"hidden", pointerEvents:"none",
+                animation:"fadeIn .15s ease-out", zIndex:260,
+              }
             },
-            title: "Kopieer naar klembord",
-            style: {
-              fontSize: "11px", padding: "5px 10px",
-              background: "transparent",
-              border: "1px solid #2a2a2a",
-              borderRadius: "5px", color: W.fgMuted, cursor: "pointer",
+              // Kleur-balk bovenaan
+              React.createElement("div",{style:{height:"3px",background:tCol
+                ?`linear-gradient(90deg,${tCol},${tCol}44)`
+                :`linear-gradient(90deg,${blue},transparent)`}}),
+              // Header
+              React.createElement("div",{style:{padding:"10px 12px 6px",borderBottom:`1px solid ${W.splitBg||"#2a2a2a"}`}},
+                tCol&&React.createElement("div",{style:{display:"inline-flex",alignItems:"center",gap:"4px",
+                  fontSize:"11px",color:tCol,background:`${tCol}18`,border:`1px solid ${tCol}40`,
+                  borderRadius:"3px",padding:"1px 6px",marginBottom:"5px"}},
+                  React.createElement("span",{style:{width:"6px",height:"6px",borderRadius:"50%",background:tCol,flexShrink:0}}),
+                  typeLabels2[nb.noteType]||nb.noteType
+                ),
+                React.createElement("div",{style:{fontSize:"15px",fontWeight:600,color:fg,lineHeight:1.3,
+                  overflow:"hidden",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical"}},
+                  nb.title||"(zonder titel)")
+              ),
+              preview&&React.createElement("div",{style:{padding:"8px 12px",fontSize:"12.5px",color:mut,
+                lineHeight:1.7,overflow:"hidden",display:"-webkit-box",WebkitLineClamp:5,WebkitBoxOrient:"vertical",
+                borderBottom:tags.length?`1px solid ${W.splitBg||"#2a2a2a"}`:"none"}},
+                preview+(nb.content?.length>200?"…":"")),
+              tags.length>0&&React.createElement("div",{style:{padding:"6px 10px",display:"flex",flexWrap:"wrap",gap:"4px"}},
+                ...tags.map(t=>React.createElement("span",{key:t,style:{fontSize:"11px",padding:"2px 7px",
+                  borderRadius:"10px",background:"rgba(159,202,86,0.1)",border:"1px solid rgba(159,202,86,0.25)",
+                  color:green}},`#${t}`))
+              ),
+              React.createElement("div",{style:{padding:"4px 12px 8px"}},
+                React.createElement("span",{style:{fontSize:"11px",color:mut,fontStyle:"italic"}},
+                  "Klik → canvas  |  Hover → verder verkennen"))
+            );
+          })(),
+
+          React.createElement("svg",{
+            width:svgSize,height:svgSize,
+            style:{
+              overflow:"visible",
+              filter:"drop-shadow(0 16px 48px rgba(0,0,0,0.85)) drop-shadow(0 4px 16px rgba(0,0,0,0.6))",
+              animation:"zk-radial-in 0.25s cubic-bezier(0.34,1.56,0.64,1)",
+              transformOrigin:"50% 50%",
+            },
+            // Verlaat SVG → wacht 400ms voor sluiten (zodat gebruiker
+            // de muis kan bewegen van ring N naar ring N+1 zonder collapse)
+            onMouseLeave:()=>{
+              clearTimeout(ringTimerRef.current);
+              svgLeaveTimer.current = setTimeout(()=>{
+                setRingPath([]);
+                setHoverPreview(null);
+              }, 400);
+            },
+            onMouseEnter:()=>{
+              // Gebruiker keert terug: annuleer het sluiten
+              clearTimeout(svgLeaveTimer.current);
             }
-          }, "📋"),
-          // Wis resultaat
-          React.createElement("button", {
-            onClick: () => setAiResult(""),
-            title: "Wis resultaat",
-            style: {
-              fontSize: "11px", padding: "5px 8px",
-              background: "transparent", border: "none",
-              color: W.fgMuted, cursor: "pointer",
-            }
-          }, "×")
-        )
-      )
-    ),
+          },
+            React.createElement("defs",null,
+              // Glow filter voor hover-effect
+              React.createElement("filter",{id:"zk-glow",x:"-40%",y:"-40%",width:"180%",height:"180%"},
+                React.createElement("feGaussianBlur",{in:"SourceGraphic",stdDeviation:"6",result:"blur"}),
+                React.createElement("feMerge",null,
+                  React.createElement("feMergeNode",{in:"blur"}),
+                  React.createElement("feMergeNode",{in:"SourceGraphic"})
+                )
+              ),
+              // Zachte schaduw voor het midden
+              React.createElement("filter",{id:"zk-shadow",x:"-20%",y:"-20%",width:"140%",height:"140%"},
+                React.createElement("feDropShadow",{dx:"0",dy:"2",stdDeviation:"8",floodOpacity:"0.5"})
+              ),
+              // Radiaal verloop voor binnenring slices
+              React.createElement("radialGradient",{id:"zk-rg-in",cx:"50%",cy:"50%",r:"80%"},
+                React.createElement("stop",{offset:"0%",stopColor:"rgba(255,255,255,0.12)"}),
+                React.createElement("stop",{offset:"100%",stopColor:"rgba(0,0,0,0.25)"})
+              ),
+              // Overlay voor outer ringen
+              React.createElement("radialGradient",{id:"zk-rg-out",cx:"30%",cy:"30%",r:"80%"},
+                React.createElement("stop",{offset:"0%",stopColor:"rgba(255,255,255,0.08)"}),
+                React.createElement("stop",{offset:"100%",stopColor:"rgba(0,0,0,0.18)"})
+              ),
+              // Clip voor de hele SVG (voor animatie)
+              React.createElement("clipPath",{id:"zk-center-clip"},
+                React.createElement("circle",{cx:"0",cy:"0",r:"480"})
+              )
+            ),
+            React.createElement("g",{transform:`translate(${half},${half})`},
+
+              // ── Ringen 1 t/m 4 ──────────────────────────────────────
+              ...ringNodes.slice().reverse().map((nodes, revDepth) => {
+                const depth = (MAX_DEPTH - 1) - revDepth; // render diepe ringen eerst (achtergrond)
+                if (!nodes.length) return null;
+                const [r1,r2] = RING_RADII[depth];
+                const [baseC, hovC] = RING_COLORS[depth];
+                const {start, span} = ringArcs[depth];
+                const mxW = maxW[depth];
+                const egoNote = notes.find(n=>n.id===egoNoteId);
+
+                return nodes.map(({note:nb, weight}, i) => {
+                  const a0 = start + i*span;
+                  const a1 = a0 + span;
+                  const m  = mid(r1, r2, a0, a1);
+                  const isActive  = ringPath[depth]?.noteId === nb.id;
+                  const isHovered = hoverPreview?.note?.id === nb.id;
+                  const baseAlpha = isDark ? 0.20 : 0.38;
+                  const alpha = baseAlpha + (weight/mxW)*(isDark?0.40:0.24);
+
+                  // Verbindingstype kleuren voor ring 0
+                  let baseR=100,baseG=150,baseB=200;
+                  if (depth===0) {
+                    const egoLinks = ((egoNote?.content||"").match(/\[\[([^\]]+)\]\]/g)||[]).map(s=>s.slice(2,-2).split("|")[0].trim());
+                    const nbLinks  = ((nb.content||"").match(/\[\[([^\]]+)\]\]/g)||[]).map(s=>s.slice(2,-2).split("|")[0].trim());
+                    if (egoLinks.includes(nb.id))        {baseR=138;baseG=198;baseB=242;}
+                    else if (nbLinks.includes(egoNoteId)){baseR=234;baseG=231;baseB=136;}
+                    else                                  {baseR=159;baseG=202;baseB=86;}
+                  }
+
+                  const tCol2 = typeColorMap2[nb.noteType]||null;
+
+                  const enterHandler = () => {
+                    // Preview: direct tonen (geen vertraging)
+                    setHoverPreview({note:nb, sliceAngle:(a0+a1)/2});
+                    // Annuleer SVG-leave timer (gebruiker is weer in het menu)
+                    clearTimeout(svgLeaveTimer.current);
+                    // Debounce: pas na 160ms het pad bijwerken
+                    // Dit voorkomt flikker bij snel langs opties bewegen
+                    clearTimeout(ringTimerRef.current);
+                    ringTimerRef.current = setTimeout(() => {
+                      setRingPath(prev => {
+                        const next = prev.slice(0, depth);
+                        next[depth] = {noteId:nb.id, idx:i, a0, a1};
+                        return next;
+                      });
+                    }, 160);
+                  };
+
+                  return React.createElement("g",{
+                    key:`ring${depth}_${nb.id}`,
+                    style:{pointerEvents:"all",cursor:"pointer"},
+                    onMouseEnter: enterHandler,
+                    onClick: e=>{e.stopPropagation(); addNeighbor(nb, weight, card.id);}
+                  },
+                    // Slice achtergrond met gradient
+                    React.createElement("path",{
+                      d:arc(r1,r2,a0,a1),
+                      fill: depth===0
+                        ? isHovered||isActive
+                          ? `rgba(${baseR},${baseG},${baseB},${isDark?0.65:0.72})`
+                          : `rgba(${Math.round(baseR*(isDark?.28:.55))},${Math.round(baseG*(isDark?.28:.55))},${Math.round(baseB*(isDark?.28:.55))},${alpha})`
+                        : isHovered||isActive
+                          ? `${hovC}${isDark?0.60:0.72})`
+                          : `${baseC}${alpha})`,
+                      stroke: isHovered||isActive
+                        ? `rgba(${baseR},${baseG},${baseB},0.55)` : sep,
+                      strokeWidth: isHovered||isActive ? 1.5 : 0.8,
+                      style:{transition:"fill .2s, stroke .2s",
+                             filter:isHovered?"url(#zk-glow)":""}
+                    }),
+                    // Gradient sheen overlay
+                    React.createElement("path",{
+                      d:arc(r1,r2,a0,a1),
+                      fill:"url(#zk-rg-out)",style:{pointerEvents:"none"}
+                    }),
+                    // Noot-type streepje (binnenrand)
+                    tCol2 && React.createElement("path",{
+                      d:arc(r1, r1+5, a0+1, a1-1),
+                      fill:`${tCol2}cc`, style:{pointerEvents:"none",
+                        filter:isHovered?"url(#zk-glow)":""}
+                    }),
+                    // Icoon achtergrond cirkel
+                    React.createElement("circle",{
+                      cx:m.x,cy:m.y,r:isHovered?19:16,
+                      fill:isHovered
+                        ? `rgba(${baseR},${baseG},${baseB},0.35)`
+                        : `rgba(${Math.round(baseR*.4)},${Math.round(baseG*.4)},${Math.round(baseB*.4)},0.5)`,
+                      stroke:`rgba(${baseR},${baseG},${baseB},${isHovered?0.7:0.25})`,
+                      strokeWidth:isHovered?2:1,
+                      style:{transition:"all .18s"}
+                    }),
+                    // Gewicht getal
+                    React.createElement("text",{
+                      x:m.x,y:m.y,textAnchor:"middle",dominantBaseline:"middle",
+                      fontSize:isHovered?13:11,fontWeight:"700",
+                      fill:isHovered?"#ffffd7":fg,
+                      fontFamily:"'DM Sans',sans-serif",
+                      style:{pointerEvents:"none",transition:"font-size .18s"}
+                    },weight),
+                    // Titel label
+                    React.createElement("text",{
+                      x:m.x*(1+24/Math.max(1,Math.hypot(m.x,m.y))),
+                      y:m.y*(1+24/Math.max(1,Math.hypot(m.x,m.y)))+12,
+                      textAnchor:m.x>15?"start":m.x<-15?"end":"middle",
+                      fontSize:isHovered?11:10,fontWeight:isHovered?"600":"400",
+                      fill:isHovered?"#ffffd7":`${mut}cc`,
+                      fontFamily:"'DM Sans',sans-serif",
+                      style:{pointerEvents:"none",transition:"all .18s"}
+                    },(nb.title||nb.id).slice(0,14)+((nb.title||nb.id).length>14?"…":""))
+                  );
+                });
+              }),
+
+              // ── Binnenring acties ────────────────────────────────────
+              ...filteredInner.map((item,i)=>{
+                const a0=i*innerSpan-90, a1=a0+innerSpan;
+                const m=mid(56,118,a0,a1);
+                const isH=hoveredItem===item.key;
+                return React.createElement("g",{
+                  key:item.key,style:{pointerEvents:"all",cursor:"pointer"},
+                  onMouseEnter:()=>setHoveredItem(item.key),
+                  onMouseLeave:()=>setHoveredItem(null),
+                  onClick:e=>{e.stopPropagation();item.action();}
+                },
+                  // Slice bg + glow bij hover
+                  React.createElement("path",{d:arc(56,118,a0,a1),
+                    fill:isH?item.hbg:item.bg,
+                    stroke:isH?`${item.ic}70`:`${item.ic}25`,strokeWidth:isH?1.5:0.8,
+                    style:{transition:"fill .18s,stroke .18s",filter:isH?"url(#zk-glow)":""}}),
+                  // Gradient sheen
+                  React.createElement("path",{d:arc(56,118,a0,a1),
+                    fill:"url(#zk-rg-in)",style:{pointerEvents:"none"}}),
+                  // Icoon ring
+                  React.createElement("circle",{cx:m.x,cy:m.y,r:isH?18:15,
+                    fill:isH?`${item.ic}28`:"rgba(255,255,255,0.07)",
+                    stroke:item.ic,strokeWidth:isH?2:1,
+                    style:{transition:"all .18s"}}),
+                  React.createElement("text",{x:m.x,y:m.y,textAnchor:"middle",
+                    dominantBaseline:"middle",fontSize:isH?16:14,fill:isH?"#fff":item.ic,
+                    fontFamily:"'DM Sans',sans-serif",
+                    style:{pointerEvents:"none",userSelect:"none",transition:"font-size .18s"}},
+                    item.icon),
+                  // Label
+                  React.createElement("text",{
+                    x:m.x*(1+28/Math.max(1,Math.hypot(m.x,m.y))),
+                    y:m.y*(1+28/Math.max(1,Math.hypot(m.x,m.y)))+(m.y>0?10:-10),
+                    textAnchor:m.x>12?"start":m.x<-12?"end":"middle",
+                    fontSize:isH?10.5:9.5,fontWeight:isH?"600":"400",
+                    fill:isH?"#ffffd7":`${mut}dd`,
+                    fontFamily:"'DM Sans',sans-serif",style:{pointerEvents:"none",transition:"all .18s"}},
+                    item.label)
+                );
+              }),
+
+              // ── Middenstuk: glassmorphism ─────────────────────────────
+              // Buitenste glow ring
+              React.createElement("circle",{cx:0,cy:0,r:56,
+                fill:"none",stroke:W.dark?"rgba(255,255,255,0.05)":"rgba(0,0,0,0.04)",strokeWidth:9,
+                style:{pointerEvents:"none"}}),
+              // Hoofd cirkel
+              React.createElement("circle",{cx:0,cy:0,r:50,
+                fill:W.dark?"rgba(10,10,14,0.90)":`${W.bg2||"rgba(240,234,220,0.96)"}`,
+                stroke:W.splitBg||"rgba(255,255,255,0.14)",strokeWidth:1.5,
+                filter:"url(#zk-shadow)",
+                style:{pointerEvents:"all",cursor:"pointer"},
+                onClick:e=>{e.stopPropagation();setCtxMenu(null);setRingPath([]);setHoverPreview(null);}}),
+              // Subtiele highlight (licht van boven-links)
+              React.createElement("ellipse",{cx:-8,cy:-12,rx:28,ry:20,
+                fill:W.dark?"rgba(255,255,255,0.04)":"rgba(255,255,255,0.35)",style:{pointerEvents:"none"}}),
+              // × icoon
+              React.createElement("text",{x:0,y:card?7:3,textAnchor:"middle",dominantBaseline:"middle",
+                fontSize:22,fill:W.dark?"rgba(255,255,255,0.28)":"rgba(0,0,0,0.28)",fontFamily:"'DM Sans',sans-serif",
+                style:{pointerEvents:"none"}},"×"),
+              // Kaarttitel
+              card&&React.createElement("text",{x:0,y:-13,textAnchor:"middle",
+                fontSize:9,fontWeight:"500",fill:W.dark?"rgba(255,255,255,0.22)":W.fgMuted+"80",
+                fontFamily:"'DM Sans',sans-serif",style:{pointerEvents:"none"}},
+                (card.text||"").slice(0,16)+(card.text?.length>16?"…":""))
+            )
+          )
+        );
+      })()
+  )
+),
 
     // ── Notitie peek panel — slide-in rechts ─────────────────────────────
     peekNoteId && (() => {

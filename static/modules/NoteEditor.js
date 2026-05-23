@@ -30,8 +30,13 @@ const NoteEditor = ({
   const [editTags,    setEditTags]    = useState(note?.tags    || []);
   const [outlineMode, setOutlineMode] = useState(false);
 
+  // iPad/iOS: detecteer touch-apparaat voor native textarea modus
+  const isTouch = typeof window !== "undefined" &&
+    ("ontouchstart" in window || navigator.maxTouchPoints > 0);
+
   const titleRef   = useRef(null);
   const contentRef = useRef(null);
+  const touchAreaRef = useRef(null); // voor iPad textarea
 
   // Promoveer-suggestie: toon als notitie rijp is
   const promoteSuggestion = React.useMemo(() => {
@@ -55,25 +60,42 @@ const NoteEditor = ({
     setEditTitle(note?.title   || "");
     setEditContent(note?.content || "");
     setEditTags(note?.tags    || []);
-    setTimeout(() => {
-      if (!note) return;
-      if (!note.title) {
-        // Nieuwe notitie: focus op het titelveld
-        titleRef.current?.focus();
-        titleRef.current?.select();
-      } else {
-        // Bestaande notitie: cursor naar onderste regel in editor
+
+    if (!note) return;
+    if (!note.title) {
+      // Nieuwe notitie: autoFocus attribuut regelt focus synchroon.
+      // Hier extra select() zodat een eventuele placeholder verdwijnt.
+      // Kleine delay OK want select() is niet gevoelig voor iOS focus-restrictie.
+      setTimeout(() => { titleRef.current?.select(); }, 60);
+    } else {
+      // Bestaande notitie: cursor naar onderste regel in editor
+      setTimeout(() => {
         const ref = contentRef.current;
         if (ref?.setCursor) {
           const lines = (note.content || "").split("\n");
           ref.setCursor(lines.length - 1, lines[lines.length - 1].length);
         }
-      }
-    }, 80);
+      }, 80);
+    }
   }, [note?.id]);
 
+  const [titleError, setTitleError] = React.useState(false);
+
+  // Verwijder foutmelding zodra de gebruiker begint te typen
+  const onTitleChange = (e) => {
+    setEditTitle(e.target.value);
+    if (e.target.value.trim()) setTitleError(false);
+  };
+
   const handleSave = () => {
-    if (!note) return;
+    if (!note) return false;
+    if (!editTitle.trim()) {
+      // Blokkeer opslaan — toon foutmelding, zet focus op titel
+      setTitleError(true);
+      setTimeout(() => titleRef.current?.focus(), 50);
+      return false; // geeft false terug zodat onClose NIET aangroepen wordt
+    }
+    setTitleError(false);
     const updated = {
       ...note,
       title:   editTitle,
@@ -82,6 +104,7 @@ const NoteEditor = ({
       modified: new Date().toISOString(),
     };
     onSave?.(updated);
+    return true;
   };
 
   // ── Toolbar ────────────────────────────────────────────────────────────────
@@ -91,12 +114,21 @@ const NoteEditor = ({
              alignItems: "center", gap: "6px", flexShrink: 0,
              flexWrap: isMobile ? "wrap" : "nowrap" }
   },
-    // Titel input
+    // Titel input — autoFocus als de titel leeg is (nieuwe notitie)
     React.createElement("input", {
       ref: titleRef,
       value: editTitle,
-      onChange: e => setEditTitle(e.target.value),
-      placeholder: "Titel… (Enter = naar tekstveld)",
+      autoFocus: !note?.title,
+      onChange: onTitleChange,
+      placeholder: note?._draft ? "Titel verplicht om op te slaan…" : "Titel…",
+      style: { flex: 1, minWidth: "120px", background: "transparent",
+               border: titleError ? `1px solid ${W.orange}` : "none",
+               borderRadius: titleError ? "4px" : "0",
+               color: titleError ? W.orange : W.statusFg,
+               fontSize: isMobile ? "15px" : "16px",
+               fontWeight: "bold", outline: "none", WebkitAppearance: "none",
+               padding: titleError ? "2px 6px" : "0",
+               transition: "border .15s, color .15s" },
       onKeyDown: e => {
         if (e.key === "Enter") {
           e.preventDefault();
@@ -105,9 +137,13 @@ const NoteEditor = ({
         if (e.key === "Escape") { onClose?.(); }
       },
       style: { flex: 1, minWidth: "120px", background: "transparent",
-               border: "none", color: W.statusFg,
+               border: titleError ? `1px solid ${W.orange}` : "none",
+               borderRadius: titleError ? "4px" : "0",
+               color: titleError ? W.orange : W.statusFg,
                fontSize: isMobile ? "15px" : "16px",
-               fontWeight: "bold", outline: "none", WebkitAppearance: "none" }
+               fontWeight: "bold", outline: "none", WebkitAppearance: "none",
+               padding: titleError ? "2px 6px" : "0",
+               transition: "border .15s, color .15s" },
     }),
 
     // Actie-knoppen
@@ -116,7 +152,7 @@ const NoteEditor = ({
         active: goyoMode, color: goyoMode ? W.comment : W.fgMuted },
       { label: "☰ outline", show: !isMobile, onClick: () => setOutlineMode(p => !p),
         active: outlineMode, color: outlineMode ? W.purple : W.fgMuted },
-      { label: "✓ opslaan", show: true,       onClick: () => { handleSave(); onClose?.(); },
+      { label: "✓ opslaan", show: true,       onClick: () => { if (handleSave()) onClose?.(); },
         color: W.bg, fgColor: W.bg, bg: "rgba(159,202,86,0.85)", bold: true },
       { label: "✕ sluiten", show: true,       onClick: onClose,     color: W.fgMuted },
       { label: "🗑 del",    show: !isMobile,  onClick: onDelete,    color: W.orange },
@@ -168,11 +204,26 @@ const NoteEditor = ({
   );
 
   // ── Render ─────────────────────────────────────────────────────────────────
+  const titleErrorBanner = titleError && React.createElement("div", {
+    style: {
+      background: "rgba(229,120,109,.12)",
+      borderBottom: "1px solid rgba(229,120,109,.3)",
+      padding: "6px 14px", fontSize: "12px",
+      color: W.orange || "#e5786d",
+      display: "flex", alignItems: "center", gap: "6px",
+      flexShrink: 0, animation: "fadeIn .15s ease-out",
+    }
+  },
+    React.createElement("span", null, "⚠"),
+    React.createElement("span", null, "Vul eerst een titel in om op te slaan")
+  );
+
   return React.createElement("div", {
     className: goyoMode ? "goyo-mode" : "",
     style: { flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minHeight: 0 }
   },
     !goyoMode && toolbar,
+    titleErrorBanner,
     tagStrip,
     // Promoveer-suggestie banner
     promoteSuggestion && !goyoMode && React.createElement("div", {

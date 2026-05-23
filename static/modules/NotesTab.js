@@ -96,9 +96,14 @@ const NotesTab = ({
     if (splitMode) { setLeftOpen(false); setRightOpen(false); }
   }, [splitMode]);
 
+  const [draftNote, setDraftNote] = React.useState(null); // nieuwe notitie, nog niet opgeslagen
+
+  // selNote: eerst kijken of het een draft is, dan in de lijst
   const selNote = useMemo(() =>
-    notes.find(n => n.id === selectedId) || null,
-  [notes, selectedId]);
+    (draftNote && draftNote.id === selectedId)
+      ? draftNote
+      : notes.find(n => n.id === selectedId) || null,
+  [notes, selectedId, draftNote]);
 
   const backlinks = useMemo(() =>
     selectedId ? notes.filter(n => extractLinks(n.content).includes(selectedId)) : [],
@@ -160,29 +165,38 @@ const NotesTab = ({
     if (!isDesktop && !isTablet) onSidebarToggle?.(false);
   }, [isDesktop, isTablet]);
 
-  const handleNew = useCallback(async () => {
+  const handleNew = useCallback(() => {
     const id      = genId();
     const content = `*${todayHeader()}*\n\n`;
     const note    = { id, title: "", content, tags: [],
                       created:  new Date().toISOString(),
-                      modified: new Date().toISOString() };
+                      modified: new Date().toISOString(),
+                      _draft:   true };
+
+    // Notitie NIET aan de lijst toevoegen — alleen als draft openen
+    setDraftNote(note);
+    onSelectNote(id);
     setVimMode(true);
     if (!isDesktop && !isTablet) onSidebarToggle?.(false);
-    const saved = await NoteStore.save(note);
-    onNotesChange(NoteStore.getAll());
-    onSelectNote(saved.id);
   }, [isDesktop, isTablet]);
 
   const handleSelect = useCallback((id) => {
+    // Annuleer draft als de gebruiker wegklikt zonder op te slaan
+    if (draftNote) setDraftNote(null);
     onSelectNote(id);
     setVimMode(false);
     if (!isDesktop && !isTablet) onSidebarToggle?.(false);
-  }, [isDesktop, isTablet]);
+  }, [isDesktop, isTablet, draftNote]);
 
   const handleSave = useCallback(async (updatedNote) => {
+    if (!updatedNote?.title?.trim()) return; // geen opslaan zonder titel
     await NoteStore.save(updatedNote);
-    onNotesChange(NoteStore.getAll());
-  }, []);
+    // Als dit een draft was → nu toevoegen aan de lijst
+    if (updatedNote._draft || (draftNote && draftNote.id === updatedNote.id)) {
+      setDraftNote(null);
+    }
+    onNotesChange([...NoteStore.getAll()]);
+  }, [draftNote]);
 
   const handleSaveAndClose = useCallback(async (updatedNote) => {
     await handleSave(updatedNote);
@@ -468,8 +482,18 @@ const NotesTab = ({
           allNotes:           notes,
             onToggleRead:       async (note) => {
               const updated = { ...note, isRead: !note.isRead, modified: new Date().toISOString() };
-              await NoteStore.save(updated);
-              onNotesChange(NoteStore.getAll());
+              // Optimistisch bijwerken — toon ✓ badge direct, ook offline
+              onNotesChange(notes.map(n => n.id === note.id ? updated : n));
+              try {
+                const saved = await NoteStore.save(updated);
+                // Alleen overschrijven als server-versie goed terugkwam (niet pending)
+                if (!saved?._pending && !saved?._offline) {
+                  onNotesChange([...NoteStore.getAll()]);
+                }
+                // Bij _pending: behoud optimistische update — sync regelt de rest
+              } catch {
+                // Server onbereikbaar: optimistische update blijft staan
+              }
             },
             onToggleReview: handleToggleReview,
           reviewData,

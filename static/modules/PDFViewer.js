@@ -341,6 +341,16 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
   const [renderedPages, setRenderedPages] = useState([]);  // [{num, canvas, textLayer}]
   const pageCacheRef   = useRef(new Map()); // {pageNum → {canvas, textLayer, w, h}} — virtueel
 
+  // ── Laad bestaande leesnotitie als PDF wisselt ──────────────────────────────
+  React.useEffect(() => {
+    if (!pdfFile || !notes) return;
+    const stem = pdfFile.name.replace(/\.pdf$/i, "");
+    const existing = notes.find(n =>
+      (n.tags||[]).includes("leesnotitie") && (n.tags||[]).includes(stem)
+    );
+    setNoteContent(existing?.content || "");
+  }, [pdfFile, notes]);
+
   // ── Paginageheugen: onthoudt laatste pagina per PDF ──────────────────────
   const PDF_MEM_KEY = (name) => "zk_pdf_page_" + name;
   const savePdfPage = React.useCallback((name, page) => {
@@ -361,7 +371,8 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
   const renderRef   = useRef(null);
   const tlRenderRef = useRef(null);
   const pinchRef    = useRef({active:false, dist0:0, scale0:1.4});
-  const pageRefs    = useRef({});      // {pageNum: domNode} voor scroll-to-page
+  const pageRefs        = useRef({});  // {pageNum: domNode} voor scroll-to-page
+  const pendingScrollRef = useRef(null); // pagina om naar te scrollen zodra die gerenderd is
   const _swipeStart = useRef(0);        // iPad swipe navigatie in single-page modus
   const renderingRef= useRef(false);
   const renderIdRef = useRef(0);  // elke nieuwe render krijgt een uniek ID — annuleert de vorige
@@ -608,8 +619,8 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
     const node = pageRefs.current[n];
     if (!node) return;
     userNavRef.current = true;
-    node.scrollIntoView({behavior: "smooth", block: "start"});
-    // Reset de vlag zodra de scroll-animatie klaar kan zijn (~700ms)
+    node.scrollIntoView({behavior: "instant", block: "start"}); // instant op iPad, smooth kan mislopen
+    if (pendingScrollRef.current === n) pendingScrollRef.current = null;
     setTimeout(() => { userNavRef.current = false; }, 700);
   }, []);
 
@@ -617,6 +628,25 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
   React.useEffect(() => { pageNumRef.current = pageNum; }, [pageNum]);
   // Registreer scrollToPage in ref zodat renderVirtual hem kan aanroepen zonder dep
   React.useEffect(() => { scrollToPageRef.current = scrollToPage; }, [scrollToPage]);
+
+  // Scroll naar pending pagina zodra die node in de DOM bestaat
+  React.useEffect(() => {
+    const target = pendingScrollRef.current;
+    if (!target) return;
+    // Probeer direct te scrollen; als het lukt, wis de pending
+    const node = pageRefs.current[target];
+    if (node) {
+      // Kleine delay zodat iOS Safari de layout heeft afgerond
+      setTimeout(() => {
+        const n2 = pageRefs.current[target];
+        if (n2) {
+          n2.scrollIntoView({ behavior: "instant", block: "start" });
+          pendingScrollRef.current = null;
+          console.log("[PDF] Hersteld naar pagina", target);
+        }
+      }, 120);
+    }
+  }); // elke render — stopt zichzelf via pendingScrollRef = null
 
   // Laad nabije pagina's + sla huidige pagina op als pageNum verandert
   React.useEffect(() => {
@@ -664,10 +694,10 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
       const savedPage = loadPdfPage(name);
       setPdfDoc(doc); setNumPages(doc.numPages);
       setPdfFile({name});
-      // Herstel opgeslagen pagina (na korte delay zodat render klaar is)
+      // Herstel opgeslagen pagina
       if (savedPage > 1) {
+        pendingScrollRef.current = savedPage; // renderer scrollt zodra pagina in DOM is
         setPageNum(savedPage);
-        setTimeout(() => scrollToPage(savedPage), 600);
       } else {
         setPageNum(1);
       }
@@ -1063,6 +1093,8 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
     };
     if (onAddNote) await onAddNote(note);
     setNoteSaving(false);
+    // Bevestigings-animatie: kort groen
+    setTimeout(() => setNoteContent(prev => prev), 100);
   };
 
   // ── Feature 3: Exporteer alle annotaties als één literatuurnotitie ──────────
@@ -1415,6 +1447,20 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
               cursor:"pointer", padding:"2px 6px", fontSize:"13px", lineHeight:1,
             }
           }, "📋"),
+          // Leesnotitie-paneel knop
+          pdfFile && React.createElement("button",{
+            onClick:()=>{
+              setShowNotePanel(p=>!p);
+              if(!showNotePanel) setShowAnnotPanel(false);
+            },
+            title:"Leesnotitie (per-pagina aantekeningen)",
+            style:{
+              background: showNotePanel ? W.commentBg||"rgba(159,202,86,.1)" : "none",
+              border: showNotePanel ? `1px solid ${W.commentBorder||"rgba(159,202,86,.3)"}` : "1px solid transparent",
+              borderRadius:"4px", color: showNotePanel ? W.comment : W.fgMuted,
+              cursor:"pointer", padding:"2px 6px", fontSize:"13px", lineHeight:1,
+            }
+          }, "✏"),
           // ── Fit-width ─────────────────────────────────────────────────
           React.createElement("button",{
             onClick: async () => {
@@ -2285,9 +2331,18 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
 
     // ── Leesnotitie paneel (per pagina notities) ─────────────────────────
     pdfFile && showNotePanel && React.createElement("div",{style:{
-      width:"340px", flexShrink:0, background:W.bg2,
-      borderLeft:`1px solid ${W.splitBg}`,
+      width: isTablet ? "100%" : "340px",
+      flexShrink:0, background:W.bg2,
+      borderLeft: isTablet ? "none" : `1px solid ${W.splitBg}`,
+      borderTop: isTablet ? `1px solid ${W.splitBg}` : "none",
       display:"flex", flexDirection:"column", minHeight:0,
+      position: isTablet ? "absolute" : "relative",
+      bottom: isTablet ? 0 : "auto",
+      left: isTablet ? 0 : "auto",
+      right: isTablet ? 0 : "auto",
+      height: isTablet ? "60%" : "auto",
+      zIndex: isTablet ? 50 : 1,
+      boxShadow: isTablet ? "0 -4px 20px rgba(0,0,0,0.3)" : "none",
     }},
       // Header
       React.createElement("div",{style:{

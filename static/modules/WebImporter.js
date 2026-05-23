@@ -67,6 +67,8 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, onRefreshPd
   const [pptxImportMode, setPptxImportMode] = useState("hybrid");
   const [pptxSaved,      setPptxSaved]      = useState(false);
   const [pptxTags,       setPptxTags]       = useState([]);
+  const [mdType,         setMdType]         = useState("");
+  const [docxType,       setDocxType]       = useState("");
   const [pptxType,       setPptxType]       = useState("literature");
   const [pptxTagsLoading, setPptxTagsLoading] = useState(false);
   const [pptxTypeLoading, setPptxTypeLoading] = useState(false);
@@ -297,7 +299,7 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, onRefreshPd
     setSaved(true);
     // Na 1.5s automatisch terug naar het invoerscherm
     setTimeout(() => reset(), 1500);
-  }, [importPreview, editTitle, editMd, editSummary, tags, selectedImages, onAddNote]);
+  }, [importPreview, editTitle, editMd, editSummary, tags, selectedImages, selectedType, onAddNote]);
 
   const reset = () => {
     setUrl(""); setImportPreview(null);
@@ -797,6 +799,7 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, onRefreshPd
                 title: mdTitle.trim(),
                 content: mdContent,
                 tags: mdTags,
+                noteType: mdType || "",
                 created: new Date().toISOString(),
                 modified: new Date().toISOString(),
               };
@@ -817,6 +820,35 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, onRefreshPd
         // Tags + preview
         React.createElement("div", {style:{flex:1,overflowY:"auto",padding:"16px 20px",
           display:"flex",flexDirection:"column",gap:"14px", minHeight:0, WebkitOverflowScrolling:"touch",}},
+
+React.createElement("div", {style:{
+            background:W.bg2, border:`1px solid ${W.splitBg}`,
+            borderRadius:"7px", padding:"10px 14px",
+          }},
+            React.createElement("div", {style:{
+              fontSize:"11px",color:"rgba(138,198,242,0.6)",
+              letterSpacing:"1.2px",marginBottom:"8px",fontWeight:"600"
+            }}, "NOTITIETYPE"),
+            React.createElement("div", {style:{display:"flex",gap:"6px",flexWrap:"wrap"}},
+              React.createElement("button", {
+                onClick:()=>setMdType(""),
+                style:{padding:"4px 10px",fontSize:"11px",borderRadius:"5px",cursor:"pointer",
+                  background:mdType===""?"rgba(133,123,111,0.2)":"transparent",
+                  border:`1px solid ${mdType===""?"#857b6f":W.splitBg}`,
+                  color:W.fgMuted, transition:"all .1s"}
+              }, "— geen"),
+              Object.entries(TYPE_META).map(([tid,{label,color}]) =>
+                React.createElement("button", {
+                  key:tid, onClick:()=>setMdType(mdType===tid?"":tid),
+                  style:{padding:"4px 10px",fontSize:"11px",borderRadius:"5px",cursor:"pointer",
+                    background:mdType===tid?`${color}20`:"transparent",
+                    border:`1px solid ${mdType===tid?color:W.splitBg}`,
+                    color:mdType===tid?color:W.fgMuted,
+                    fontWeight:mdType===tid?"600":"400", transition:"all .1s"}
+                }, label)
+              )
+            )
+          ),
 
           // Tags — SmartTagEditor
           React.createElement("div", {style:{
@@ -1007,6 +1039,7 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, onRefreshPd
                         ? `*Samenvatting:* ${docxSummary}\n\n---\n\n` : "")
                         + docxMd,
                       tags: docxTags,
+                      noteType: docxType || "",
                       created: new Date().toISOString(),
                       modified: new Date().toISOString(),
                     };

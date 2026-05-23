@@ -1,4 +1,4 @@
-const ZK_VERSION = "sessie12-thema-fix"; console.log("[ZK] Versie:", ZK_VERSION);
+const ZK_VERSION = "sessie12-thema-fix";
 // ─── DEBUG FLAG ─────────────────────────────────────────────────────────────────
 // Activeer via URL: ?debug  of via console: localStorage.setItem('zk_debug','1')
 const ZK_DEBUG = new URLSearchParams(window.location.search).has('debug')
@@ -97,6 +97,41 @@ const THEMES = {
     orange:"#785020", purple:"#482878", green:"#1E5030",
     yellow:"#786020", blue:"#1A5050",
   },
+  "zomerlicht": {
+    label: "Zomerlicht ☀", dark: false,
+    // Warm crème — niet puur wit (te veel glare), niet geel (te opvallend)
+    // Vergelijkbaar met kwaliteitspapier in de zon: #FAF3E0
+    bg:       "#FAF3E0",   // warm crème — papier in zonlicht
+    bg2:      "#F2EAD0",   // iets donkerder — zijbalk, kaarten
+    bg3:      "#E8DFC4",   // nog donkerder — geselecteerde items
+    statusBg: "#DDD4B8",   // statusbalk — duidelijk gescheiden van inhoud
+    visualBg: "#C8A870",   // selectie — warm amberbruin, goed zichtbaar
+    cursorBg: "#1A3A6A",   // cursor — marineblauw, maximaal contrast
+    splitBg:  "#CCC4A8",   // scheidingslijnen — warm maar subtiel
+    lineNrBg: "#F2EAD0",
+    // Tekst — extra donker voor maximaal buiten-contrast
+    fg:       "#120E08",   // bijna-zwart, warm (contrast >14:1 op bg)
+    fgMuted:  "#4A3E2C",   // gedimde tekst — donkerbruin, NIET grijs (grijs wast uit)
+    fgDim:    "#6A5E4A",   // zeer gedimde tekst — nog steeds leesbaar buiten
+    statusFg: "#0A0804",
+    // Accentkleuren — krachtig en verzadigd voor leesbaarheid in zonlicht
+    // Getest: >4.5:1 op #FAF3E0 achtergrond
+    comment:  "#2A5E28",   // donker bosgroen (contrast ~7:1)
+    string:   "#2A5E28",
+    keyword:  "#1A3A6A",   // marineblauw (contrast ~9:1)
+    type:     "#5A2878",   // dieppaars (contrast ~8:1)
+    special:  "#8A2020",   // donkerrood (contrast ~6:1)
+    orange:   "#8A3E10",   // verbrand sienna — warm en zichtbaar
+    purple:   "#5A2878",
+    green:    "#2A5E28",
+    yellow:   "#8A6200",   // amberokker — niet geel (wast uit), wel warm
+    blue:     "#1A3A6A",
+    // Tags: amberbruin voor leesbaarheid op crème
+    tagColor: "#7A3A0A",              // verbrand sienna — warm & leesbaar
+    tagBg:    "rgba(122,58,10,0.10)", // lichte ambergloed
+    tagBorder:"rgba(122,58,10,0.28)", // zichtbare warme rand
+  },
+
   "beige": {
     label: "Beige Klassiek", dark: false,
     bg:"#F5F5DC", bg2:"#ECECD0", bg3:"#E2E2C0",
@@ -147,9 +182,12 @@ const _applyThemeExtended = (t) => {
     t.yellowBorder  = t.keyword + "35";
     t.splitAlpha    = s + "88";
     // Tags: gebruik de blauwkleur van het thema — duidelijk leesbaar op licht
-    t.tagColor      = t.keyword;   // donkerblauw/teal per thema
-    t.tagBg         = b + "14";   // lichte blauwtint achtergrond
-    t.tagBorder     = b + "40";   // zichtbare blauwe rand
+    // Alleen overschrijven als het thema geen eigen tagColor heeft
+    if (!t.tagColor) {
+      t.tagColor  = t.keyword;       // donkerblauw/teal per thema
+      t.tagBg     = b + "14";
+      t.tagBorder = b + "40";
+    }
   }
 };
 
@@ -177,6 +215,15 @@ const _applyThemeCss = (t) => {
   el.style.setProperty("--zk-tr-bg", dark ? "rgba(255,255,255,.02)"  : t.bg3+"88");
   el.style.setProperty("--zk-link-dec",      dark?"rgba(138,198,242,.3)":t.blue+"55");
   el.style.setProperty("--zk-link-hover-dec",dark?"rgba(255,255,215,.4)":t.blue+"99");
+  // Tag pill CSS variabelen — worden gebruikt in index.html .tag-pill definitie
+  const _tc  = t.tagColor  || (dark ? t.comment  : t.keyword);
+  const _tbg = t.tagBg     || (dark ? "rgba(159,202,86,.10)" : t.blue+"18");
+  const _tbd = t.tagBorder || (dark ? "rgba(159,202,86,.28)" : t.blue+"44");
+  const _th  = t.commentBg2|| (dark ? "rgba(159,202,86,.16)" : t.blue+"28");
+  el.style.setProperty("--zk-tag-pill-color",  _tc);
+  el.style.setProperty("--zk-tag-pill-bg",     _tbg);
+  el.style.setProperty("--zk-tag-pill-border", _tbd);
+  el.style.setProperty("--zk-tag-pill-hover",  _th);
 
   // Injecteer dynamische <style> — werkt direct, geen React re-render nodig
   let s = document.getElementById("zk-theme");
@@ -198,6 +245,7 @@ const _applyThemeCss = (t) => {
     ".tag-pill{color:"+tc+"!important;background:"+tbg+"!important;border-color:"+tbd+"!important}" +
     ".tag-pill:hover{background:"+th+"!important}" +
     ".taghl{color:"+tc+"!important;background:"+tbg+"!important}" +
+    "html{--zk-tag-pill-color:"+tc+";--zk-tag-pill-bg:"+tbg+";--zk-tag-pill-border:"+tbd+";--zk-tag-pill-hover:"+th+"}" +
     ".note-item:hover{background:"+ih+"!important}" +
     ".note-item.selected{background:"+is_+"!important;border-color:"+ib+"!important}" +
     ".zlink{color:"+t.blue+"!important;background:"+lbg+"!important;border-color:"+lbd+"!important}" +
@@ -281,7 +329,6 @@ window._setTheme = (id) => {
         n++;
       }
     });
-    console.log("[ZK] Thema:", t.label, "| tagColor:", tagC, "| elementen:", n);
   };
   requestAnimationFrame(() => {
     _doApplyTagColors();
@@ -597,7 +644,7 @@ const renderMd = (text, notes=[]) => {
     "note":    { icon:"📝", color:"#eae788", bg:W.yellowBg, border:W.yellowBorder },
     "warning": { icon:"⚠",  color:"#e5786d", bg:"rgba(229,120,109,0.07)", border:"rgba(229,120,109,0.25)" },
     "idea":        { icon:"💡", color:"#9fca56", bg:"rgba(159,202,86,0.07)",  border:"rgba(159,202,86,0.25)"  },
-    "samenvatting":{ icon:"📋", color:"#8ac6f2", bg:"rgba(138,198,242,0.07)", border:W.blueBorder  },
+    "samenvatting":{ icon:"📋", color:W.keyword||"#8ac6f2", bg:W.dark?"rgba(138,198,242,0.07)":"rgba(138,198,242,0.10)", border:W.blueBorder  },
   };
   h = h.replace(/^(&gt;.*\n?)+/gm, block => {
     const lines = block.split("\n").filter(l => l.trim());
@@ -608,7 +655,7 @@ const renderMd = (text, notes=[]) => {
     if (calloutMatch) {
       const type  = calloutMatch[1].toLowerCase();
       const title = calloutMatch[2].trim();
-      const meta  = calloutMeta[type] || { icon:"💬", color:"#a0a8b0", bg:"rgba(255,255,255,0.04)", border:"rgba(255,255,255,0.12)" };
+      const meta  = calloutMeta[type] || { icon:"💬", color:W.fgMuted||"#a0a8b0", bg:W.dark?"rgba(255,255,255,0.04)":"rgba(0,0,0,0.04)", border:W.splitBg||"rgba(255,255,255,0.12)" };
       // Saniteer body: verwijder CSS-rommel die lokale modellen soms toevoegen
       const rawBody = cleaned.slice(1).join("\n").replace(/^&gt;\s?/gm,"").trim();
       const body = rawBody
@@ -634,14 +681,14 @@ const renderMd = (text, notes=[]) => {
       const calloutHtml =
              `<div style="border-left:3px solid ${meta.border};background:${meta.bg};border-radius:0 6px 6px 0;padding:10px 14px;margin:10px 0">` +
              `<div style="color:${meta.color};font-weight:bold;font-size:13px;margin-bottom:${body?"6px":"0"}">${meta.icon} ${type.toUpperCase()}${title?" — "+title:""}</div>` +
-             (body ? `<div style="color:#e3e0d7;font-size:14px;line-height:1.7">${body}</div>` : "") +
+             (body ? `<div style="color:${W.fg};font-size:14px;line-height:1.7">${body}</div>` : "") +
              `</div>`;
       const ci = mediaBlocks.length;
       mediaBlocks.push(calloutHtml);
       return `%%MEDIA${ci}%%`;
     }
     // Gewone blockquote ook als placeholder
-    const bqHtml = `<blockquote>${cleaned.join("<br>")}</blockquote>`;
+    const bqHtml = `<blockquote style="color:${W.fg}">${cleaned.join("<br>")}</blockquote>`;
     const bi = mediaBlocks.length;
     mediaBlocks.push(bqHtml);
     return `%%MEDIA${bi}%%`;
@@ -717,15 +764,22 @@ const renderMd = (text, notes=[]) => {
 };
 
 // ── Tag Pill ───────────────────────────────────────────────────────────────────
-const TagPill = ({tag, onRemove, small, onClick}) => (
-  React.createElement("span",{
+const TagPill = ({tag, onRemove, small, onClick}) => {
+  // Gebruik W direct — betrouwbaarder dan CSS variabelen
+  // W.dark !== false = donker thema; expliciet false = licht thema (Zomerlicht etc.)
+  const isLight = W.dark === false;
+  const tColor  = W.tagColor  || (isLight ? "#7A3A0A"              : "#9fca56");
+  const tBg     = W.tagBg     || (isLight ? "rgba(122,58,10,0.12)" : "rgba(159,202,86,0.12)");
+  const tBorder = W.tagBorder || (isLight ? "rgba(122,58,10,0.32)" : "rgba(159,202,86,0.38)");
+  return React.createElement("span",{
     onClick:onClick,
     title:"#"+tag,
+    className:"tag-pill" + (small?" small":""),
     style:{
       display:"inline-flex",alignItems:"center",gap:"4px",
-      background: small ? "rgba(159,202,86,0.14)" : "rgba(159,202,86,0.18)",
-      color:"#b8e06a",
-      border:"1px solid rgba(159,202,86,0.45)",
+      background:  tBg,
+      color:       tColor,
+      border:      `1px solid ${tBorder}`,
       borderRadius:"5px",
       padding: small ? "2px 7px" : "3px 9px",
       fontSize: small ? "11px" : "12px",
@@ -743,11 +797,11 @@ const TagPill = ({tag, onRemove, small, onClick}) => (
     }}, "#"+tag),
     onRemove && React.createElement("span",{
       onClick:e=>{e.stopPropagation();onRemove(tag);},
-      style:{cursor:"pointer",color:"rgba(159,202,86,0.6)",marginLeft:"2px",
+      style:{cursor:"pointer",color:tColor,opacity:0.65,marginLeft:"2px",
              fontSize:"13px",lineHeight:1,fontWeight:"bold",flexShrink:0}
     },"×")
-  )
-);
+  );
+};
 
 // ── Tag Editor ─────────────────────────────────────────────────────────────────
 const TagEditor = ({tags=[], onChange, allTags=[]}) => {
@@ -895,19 +949,32 @@ const OfflineBadge = () => {
   const cfg = {
     offline:  { bg:"rgba(229,120,109,.15)", border:"rgba(229,120,109,.35)", color:"#e5786d", label:"⚡ Offline",         pulse:false },
     syncing:  { bg:"rgba(138,198,242,.15)", border:"rgba(138,198,242,.35)", color:"#8ac6f2", label:"⟳ Synchroniseren…", pulse:true  },
-    queued:   { bg:"rgba(234,231,136,.12)", border:"rgba(234,231,136,.3)",  color:"#eae788", label:`⏳ ${queued} in wachtrij`, pulse:false },
+    queued:   { bg:"rgba(234,231,136,.12)", border:"rgba(234,231,136,.3)",  color:"#eae788",
+                label:`⏳ ${queued} in wachtrij — tik om te synchroniseren`, pulse:false },
     update:   { bg:"rgba(159,202,86,.12)",  border:"rgba(159,202,86,.35)",  color:"#9fca56", label:"↑ Update beschikbaar", pulse:false },
   }[state] || {};
+
+  const handleClick = () => {
+    if (state === "update") { window.location.reload(); return; }
+    if (state === "queued") {
+      setState("syncing");
+      // Probeer SW-sync én directe queue sync
+      Promise.all([
+        window._zkSW?.syncNow?.() || Promise.resolve(),
+        window._zkSyncQueue?.()   || Promise.resolve(),
+      ]).then(() => setState("online"));
+    }
+  };
 
   return React.createElement("div", {
     title: state === "offline"
       ? "Offline — wijzigingen worden bewaard en gesynchroniseerd zodra de verbinding terugkeert"
       : state === "queued"
-      ? `${queued} wijziging(en) wachten op synchronisatie — verbind met de server`
+      ? `${queued} wijziging(en) wachten — klik om direct te synchroniseren`
       : state === "update"
       ? "Klik om de nieuwe versie te laden"
       : "Bezig met synchroniseren…",
-    onClick: state === "update" ? () => window.location.reload() : undefined,
+    onClick: handleClick,
     style:{
       padding:"2px 10px", borderRadius:"10px", fontSize:"12px", fontWeight:"500",
       flexShrink:0, cursor: state === "update" ? "pointer" : "default",
@@ -920,11 +987,13 @@ const OfflineBadge = () => {
   }, cfg.label);
 };
 
+// ── LiveSync — poll elke 30s of andere apparaten wijzigingen hebben gemaakt ──
 const App = () => {
   const { useState, useEffect, useRef, useMemo, useCallback } = React;
 
   // ── Notities-state (gedelegeerd aan NoteStore + NotesTab) ───────────────────
   const [notes,    setNotes]   = useState([]);   // gespiegeld vanuit NoteStore
+  const [syncToast, setSyncToast] = useState(null); // "↺ Notities bijgewerkt" melding
   const [canvasPendingNotes, setCanvasPendingNotes] = useState(null); // noteIds wachten op canvas
   const [goyoMode, setGoyoMode] = useState(false); // App-level: beïnvloedt topbar
   const [splitMode,  setSplitMode]  = useState(false);
@@ -1012,6 +1081,68 @@ const App = () => {
     serverCheckRef.current = setInterval(check, 10000);
     return () => clearInterval(serverCheckRef.current);
   }, []);
+
+  // ── Live sync: poll voor wijzigingen van andere apparaten ─────────────────
+  React.useEffect(() => {
+    let lastHash = null;
+    let toastTimer = null;
+
+    let buildTs = null; // bijhouden van app-versie
+
+    const poll = async () => {
+      try {
+        // ── Check 1: app-versie (detecteert nieuwe deployments) ─────────────
+        const bv = await fetch("/api/build-version", { cache: "no-store" })
+          .then(r => r.ok ? r.json() : null).catch(() => null);
+        if (bv?.ts) {
+          if (buildTs === null) {
+            buildTs = bv.ts;
+          } else if (bv.ts !== buildTs) {
+            buildTs = bv.ts;
+            window._zkSwUpdateReady = true;
+            window.dispatchEvent(new CustomEvent("zk-sw-update"));
+          }
+        }
+
+        // ── Check 2: notitie-wijzigingen van andere apparaten ──────────────
+        const r = await fetch("/api/notes-version", { cache: "no-store" });
+        if (!r.ok) { return; }
+        const data = await r.json();
+        const hash = data?.hash;
+        if (!hash) return;
+
+        if (lastHash === null) { lastHash = hash; return; }
+        if (hash === lastHash) return;
+
+        // Hash veranderd: herlaad notities
+        lastHash = hash;
+        const r2 = await fetch("/api/notes", { cache: "no-store" });
+        if (!r2.ok) return;
+        const fresh = await r2.json();
+        if (Array.isArray(fresh) && fresh.length > 0) {
+          setNotes(fresh);
+          setSyncToast("↺ Notities bijgewerkt");
+          clearTimeout(toastTimer);
+          toastTimer = setTimeout(() => setSyncToast(null), 3500);
+        }
+      } catch(e) { /* server niet bereikbaar */ }
+    };
+
+    const onFocus   = () => poll();
+    const onVisible = () => { if (document.visibilityState === "visible") poll(); };
+
+    window.addEventListener("focus",            onFocus);
+    window.addEventListener("visibilitychange", onVisible);
+    const interval = setInterval(poll, 15_000);
+    poll(); // eerste check meteen
+
+    return () => {
+      clearInterval(interval);
+      clearTimeout(toastTimer);
+      window.removeEventListener("focus",            onFocus);
+      window.removeEventListener("visibilitychange", onVisible);
+    };
+  }, []); // stabiel — geen dependencies
 
   // Jobs API — te gebruiken vanuit child-componenten
   const addJob = React.useCallback((job) => {
@@ -1159,40 +1290,36 @@ const App = () => {
   );
 
   const MAIN_TABS = [
-    { id:"notes",     icon:"📝", label:"Schrijven",  sub: null },
-    { id:"library",   icon:"📚", label:"Bibliotheek", sub: [
-        {id:"pdf",     icon:"📄", label:"PDF"},
-        {id:"images",  icon:"🖼",  label:"Plaatjes"},
-        {id:"reading", icon:"📖", label:"Leeslijst"},
-        {id:"review",  icon:"🔁", label:"Review"},
-        {id:"tasks",       icon:"✓",  label:"Taken"},
+    { id:"notes",      icon:"📝", label:"Schrijven",   sub: null },
+    { id:"whiteboard", icon:"🎨", label:"Canvas",      sub: null },
+    { id:"library",    icon:"📚", label:"Bibliotheek", sub: [
+        {id:"pdf",          icon:"📄", label:"PDF"},
+        {id:"images",       icon:"🖼",  label:"Plaatjes"},
+        {id:"reading",      icon:"📖", label:"Leeslijst"},
+        {id:"review",       icon:"🔁", label:"Review"},
+        {id:"tasks",        icon:"✓",  label:"Taken"},
         {id:"annotations",  icon:"✦",  label:"Annotaties"},
         {id:"books",        icon:"📚", label:"Boeken"},
-      ]},
-    { id:"discover",  icon:"🔍", label:"Ontdekken",  sub: [
-        {id:"search",     icon:"🔍", label:"Zoeken"},
-        {id:"graph",      icon:"🕸",  label:"Graaf"},
-        {id:"mindmap",    icon:"🗺",  label:"Mindmap"},
-        {id:"llm",        icon:"🧠", label:"Notebook"},
-        {id:"whiteboard", icon:"🎨", label:"Canvas"},
-        {id:"query",      icon:"🔎", label:"Query"},
-      ]},
-    { id:"input",     icon:"🌐", label:"Invoer",     sub: [
-        {id:"import",  icon:"🌐", label:"URL / Word"},
-        {id:"pdfimport",icon:"📄", label:"PDF"},
-      ]},
-    { id:"manage",    icon:"⚙",  label:"Beheer",     sub: [
-        {id:"tags",    icon:"🏷",  label:"Tags"},
-        {id:"stats",   icon:"📊", label:"Statistieken"},
-        {id:"cleanup", icon:"🧹", label:"Opschonen"},
-      ]},
-  ];
+    ]},
+    { id:"discover",   icon:"🔍", label:"Ontdekken",   sub: [
+        {id:"search",   icon:"🔍", label:"Zoeken"},
+        {id:"graph",    icon:"🕸",  label:"Graaf"},
+        {id:"mindmap",  icon:"🗺",  label:"Mindmap"},
+        {id:"llm",      icon:"🧠", label:"Notebook"},
+        {id:"query",    icon:"🔎", label:"Query"},
+    ]},
+    { id:"input",      icon:"🌐", label:"Invoer",      sub: [
+        {id:"import",    icon:"🌐", label:"URL / Word"},
+        {id:"pdfimport", icon:"📄", label:"PDF"},
+        {id:"stats",     icon:"📊", label:"Statistieken"},
+    ]},
+];
 
   // Bepaal welke hoofdtab actief is op basis van de huidige subtab
   const activeMain = React.useMemo(() => {
-    if (tab === "notes") return "notes";
     for (const mt of MAIN_TABS) {
-      if (mt.sub?.some(s => s.id === tab)) return mt.id;
+      if (mt.id === tab) return mt.id;              // standalone tab
+      if (mt.sub?.some(s => s.id === tab)) return mt.id;  // subtab
     }
     return "notes";
   }, [tab]);
@@ -1208,6 +1335,19 @@ const App = () => {
   React.useEffect(() => {
     window._zkForceUpdate   = () => _forceRender(n => n + 1);
     window._zkRefreshNotes  = () => setNotes([...NoteStore.getAll()]);
+    window._zkHardRefresh   = async () => {
+      // Herlaad notities ECHT van de server (niet uit cache)
+      try {
+        const r = await fetch("/api/notes", { cache: "no-store" });
+        if (!r.ok) return;
+        const fresh = await r.json();
+        if (Array.isArray(fresh)) {
+          setNotes(fresh);
+          // Sync ook naar NoteStore intern
+          NoteStore.load().catch(() => {});
+        }
+      } catch { /* offline */ }
+    };
     window._sendToCanvas = (noteIds) => { setCanvasPendingNotes(noteIds); setTab("whiteboard"); };
     window._showInGraph  = (noteId)  => { setTab("graph"); setTimeout(()=>window._graphCenterNode?.(noteId),200); };
     window._sendToCanvas = (noteIds) => { setCanvasPendingNotes(noteIds); setTab("whiteboard"); };
@@ -1225,6 +1365,7 @@ const App = () => {
     document.documentElement.style.setProperty("--zk-fg", W.fg);
     return () => {
       window._zkRefreshNotes  = null;
+      window._zkHardRefresh   = null;
       window._sendToCanvas    = null;
       window._showInGraph     = null;
       window._sendToCanvas    = null;
@@ -1301,10 +1442,9 @@ const App = () => {
   // Elke hoofdtab heeft een standaard subtab (eerste kind)
   // Bij klikken op hoofdtab: open de eerste subtab (of notes direct)
   const handleMainTab = (mainId) => {
-    if (mainId === "notes") { setTab("notes"); return; }
     const mt = MAIN_TABS.find(m => m.id === mainId);
-    if (!mt?.sub) return;
-    // Blijf op huidige subtab als die al tot deze hoofdtab behoort
+    if (!mt) return;
+    if (!mt.sub) { setTab(mainId); return; }  // standalone tab (bijv. Canvas)
     if (mt.sub.some(s => s.id === tab)) return;
     setTab(mt.sub[0].id);
   };
@@ -1381,19 +1521,23 @@ const App = () => {
           onClick: e => { e.stopPropagation(); setJobsPanelOpen(p=>!p); },
           style:{
             display:"flex", alignItems:"center", gap:"4px",
-            background: runningJobs.length>0 ? "rgba(138,198,242,0.1)" : W.commentBg,
-            border: `1px solid ${runningJobs.length>0 ? "rgba(138,198,242,0.35)" : "rgba(159,202,86,0.35)"}`,
+            background: runningJobs.length>0
+              ? (W.dark?"rgba(138,198,242,0.1)":W.blueBg||"rgba(26,58,106,0.10)")
+              : W.commentBg,
+            border: `1px solid ${runningJobs.length>0
+              ? (W.blueBorder||"rgba(138,198,242,0.35)")
+              : (W.commentBorder||"rgba(159,202,86,0.35)")}`,
             borderRadius:"20px",
             padding: isTablet ? "3px 8px" : "3px 11px",
             cursor:"pointer",
-            color: runningJobs.length>0 ? "#a8d8f0" : W.comment,
+            color: runningJobs.length>0 ? (W.blue||"#8ac6f2") : W.comment,
             fontSize:"14px",
             animation: runningJobs.length>0 ? "ai-pulse 1.4s ease-in-out infinite" : "none",
           }
         },
           runningJobs.length>0
             ? React.createElement("span",{style:{display:"inline-block",width:"7px",height:"7px",
-                borderRadius:"50%",background:"#a8d8f0",flexShrink:0,
+                borderRadius:"50%",background:W.blue||"#8ac6f2",flexShrink:0,
                 animation:"ai-dot 1.4s ease-in-out infinite"}})
             : React.createElement("span",null,"✓"),
           // Op tablet: alleen getal, geen label
@@ -1425,7 +1569,7 @@ const App = () => {
               ? React.createElement("div",{style:{padding:"20px",color:W.fgMuted,fontSize:"14px",textAlign:"center"}},"Geen taken")
               : [...jobs].reverse().map(job =>
                   React.createElement("div",{key:job.id,
-                    style:{padding:"10px 14px",borderBottom:"1px solid rgba(255,255,255,0.04)",
+                    style:{padding:"10px 14px",borderBottom:`1px solid ${W.splitBg||"rgba(255,255,255,0.04)"}`,
                            display:"flex",alignItems:"flex-start",gap:"10px"}},
                     React.createElement("span",{style:{fontSize:"14px",marginTop:"1px",flexShrink:0,
                       animation:job.status==="running"?"ai-dot 1.4s ease-in-out infinite":"none"}},
@@ -1612,6 +1756,20 @@ const App = () => {
   },
     mobileTopBar,
     topBar,
+    // Sync-melding
+    syncToast && React.createElement("div", {
+      style: {
+        position:"fixed", bottom:"24px", left:"50%",
+        transform:"translateX(-50%)", zIndex:9999,
+        padding:"8px 18px", borderRadius:"20px",
+        background:"rgba(138,198,242,.15)",
+        border:"1px solid rgba(138,198,242,.35)",
+        color:"#8ac6f2", fontSize:"13px", fontWeight:"500",
+        backdropFilter:"blur(8px)", pointerEvents:"none",
+        animation:"fadeIn .2s ease-out", whiteSpace:"nowrap",
+      }
+    }, syncToast),
+
 
     // ── Subtab-balk (desktop+tablet, alleen als actieve hoofdtab subtabs heeft) ──
     !isMobile && activeSubs && React.createElement("div", {

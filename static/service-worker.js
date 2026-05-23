@@ -1,6 +1,6 @@
 // ── Zettelkasten Service Worker ────────────────────────────────────────────
 // Versie: verhoog bij elke deploy om de cache te vernieuwen
-const SW_VERSION   = "zk-sw-v1";
+const SW_VERSION   = "zk-sw-v8";  // v3 → wist v2 cache inclusief modules
 const SHELL_CACHE  = `${SW_VERSION}-shell`;   // statische bestanden
 const API_CACHE    = `${SW_VERSION}-api`;      // gecachede API-responses
 const IDB_NAME     = "zettelkasten-offline";
@@ -134,7 +134,6 @@ async function idbClear(store) {
 
 // ── Install: cache de app shell ─────────────────────────────────────────────
 self.addEventListener("install", (event) => {
-  console.log("[ZK-SW] Install", SW_VERSION);
   event.waitUntil(
     caches.open(SHELL_CACHE).then(async (cache) => {
       // Probeer elk bestand afzonderlijk — sla missende over (hoeft niet te crashen)
@@ -145,7 +144,6 @@ self.addEventListener("install", (event) => {
       );
       const ok  = results.filter(r => r.status === "fulfilled").length;
       const nok = results.filter(r => r.status === "rejected").length;
-      console.log(`[ZK-SW] Shell cached: ${ok} ok, ${nok} overgeslagen`);
     })
     .then(() => self.skipWaiting())   // activeer meteen, wacht niet op sluiting tabs
   );
@@ -154,21 +152,50 @@ self.addEventListener("install", (event) => {
 
 // ── Activate: verwijder oude caches ─────────────────────────────────────────
 self.addEventListener("activate", (event) => {
-  console.log("[ZK-SW] Activate", SW_VERSION);
   event.waitUntil(
     caches.keys().then(keys =>
       Promise.all(
         keys
           .filter(k => k !== SHELL_CACHE && k !== API_CACHE)
           .map(k => {
-            console.log("[ZK-SW] Verwijder oude cache:", k);
             return caches.delete(k);
           })
       )
     )
-    .then(() => self.clients.claim())  // neem controle over alle open tabs
+    .then(() => self.clients.claim())
   );
 });
+
+// ── Versie-check: controleer bij elke fetch of server een update heeft ───────
+let _lastVersionCheck = 0;
+const VERSION_CHECK_INTERVAL = 5 * 60 * 1000; // max 1x per 5 minuten checken
+
+async function checkForUpdate() {
+  const now = Date.now();
+  if (now - _lastVersionCheck < VERSION_CHECK_INTERVAL) return;
+  _lastVersionCheck = now;
+
+  try {
+    const resp = await fetch("/api/version", { cache: "no-store" });
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const serverHash = data?.hash;
+    const cachedHash = await caches.match("/__zk_build_hash__")
+      .then(r => r?.text()).catch(() => null);
+
+    if (cachedHash && cachedHash !== serverHash) {
+      // Server heeft een nieuwe build — stuur update-signaal naar alle tabs
+      const clients = await self.clients.matchAll({ type: "window" });
+      clients.forEach(c => c.postMessage({ type: "BUILD_UPDATE", hash: serverHash }));
+    }
+
+    // Sla de huidige server-hash op
+    const cache = await caches.open(API_CACHE);
+    cache.put("/__zk_build_hash__", new Response(serverHash));
+  } catch {
+    // Offline of server niet bereikbaar — stil mislukken
+  }
+}
 
 
 // ── Fetch: centrale verkeersleider ──────────────────────────────────────────
@@ -176,19 +203,48 @@ self.addEventListener("fetch", (event) => {
   const req = event.request;
   const url = new URL(req.url);
 
-  // Sla non-GET mutaties op in de sync-queue als we offline zijn
-  if (MUTATION_METHODS.includes(req.method) && url.pathname.startsWith("/api/")) {
+  // Versie-check op de achtergrond (asynchroon, blokkeert fetch niet)
+  if (req.method === "GET" && url.pathname !== "/api/version") {
+    checkForUpdate().catch(() => {});
+  }
+
+  // Mutaties: alleen /api/notes* via de sync-queue
+  // /api/llm/*, /api/import/*, etc. NOOIT onderscheppen — die hebben lange timeouts nodig
+  const isNotesMutation = MUTATION_METHODS.includes(req.method)
+    && (url.pathname.startsWith("/api/notes") || url.pathname === "/api/notes");
+  if (isNotesMutation) {
     event.respondWith(handleMutation(req));
     return;
   }
+  // Alle andere POST/PUT/DELETE (llm, import, pdf, etc.): direct doorgeven
+  if (MUTATION_METHODS.includes(req.method)) {
+    return; // service worker doet niks — browser handelt direct af
+  }
 
-  // GET: API-routes → Network First met cache fallback
-  if (req.method === "GET" && isApiRoute(url.pathname)) {
-    event.respondWith(networkFirstWithCache(req));
+  // GET: LLM/import routes → NOOIT intercepteren (streaming + lange responses)
+  const isLLMorImport = url.pathname.startsWith("/api/llm")
+    || url.pathname.startsWith("/api/import")
+    || url.pathname.startsWith("/api/pdf")
+    || url.pathname.startsWith("/api/images");
+  if (req.method === "GET" && isLLMorImport) {
+    return; // direct doorgeven aan browser
+  }
+  // GET: overige /api/ routes (notes, tags, version) → Network First
+  if (req.method === "GET" && url.pathname.startsWith("/api/")) {
+    event.respondWith(networkFirstNoCache(req));
     return;
   }
 
-  // GET: App Shell → Cache First
+  // GET: App Shell → Cache First (met Network First voor code-bestanden)
+  // JS + HTML: altijd netwerk eerst — updates direct zichtbaar
+  if (req.method === "GET" && (
+      url.pathname.endsWith(".js") ||
+      url.pathname === "/" ||
+      url.pathname === "/index.html" ||
+      url.pathname.endsWith(".html"))) {
+    event.respondWith(networkFirstWithCache(req));
+    return;
+  }
   if (req.method === "GET") {
     event.respondWith(cacheFirstWithNetwork(req));
     return;
@@ -196,8 +252,42 @@ self.addEventListener("fetch", (event) => {
 });
 
 
-// ── Strategie 1: Cache First (statische assets) ─────────────────────────────
+// Bestanden die altijd vers van de server gehaald worden (niet Cache First)
+const NETWORK_FIRST_PATHS = ["/app.js", "/modules/", "/sync.js"];
+
+// ── Strategie 1: Cache First voor statische assets, Network First voor app-code ──
+async function networkFirstWithCache(req) {
+  const cache = await caches.open(SHELL_CACHE);
+  try {
+    const resp = await fetch(req, { signal: AbortSignal.timeout(5000) });
+    if (resp.ok) { cache.put(req, resp.clone()); return resp; }
+  } catch {}
+  const cached = await cache.match(req);
+  return cached || new Response("Offline", { status: 503 });
+}
+
 async function cacheFirstWithNetwork(req) {
+  const url  = new URL(req.url);
+  const path = url.pathname;
+
+  // app.js en modules: altijd proberen van server (Network First)
+  const isAppCode = NETWORK_FIRST_PATHS.some(p => path.startsWith(p));
+  if (isAppCode) {
+    try {
+      const res = await fetch(req, { cache: "no-store" });
+      if (res.ok) {
+        const cache = await caches.open(SHELL_CACHE);
+        cache.put(req, res.clone()); // update cache met nieuwe versie
+      }
+      return res;
+    } catch {
+      // Server offline: val terug op cache
+      const cached = await caches.match(req);
+      if (cached) return cached;
+    }
+  }
+
+  // Alle andere assets: Cache First
   const cached = await caches.match(req);
   if (cached) return cached;
 
@@ -209,7 +299,6 @@ async function cacheFirstWithNetwork(req) {
     }
     return res;
   } catch {
-    // Offline én niet gecached: stuur de index.html terug (SPA fallback)
     const fallback = await caches.match("/index.html");
     return fallback || new Response("Offline — app niet gecached", {
       status: 503,
@@ -219,10 +308,39 @@ async function cacheFirstWithNetwork(req) {
 }
 
 
-// ── Strategie 2: Network First (API GET) ────────────────────────────────────
-async function networkFirstWithCache(req) {
+// ── Strategie 1b: Network First zonder caching (API routes) ─────────────────
+// Alle /api/ routes komen hier — nooit gecached, altijd vers van server
+async function networkFirstNoCache(req) {
   try {
-    const res = await fetch(req.clone(), { signal: AbortSignal.timeout(8000) });
+    const res = await fetch(req.clone(), { signal: AbortSignal.timeout(10000) });
+    if (res.ok && /^\/api\/notes$/.test(new URL(req.url).pathname)) {
+      // Sla /api/notes op in IDB (voor offline fallback)
+      const data = await res.clone().json().catch(() => null);
+      if (Array.isArray(data)) {
+        await idbClear(NOTES_STORE);
+        await Promise.allSettled(data.map(n => idbPut(NOTES_STORE, n)));
+      }
+    }
+    return res;
+  } catch {
+    // Offline — probeer IDB voor notities
+    if (/^\/api\/notes$/.test(new URL(req.url).pathname)) {
+      const notes = await idbGetAll(NOTES_STORE);
+      return new Response(JSON.stringify(notes), {
+        status: 200,
+        headers: { "Content-Type": "application/json", "X-Served-By": "zk-sw-idb" },
+      });
+    }
+    return new Response(JSON.stringify({ error: "Offline", offline: true }), {
+      status: 503, headers: { "Content-Type": "application/json" },
+    });
+  }
+}
+
+// ── Strategie 2: Network First (API GET) ────────────────────────────────────
+async function networkFirstApiCache(req) {
+  try {
+    const res = await fetch(req.clone(), { signal: AbortSignal.timeout(4000) }); // 4s voor lezen
     if (res.ok) {
       // Update API cache én update de IndexedDB notities-mirror
       const cache = await caches.open(API_CACHE);
@@ -234,14 +352,12 @@ async function networkFirstWithCache(req) {
         if (Array.isArray(data)) {
           await idbClear(NOTES_STORE);
           await Promise.allSettled(data.map(n => idbPut(NOTES_STORE, n)));
-          console.log(`[ZK-SW] IDB: ${data.length} notities gesynchroniseerd`);
         }
       }
     }
     return res;
   } catch (err) {
     // Offline: probeer IDB of API cache
-    console.log("[ZK-SW] Offline, gebruik cache voor:", req.url);
 
     if (/\/api\/notes$/.test(req.url)) {
       const notes = await idbGetAll(NOTES_STORE);
@@ -269,7 +385,7 @@ async function handleMutation(req) {
 
   try {
     // Probeer de server te bereiken
-    const res = await fetch(req.clone(), { signal: AbortSignal.timeout(8000) });
+    const res = await fetch(req.clone(), { signal: AbortSignal.timeout(8000) }); // 8s voor notities-mutaties
 
     if (res.ok && req.method !== "DELETE") {
       // Update IDB-mirror na succesvolle server-write
@@ -286,7 +402,6 @@ async function handleMutation(req) {
     return res;
   } catch {
     // Offline: zet mutatie in wachtrij
-    console.log("[ZK-SW] Offline mutatie in queue:", req.method, req.url);
     const url = new URL(req.url);
 
     await idbPut(QUEUE_STORE, {
@@ -317,7 +432,6 @@ async function processSyncQueue() {
   const queue = await idbGetAll(QUEUE_STORE);
   if (!queue.length) return { processed: 0, failed: 0 };
 
-  console.log(`[ZK-SW] Sync queue: ${queue.length} items verwerken`);
   let processed = 0, failed = 0;
 
   for (const item of queue.sort((a, b) => a.createdAt - b.createdAt)) {
@@ -331,7 +445,6 @@ async function processSyncQueue() {
       if (res.ok) {
         await idbDelete(QUEUE_STORE, item.id);
         processed++;
-        console.log(`[ZK-SW] Queue item ${item.id} gesynchroniseerd`);
       } else {
         // Server-fout: bewaar item maar rapporteer
         console.warn(`[ZK-SW] Queue item ${item.id} server error:`, res.status);
@@ -339,7 +452,6 @@ async function processSyncQueue() {
       }
     } catch {
       // Nog steeds offline: stop en probeer later
-      console.log("[ZK-SW] Sync gestopt: nog offline");
       break;
     }
   }
