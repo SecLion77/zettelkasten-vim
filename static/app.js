@@ -443,20 +443,26 @@ const api = {
   async getImgAnnotations()        { const r=await fetch(API+"/img-annotations"); return r.json(); },
   async saveImgAnnotations(annots) { const r=await fetch(API+"/img-annotations",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(annots)}); return r.json(); },
   async importUrl(payload, signal) {
-    // Sanitize payload om circular refs te voorkomen
-    const safe = {
-      url:   String(payload.url   || ""),
-      model: String(payload.model || ""),
-      force: Boolean(payload.force),
-    };
-    const opts = {
+    const safe = { url: String(payload.url||""), model: String(payload.model||""), force: Boolean(payload.force) };
+    // Gebruik meegegeven signal OF maak een eigen 90s timeout
+    const ctrl    = signal ? null : new AbortController();
+    const timer   = ctrl ? setTimeout(() => ctrl.abort(), 180_000) : null;
+    const opts    = {
       method: "POST",
       headers: {"Content-Type": "application/json"},
       body: JSON.stringify(safe),
+      signal: signal || ctrl?.signal,
     };
-    if (signal) opts.signal = signal;
-    const r = await fetch(API+"/import-url", opts);
-    return r.json();
+    try {
+      const r = await fetch(API+"/import-url", opts);
+      return r.json();
+    } catch(e) {
+      // Zet AbortError om naar leesbare boodschap
+      if (e.name === "AbortError") throw new Error("Timeout na 3 minuten. Probeer opnieuw — de server was nog bezig.");
+      throw e;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   },
 };
 

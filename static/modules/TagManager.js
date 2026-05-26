@@ -33,7 +33,7 @@ async function _aiTagSuggest(content, currentTags, allTags, llmModel) {
   if (!content?.trim() || !llmModel) return [];
   try {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 25000);
+    const timer = setTimeout(() => controller.abort(), 45000);
     let r;
     try {
       r = await fetch("/api/llm/suggest-tags", {
@@ -58,7 +58,7 @@ async function _aiTagSuggest(content, currentTags, allTags, llmModel) {
       .slice(0, 8);
   } catch (e) {
     if (e.name === "AbortError")
-      throw new Error("Time-out (>25s) — probeer een sneller model of lokale Ollama");
+      throw new Error("Tag-suggestie duurde te lang — tags worden overgeslagen");
     console.warn("[TagManager] AI suggest:", e);
     throw e;
   }

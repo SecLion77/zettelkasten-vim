@@ -27,6 +27,10 @@ def _ensure_pdf_packages():
     except ImportError: needed.append("python-pptx")
     try: import reportlab
     except ImportError: needed.append("reportlab")
+    try: import requests
+    except ImportError: needed.append("requests")
+    try: import bs4
+    except ImportError: needed.append("beautifulsoup4")
     if needed:
         print(f"[setup] Installeren: {', '.join(needed)} ...", flush=True)
         import subprocess
@@ -1837,6 +1841,7 @@ class ZKHandler(BaseHTTPRequestHandler):
             "/api/disk-usage":      lambda: self._get_disk_usage(),
             "/api/api-keys":        lambda: self._get_api_keys(),
             "/api/custom-models":   lambda: self._get_custom_models(),
+            "/api/fetch-url":         lambda: self._fetch_url_endpoint(),
             "/api/health":           lambda: self._send(200, {"ok": True, "status": "running"}),
             "/api/pdf-index/status": lambda: self._pdf_index_status_get(),
         }
@@ -2125,6 +2130,9 @@ class ZKHandler(BaseHTTPRequestHandler):
             "/api/import-url":           lambda: self._import_url(),
             "/api/import-docx":          lambda: self._import_docx(),
             "/api/import-pptx":          lambda: self._import_pptx(),
+            "/api/import-ai":            lambda: self._import_ai(),
+            "/api/process-html":         lambda: self._process_html(),
+            "/api/import-jina":          lambda: self._import_jina(),
             "/api/custom-models":        lambda: self._set_custom_models(),
         }
 
@@ -2256,7 +2264,7 @@ class ZKHandler(BaseHTTPRequestHandler):
                     "Accept": "text/html,application/xhtml+xml",
                     "Accept-Language": "nl-NL,nl;q=0.9",
                 })
-                with urllib.request.urlopen(req, timeout=10) as resp:
+                with urllib.request.urlopen(req, timeout=25) as resp:
                     html = resp.read(300_000).decode("utf-8", errors="replace")
 
                 # Cover afbeelding ophalen
@@ -2523,19 +2531,9 @@ class ZKHandler(BaseHTTPRequestHandler):
         if not content or not model:
             return self._send(400, {"error": "content en model zijn vereist"})
 
-        # Bouw een frequentie-overzicht van bestaande tags (meest gebruikt = meest relevant)
-        # Haal ook notitie-titels op voor contextuele overlap
-        try:
-            notes = self.vault.load_notes()
-            tag_freq = {}
-            for n in notes:
-                for t in (n.get("tags") or []):
-                    tag_freq[t] = tag_freq.get(t, 0) + 1
-            # Sorteer op frequentie — meest gebruikte tags bovenaan
-            sorted_tags = sorted(tag_freq.items(), key=lambda x: -x[1])
-            top_tags = [t for t, _ in sorted_tags[:80]]
-        except Exception:
-            top_tags = all_tags[:60]
+        # Gebruik de meegestuurde all_tags — geen vault-load nodig (was traag)
+        # Frontend stuurt al_tags gesorteerd mee vanuit de al-geladen notities
+        top_tags = [t for t in (all_tags or []) if t][:80]
 
         # Bepaal welke bestaande tags ook echt in de tekst voorkomen (directe match)
         text_lower = content.lower()
@@ -2575,7 +2573,7 @@ class ZKHandler(BaseHTTPRequestHandler):
                     headers={"Content-Type": "application/json",
                              "x-api-key": api_key,
                              "anthropic-version": "2023-06-01"}, method="POST")
-                with urllib.request.urlopen(req, timeout=30) as r:
+                with urllib.request.urlopen(req, timeout=60) as r:
                     d = json.loads(r.read())
                 text = d.get("content", [{}])[0].get("text", "")
 
@@ -2590,7 +2588,7 @@ class ZKHandler(BaseHTTPRequestHandler):
                 url2 = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
                 req = urllib.request.Request(url2, data=payload,
                     headers={"Content-Type": "application/json"}, method="POST")
-                with urllib.request.urlopen(req, timeout=30) as r:
+                with urllib.request.urlopen(req, timeout=60) as r:
                     d = json.loads(r.read())
                 text = d.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
 
@@ -2606,7 +2604,7 @@ class ZKHandler(BaseHTTPRequestHandler):
                     "https://api.openai.com/v1/chat/completions", data=payload,
                     headers={"Content-Type": "application/json",
                              "Authorization": "Bearer " + api_key}, method="POST")
-                with urllib.request.urlopen(req, timeout=30) as r:
+                with urllib.request.urlopen(req, timeout=60) as r:
                     d = json.loads(r.read())
                 text = d.get("choices", [{}])[0].get("message", {}).get("content", "")
 
@@ -2626,7 +2624,7 @@ class ZKHandler(BaseHTTPRequestHandler):
                              "Authorization": "Bearer " + api_key,
                              "HTTP-Referer": "http://localhost:8899",
                              "X-Title": "Zettelkasten"}, method="POST")
-                with urllib.request.urlopen(req, timeout=30) as r:
+                with urllib.request.urlopen(req, timeout=60) as r:
                     d = json.loads(r.read())
                 text = d.get("choices", [{}])[0].get("message", {}).get("content", "")
 
@@ -2642,7 +2640,7 @@ class ZKHandler(BaseHTTPRequestHandler):
                     "https://api.mistral.ai/v1/chat/completions", data=payload,
                     headers={"Content-Type": "application/json",
                              "Authorization": "Bearer " + api_key}, method="POST")
-                with urllib.request.urlopen(req, timeout=30) as r:
+                with urllib.request.urlopen(req, timeout=60) as r:
                     d = json.loads(r.read())
                 text = d.get("choices", [{}])[0].get("message", {}).get("content", "")
 
@@ -4981,19 +4979,10 @@ class ZKHandler(BaseHTTPRequestHandler):
                     return u.rstrip("/").lower()
 
             target = _norm_url(url)
+            # Snel: alleen sourceUrl checken (niet de hele content)
+            # Content-check was te traag bij >100 notities
             for note in self.vault.load_notes():
-                # Check 1: sourceUrl frontmatter
                 if note.get("sourceUrl") and _norm_url(note["sourceUrl"]) == target:
-                    return self._send(200, {
-                        "ok": False, "duplicate": True,
-                        "duplicate_id": note["id"],
-                        "duplicate_title": note.get("title",""),
-                        "error": f"Al geïmporteerd als: {note.get('title','onbekend')}"
-                    })
-                # Check 2: bron-link in content
-                content = note.get("content","")
-                urls_in_content = _re_dup.findall(r'\]\((https?://[^)]+)\)', content)
-                if any(_norm_url(u) == target for u in urls_in_content):
                     return self._send(200, {
                         "ok": False, "duplicate": True,
                         "duplicate_id": note["id"],
@@ -5002,6 +4991,609 @@ class ZKHandler(BaseHTTPRequestHandler):
                     })
 
         result = self._do_import_url(url, model)
+        return self._send(200, result)
+
+    def _fetch_url_content(self, url: str) -> dict:
+        """Haal URL op met requests (retries, betere headers) en extraheer artikel.
+        Geeft {"ok", "html", "title", "text", "markdown", "images", "final_url"} terug.
+        Snel: typisch 2-8 seconden, geen AI.
+        """
+        # Voeg schema toe als het ontbreekt
+        if not url.startswith(("http://", "https://")):
+            url = "https://" + url
+        import requests as _req
+        from bs4 import BeautifulSoup
+
+        HEADERS = {
+            "User-Agent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            ),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Accept-Language": "nl-NL,nl;q=0.9,en;q=0.8",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Cache-Control": "no-cache",
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "none",
+            "Sec-Fetch-User": "?1",
+            "Upgrade-Insecure-Requests": "1",
+            "Referer": "https://www.google.com/",
+        }
+
+        # ── Substack detectie: JSON-API geeft schone content zonder JS ─────────
+        # Detecteer Substack via domein OF URL-parameters (publication_id/post_id)
+        from urllib.parse import urlparse as _up2, parse_qs as _pqs2
+        _purl = _up2(url)
+        _qp   = _pqs2(_purl.query)
+        _is_substack = (
+            "substack.com" in url or
+            _qp.get("publication_id") or _qp.get("post_id") or  # email-links
+            bool(__import__("re").search(r"/p/[a-z0-9][a-z0-9-]{3,}", _purl.path))
+        )
+        if _is_substack:
+            # Schone URL (zonder tracking-params)
+            _clean = f"{_purl.scheme}://{_purl.netloc}{_purl.path}"
+            _json_url = _clean.rstrip("/") + "?format=json"
+            try:
+                _jreq = _req.get(_json_url, headers={
+                    **HEADERS,
+                    "Accept": "application/json, */*",
+                    "Referer": _clean,
+                    "X-Requested-With": "XMLHttpRequest",
+                }, timeout=(5, 10), allow_redirects=True)
+                if _jreq.status_code == 200:
+                    _jdata = _jreq.json()
+                    _post  = _jdata if "body_html" in _jdata else _jdata.get("post", {})
+                    _bhtml = _post.get("body_html", "") or _post.get("body", "")
+                    _title = _post.get("title", "") or _post.get("canonical_url", "")
+                    if _bhtml and len(_bhtml) > 200:
+                        from html.parser import HTMLParser as _HP
+                        class _P(_HP):
+                            def __init__(self):
+                                super().__init__()
+                                self.chunks=[]; self._skip=0
+                            def handle_starttag(self, t, a):
+                                if t in ("script","style"): self._skip+=1
+                            def handle_endtag(self, t):
+                                if t in ("script","style"): self._skip=max(0,self._skip-1)
+                            def handle_data(self, d):
+                                if not self._skip and d.strip(): self.chunks.append(d.strip())
+                        _p = _P(); _p.feed(_bhtml)
+                        _text = "\n\n".join(_p.chunks)
+                        # Kale image URL uit og:image
+                        _imgs = []
+                        _cover = _post.get("cover_image") or _post.get("og_image")
+                        if _cover: _imgs.append(_cover)
+                        print(f"[fetch-url] Substack JSON: {len(_text)} tekens", flush=True)
+                        return {"ok":True,"title":_title,"text":_text,"markdown":_text,
+                                "images":_imgs,"final_url":_clean}
+            except Exception as _je:
+                print(f"[fetch-url] Substack JSON poging mislukt: {_je}", flush=True)
+                # Val door naar reguliere HTML-fetch
+
+        # ── Substack detectie: JSON-API geeft schone content zonder JS ─────────
+        from urllib.parse import urlparse as _up2, parse_qs as _pqs2
+        _purl = _up2(url)
+        _qp   = _pqs2(_purl.query)
+        _is_substack = (
+            "substack.com" in url or
+            bool(_qp.get("publication_id")) or bool(_qp.get("post_id")) or
+            bool(__import__("re").search(r"/p/[a-z0-9][a-z0-9-]{3,}", _purl.path))
+        )
+        if _is_substack:
+            _clean    = f"{_purl.scheme}://{_purl.netloc}{_purl.path}"
+            _json_url = _clean.rstrip("/") + "?format=json"
+            try:
+                _jresp = _req.get(_json_url, headers={
+                    **HEADERS, "Accept": "application/json, */*",
+                    "Referer": _clean, "X-Requested-With": "XMLHttpRequest",
+                }, timeout=(5, 10), allow_redirects=True)
+                if _jresp.status_code == 200:
+                    _jdata = _jresp.json()
+                    _post  = _jdata if "body_html" in _jdata else _jdata.get("post", {})
+                    _bhtml = _post.get("body_html", "") or _post.get("body", "")
+                    _stitle = _post.get("title", "")
+                    if _bhtml and len(_bhtml) > 200:
+                        import re as _re_ss
+                        _text = _re_ss.sub(r"<[^>]+>", " ", _bhtml)
+                        _text = _re_ss.sub(r"  +", " ", _text).strip()
+                        _cover = _post.get("cover_image") or _post.get("og_image")
+                        _imgs  = [_cover] if _cover else []
+                        # Auteur uit Substack JSON
+                        _auth = ""
+                        for _bl in (_post.get("bylines") or _post.get("authors") or []):
+                            if isinstance(_bl, dict) and _bl.get("name"):
+                                _auth = _bl["name"]; break
+                        if not _auth: _auth = _post.get("author_name","")
+                        print(f"[fetch-url] Substack JSON OK: {len(_text)} tekens", flush=True)
+                        return {"ok": True, "title": _stitle, "author": _auth,
+                                "text": _text, "markdown": _text,
+                                "images": _imgs, "final_url": _clean}
+            except Exception as _je:
+                print(f"[fetch-url] Substack JSON poging: {_je}", flush=True)
+
+        session = _req.Session()
+        # Retry: 3 pogingen bij verbindingsfouten
+        adapter = _req.adapters.HTTPAdapter(
+            max_retries=_req.adapters.Retry(
+                total=3, backoff_factor=0.5,
+                status_forcelist=[429, 500, 502, 503, 504],
+                allowed_methods=["GET"]
+            )
+        )
+        session.mount("http://",  adapter)
+        session.mount("https://", adapter)
+
+        # ── LinkedIn: minimale headers (geen Referer/Sec-Fetch — triggert bot-detectie) ─
+        is_linkedin = "linkedin.com" in url
+        req_headers = HEADERS.copy()
+        if is_linkedin:
+            req_headers = {
+                "User-Agent": HEADERS["User-Agent"],
+                "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "nl,en;q=0.9",
+                "Accept-Encoding": "gzip, deflate, br",
+                "Cache-Control": "no-cache",
+            }
+
+        html      = ""
+        final_url = url
+        try:
+            resp = session.get(
+                url, headers=req_headers,
+                timeout=(8, 20), allow_redirects=True, verify=True, stream=False
+            )
+            # Niet hard falen bij 4xx — probeer inhoud te extraheren
+            # (LinkedIn geeft bijv. 999 of redirect naar login met 200)
+            if resp.status_code >= 500:
+                return {"ok": False, "error": f"Server fout: {resp.status_code}"}
+            html      = resp.text
+            final_url = resp.url
+        except _req.exceptions.SSLError:
+            try:
+                resp = session.get(url, headers=req_headers, timeout=(8,20),
+                                   allow_redirects=True, verify=False)
+                html      = resp.text
+                final_url = resp.url
+            except Exception as e:
+                return {"ok": False, "error": f"SSL fout: {e}"}
+        except _req.exceptions.Timeout:
+            return {"ok": False, "error": "Website reageerde niet op tijd (20s)"}
+        except _req.exceptions.ConnectionError as e:
+            return {"ok": False, "error": f"Verbindingsfout: {e}"}
+        except Exception as e:
+            return {"ok": False, "error": f"Ophalen mislukt: {e}"}
+
+        # ── BeautifulSoup: verwijder rommel, extraheer artikel ───────────────
+        soup = BeautifulSoup(html, "html.parser")
+
+        # Verwijder ruis
+        for tag in soup(["script","style","nav","footer","header","aside",
+                         "noscript","form","iframe","svg","button","figure"]):
+            tag.decompose()
+
+        # Titel
+        title = ""
+        og = soup.find("meta", property="og:title")
+        if og: title = og.get("content","").strip()
+        if not title and soup.title: title = soup.title.get_text().strip()
+
+        # Auteur — meerdere strategieën (volgorde = betrouwbaarheid)
+        author = ""
+        text   = ""   # wordt later gevuld; hier al initialiseren voor stap 5
+        import json as _json2, re as _re_auth
+
+        # 1. JSON-LD structured data (meest betrouwbaar — LinkedIn, Medium, nieuws)
+        if not author:
+            for script in soup.find_all("script", type="application/ld+json"):
+                try:
+                    ld = _json2.loads(script.string or "")
+                    # Kan een list of dict zijn
+                    items = ld if isinstance(ld, list) else [ld]
+                    for item in items:
+                        a = item.get("author") or item.get("creator")
+                        if isinstance(a, dict):
+                            v = a.get("name","")
+                        elif isinstance(a, list):
+                            v = a[0].get("name","") if a and isinstance(a[0],dict) else str(a[0]) if a else ""
+                        elif isinstance(a, str):
+                            v = a
+                        else:
+                            v = ""
+                        if v and 2 < len(v) < 100:
+                            author = v.strip(); break
+                    if author: break
+                except Exception:
+                    continue
+
+        # 2. Open Graph en standaard meta-tags
+        if not author:
+            for attr,val in [("name","author"),("property","article:author"),
+                             ("name","byl"),("name","sailthru.author")]:
+                el = soup.find("meta", attrs={attr:val})
+                if el:
+                    v = el.get("content","")
+                    if v and 2 < len(v) < 100:
+                        author = v.strip(); break
+
+        # 3. Microdata itemprop="author"
+        if not author:
+            el = soup.find(attrs={"itemprop":"author"})
+            if el:
+                name_el = el.find(attrs={"itemprop":"name"}) or el
+                v = name_el.get("content","") or name_el.get_text(strip=True)
+                if v and 2 < len(v) < 100: author = v.strip()
+
+        # 4. Site-specifieke selectors
+        if not author:
+            is_linkedin = "linkedin.com" in url
+            is_medium   = "medium.com" in url
+            candidates = []
+            if is_linkedin:
+                candidates = [
+                    "span.feed-shared-actor__name",
+                    ".update-components-actor__name",
+                    "[data-control-name=actor]",
+                ]
+            elif is_medium:
+                candidates = ['a[rel="author"]', ".pw-author-name"]
+            else:
+                candidates = [
+                    '[rel="author"]', '[class*="author-name"]',
+                    '[class*="byline"]', '[class*="author__name"]',
+                    '[class*="post-author"]',
+                ]
+            for sel in candidates:
+                try:
+                    el = soup.select_one(sel)
+                    if el:
+                        v = el.get_text(strip=True)
+                        if v and 2 < len(v) < 100: author = v; break
+                except Exception: continue
+
+        # 5. "By …" patroon in de eerste 2000 tekens
+        if not author:
+            m = _re_auth.search(r'(?:^|\n)(?:By|Door|Auteur|Author)[:\s]+([A-Z][a-zA-Z \-]{2,40})',
+                               text[:2000], _re_auth.MULTILINE)
+            if m: author = m.group(1).strip()
+
+        if not title:
+            h1 = soup.find("h1")
+            if h1: title = h1.get_text().strip()
+
+        # Zoek hoofd-artikel element
+        article = (soup.find("article") or soup.find("main") or
+                   soup.find(class_=lambda c: c and any(
+                       x in str(c).lower() for x in ["article","content","post","story"]
+                   )) or soup.body or soup)
+
+        # Bouw markdown op uit de structuur
+        md_lines = []
+        for el in article.descendants:
+            if not hasattr(el, "name") or el.name is None:
+                continue
+            txt = el.get_text(" ", strip=True)
+            if not txt or len(txt) < 2:
+                continue
+            if el.name in ("h1","h2","h3","h4"):
+                level = int(el.name[1])
+                md_lines.append(f"{'#'*level} {txt}")
+            elif el.name == "p" and len(txt) > 20:
+                md_lines.append(txt)
+            elif el.name == "li":
+                md_lines.append(f"- {txt}")
+            elif el.name == "blockquote":
+                md_lines.append(f"> {txt}")
+
+        # Dedupliceer aangrenzende regels
+        deduped = []
+        for line in md_lines:
+            if not deduped or line != deduped[-1]:
+                deduped.append(line)
+
+        text = "\n\n".join(deduped[:300])   # max 300 paragrafen
+
+        # Afbeeldingen
+        images = []
+        seen_imgs = set()
+        for img in soup.find_all("img", src=True):
+            src = img["src"]
+            if src.startswith("data:") or src in seen_imgs: continue
+            if not src.startswith("http"):
+                from urllib.parse import urljoin
+                src = urljoin(str(final_url), src)
+            seen_imgs.add(src)
+            images.append(src)
+            if len(images) >= 10: break
+
+        # og:image als eerste
+        og_img = soup.find("meta", property="og:image")
+        if og_img and og_img.get("content"):
+            og_src = og_img["content"]
+            if og_src not in seen_imgs:
+                images.insert(0, og_src)
+
+        return {
+            "ok": True,
+            "title": title,
+            "text": text,
+            "markdown": text,
+            "images": images[:8],
+            "final_url": str(final_url),
+            "html_len": len(html),
+        }
+
+    def _import_jina(self):
+        """POST /api/import-jina — haal artikel op via Jina AI Reader (r.jina.ai).
+        Jina AI is een gratis publieke API die elke URL omzet naar schone Markdown.
+        Body: {url, model}
+        """
+        body  = self._body()
+        url   = body.get("url", "").strip()
+        model = body.get("model", "llama3.2-vision")
+        if not url:
+            return self._send(400, {"ok": False, "error": "url vereist"})
+        if not url.startswith(("http://", "https://")):
+            url = "https://" + url
+
+        jina_url = f"https://r.jina.ai/{url}"
+        print(f"[jina] Ophalen via r.jina.ai: {url[:80]}", flush=True)
+        try:
+            import requests as _req
+            resp = _req.get(jina_url, headers={
+                "Accept": "text/plain, text/markdown",
+                "User-Agent": "Mozilla/5.0 (compatible; Zettelkasten/1.0)",
+                "X-Return-Format": "markdown",
+                "X-No-Cache": "true",
+            }, timeout=(10, 30), allow_redirects=True)
+            resp.raise_for_status()
+            text = resp.text.strip()
+            if len(text) < 100:
+                return self._send(200, {"ok": False,
+                    "error": "Jina AI kon geen inhoud ophalen voor deze URL."})
+
+            # Extraheer titel uit eerste markdown heading
+            import re as _re
+            title_match = _re.search(r'^#+ (.+)$', text, _re.MULTILINE)
+            title = title_match.group(1).strip() if title_match else url
+
+            # Extraheer afbeeldingen uit de Jina markdown
+            import re as _re_img
+            # Markdown patroon: ![alt](url)
+            img_urls = _re_img.findall(r'!\[[^\]]*\]\((https?://[^)\s]+)\)', text)
+            # Filter kleine iconen en trackers
+            imgs = [u for u in img_urls
+                    if not any(x in u for x in
+                       ['icon','logo','avatar','pixel','1x1','tracking','badge'])]
+            imgs = list(dict.fromkeys(imgs))[:8]  # dedupliceer
+            # Download en sla afbeeldingen op in vault
+            saved_imgs = self._download_images(imgs, url) if imgs else []
+            print(f"[jina] OK: {len(text)} tekens, {len(saved_imgs)} afb., titel: {title[:50]}", flush=True)
+            return self._send(200, {
+                "ok": True, "title": title,
+                "text": text, "markdown": text,
+                "images": saved_imgs, "source": "jina",
+            })
+        except Exception as e:
+            return self._send(200, {"ok": False, "error": f"Jina AI: {e}"})
+
+    def _process_html(self):
+        """POST /api/process-html — verwerk HTML die de browser al heeft opgehaald.
+        Hierdoor kan de browser als proxy werken voor sites die server-requests blokkeren.
+        Body: {html: string, url: string}
+        """
+        body = self._body()
+        html = body.get("html", "")
+        url  = body.get("url", "")
+        if not html or len(html) < 100:
+            return self._send(400, {"ok": False, "error": "Geen HTML meegestuurd"})
+
+        try:
+            from bs4 import BeautifulSoup
+            import re as _re
+            soup = BeautifulSoup(html, "html.parser")
+
+            # Verwijder rommel
+            for tag in soup(["script","style","nav","footer","header","aside",
+                             "noscript","form","iframe","svg","button"]):
+                tag.decompose()
+
+            # Titel
+            title = ""
+            og = soup.find("meta", property="og:title")
+            if og: title = og.get("content","").strip()
+            if not title and soup.title: title = soup.title.get_text().strip()
+
+            # Artikel
+            article = (soup.find("article") or soup.find("main") or
+                      soup.find(class_=lambda c: c and any(
+                          x in str(c).lower() for x in ["article","content","post","body"]
+                      )) or soup.body or soup)
+
+            md = []
+            for el in article.descendants:
+                if not hasattr(el,"name") or not el.name: continue
+                txt = el.get_text(" ", strip=True)
+                if not txt or len(txt) < 3: continue
+                if el.name in ("h1","h2","h3","h4"):
+                    md.append(f"{'#'*int(el.name[1])} {txt}")
+                elif el.name == "p" and len(txt) > 15:
+                    md.append(txt)
+                elif el.name == "li":
+                    md.append(f"- {txt}")
+
+            deduped = []
+            for line in md:
+                if not deduped or line != deduped[-1]: deduped.append(line)
+
+            text = "\n\n".join(deduped[:300])
+            return self._send(200, {"ok": True, "title": title, "text": text,
+                                    "markdown": text, "source": "browser-fetch"})
+        except Exception as e:
+            return self._send(200, {"ok": False, "error": str(e)})
+
+    def _import_ai(self):
+        """POST /api/import-ai — AI samenvatting op vooraf opgehaalde tekst.
+        Body: {text, url, title, model}
+        Geeft {ok, summary, noteType, suggestedTags} terug.
+        """
+        body  = self._body()
+        text  = body.get("text", "").strip()
+        url   = body.get("url", "")
+        title = body.get("title", "")
+        model = body.get("model", "llama3.2-vision")
+        if not text:
+            return self._send(400, {"ok": False, "error": "Geen tekst meegestuurd"})
+
+        # Bouw context op voor AI
+        context = f"Titel: {title}\n\n{text[:4000]}" if title else text[:4000]
+
+        # Gebruik dezelfde LLM infra als de reguliere import
+        try:
+            summary   = self._call_llm_for_summary(context, model)
+            note_type = self._call_llm_for_type(context, model)
+            author    = self._call_llm_for_author(context, model)
+            return self._send(200, {"ok": True, "summary": summary,
+                                    "noteType": note_type, "author": author})
+        except Exception as e:
+            return self._send(200, {"ok": False, "error": str(e)})
+
+    def _download_images(self, image_urls: list, base_url: str = "") -> list:
+        """Download en sla afbeeldingen op in de vault. Geeft [{name, url}] terug.
+        Werkt voor zowel gewone import als Jina-import.
+        """
+        if not image_urls:
+            return []
+        import urllib.request as _ur, urllib.parse as _up
+        from urllib.parse import urlparse as _urlparse
+
+        IMAGE_MIME_TYPES = {"image/jpeg","image/png","image/gif","image/webp","image/svg+xml"}
+        saved = []
+        base_domain = _urlparse(base_url).netloc.replace("www.","").replace(".","_") if base_url else "import"
+
+        for img_url in image_urls[:8]:
+            try:
+                if not img_url.startswith("http"):
+                    if base_url:
+                        img_url = _up.urljoin(base_url, img_url)
+                    else:
+                        continue
+
+                ireq = _ur.Request(img_url, headers={
+                    "User-Agent": "Mozilla/5.0",
+                    "Accept": "image/*,*/*;q=0.8",
+                })
+                with _ur.urlopen(ireq, timeout=8) as ir:
+                    img_bytes = ir.read(5_000_000)  # max 5MB
+                    img_ct = ir.headers.get("Content-Type","").split(";")[0].strip()
+
+                if img_ct not in IMAGE_MIME_TYPES and not img_ct.startswith("image/"):
+                    continue
+                if len(img_bytes) < 800:
+                    continue
+
+                ext_map = {"image/jpeg":".jpg","image/png":".png",
+                           "image/gif":".gif","image/webp":".webp","image/svg+xml":".svg"}
+                ext = ext_map.get(img_ct, ".jpg")
+                raw = img_url.split("?")[0].rsplit("/",1)[-1]
+                if "." not in raw[-5:]:
+                    raw = raw + ext
+                fname = base_domain + "_" + raw[:60]
+
+                result = self.vault.save_image(fname, img_bytes)
+                saved.append({"name": result["name"], "url": result["url"]})
+            except Exception:
+                continue
+        return saved
+
+    def _call_llm_for_summary(self, text: str, model: str) -> str:
+        """Roep LLM aan voor samenvatting — gebruikt _call_llm_simple."""
+        prompt = (
+            f"Schrijf een heldere samenvatting van 3-6 zinnen van de volgende tekst. "
+            f"Behoud de kernpunten. Schrijf in dezelfde taal als de tekst.\n\n{text[:3500]}"
+        )
+        return self._call_llm_simple(model, prompt, max_tokens=800)
+
+    def _call_llm_for_author(self, text: str, model: str) -> str:
+        """Extraheer auteur/bron uit de tekst via LLM. Geeft "" terug als niet gevonden."""
+        prompt = (
+            "Zoek de naam van de auteur of schrijver in de onderstaande tekst. "
+            "Geef ALLEEN de naam terug (voornaam + achternaam), of een lege string als niet bekend. "
+            "Geen uitleg, geen aanhalingstekens, alleen de naam of niets.\n\n"
+            f"{text[:1500]}"
+        )
+        try:
+            raw = self._call_llm_simple(model, prompt, max_tokens=30).strip()
+            # Filter ongeldige antwoorden
+            if any(x in raw.lower() for x in ["niet", "geen", "unknown", "n/a", "onbekend"]):
+                return ""
+            if len(raw) > 80 or len(raw) < 2:
+                return ""
+            return raw
+        except Exception:
+            return ""
+
+    def _call_llm_for_type(self, text: str, model: str) -> str:
+        """Roep LLM aan voor notitietype bepaling — gebruikt _call_llm_simple."""
+        prompt = (
+            "Bepaal het beste Zettelkasten-notitietype voor deze tekst. "
+            "Kies ALLEEN één woord: fleeting, literature, permanent, of index.\n\n"
+            f"{text[:800]}"
+        )
+        try:
+            raw = self._call_llm_simple(model, prompt, max_tokens=20).lower()
+            for t in ["fleeting","literature","permanent","index"]:
+                if t in raw: return t
+        except Exception:
+            pass
+        return "literature"
+
+    def _fetch_url_endpoint(self):
+        """GET /api/fetch-url?url=... — snel ophalen zonder AI.
+        Bevat ook een snelle duplicate-check op sourceUrl.
+        """
+        from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+        qs = parse_qs(urlparse(self.path).query)
+        url  = (qs.get("url")   or [""])[0].strip()
+        force = (qs.get("force") or [""])[0] == "true"
+        if not url:
+            return self._send(400, {"ok": False, "error": "url parameter vereist"})
+
+        # Schema toevoegen als het ontbreekt (bijv. linkedin.com → https://linkedin.com)
+        if not url.startswith(("http://", "https://")):
+            url = "https://" + url
+
+        # Snelle duplicate check (alleen sourceUrl)
+        if not force:
+            import re as _re_d
+            def _norm(u):
+                try:
+                    from urllib.parse import parse_qs as _pqs
+                    p = urlparse(u)
+                    skip = {"utm_source","utm_medium","utm_campaign","utm_term",
+                            "utm_content","fbclid","gclid","ref","source","si"}
+                    q2 = {k:v for k,v in _pqs(p.query).items() if k not in skip}
+                    return urlunparse(p._replace(query=urlencode(q2,doseq=True),
+                                     path=p.path.rstrip("/"))).lower()
+                except: return u.rstrip("/").lower()
+            target = _norm(url)
+            for note in self.vault.load_notes():
+                if note.get("sourceUrl") and _norm(note["sourceUrl"]) == target:
+                    return self._send(200, {"ok":False,"duplicate":True,
+                        "duplicate_id":note["id"],
+                        "duplicate_title":note.get("title",""),
+                        "error":"Al geïmporteerd als: "+note.get("title","onbekend")})
+
+        result = self._fetch_url_content(url)
+        # Download afbeeldingen en sla op in vault voor de image-picker
+        if result.get("ok") and result.get("images"):
+            saved_imgs = self._download_images(
+                result["images"], result.get("final_url", url)
+            )
+            if saved_imgs:
+                result["images"] = saved_imgs
         return self._send(200, result)
 
     def _do_import_url(self, url, model="llama3.2-vision"):
@@ -5013,14 +5605,12 @@ class ZKHandler(BaseHTTPRequestHandler):
         parsed_base = urlparse(url)
         base_url    = f"{parsed_base.scheme}://{parsed_base.netloc}"
 
-        # ── Substack JSON API: geeft schone artikeltekst zonder JS-overhead ─────
+        # ── Substack JSON API: alleen voor echte Substack domeinen ──────────────
         substack_text = ""
-        is_substack   = any(x in url for x in ["substack.com", ".substack.com"])
-        # Detecteer ook custom domeinen die Substack gebruiken
-        # door te kijken of de URL het /p/ patroon heeft (Substack posts)
-        is_substack_post = bool(__import__("re").search(r"/p/[a-z0-9-]+", url))
+        # Alleen echte Substack domeinen — NIET de brede /p/ regex die te veel matcht
+        is_substack = ("substack.com" in url)
 
-        if is_substack or is_substack_post:
+        if is_substack:
             json_url = url.split("?")[0].rstrip("/") + "?format=json"
             try:
                 jreq = urllib.request.Request(json_url, headers={
@@ -5047,28 +5637,19 @@ class ZKHandler(BaseHTTPRequestHandler):
             except Exception as e:
                 print(f"[import-url] Substack JSON mislukt: {e}", flush=True)
 
-        try:
-            req = urllib.request.Request(url, headers={
-                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                              "AppleWebKit/537.36 (KHTML, like Gecko) "
-                              "Chrome/124.0.0.0 Safari/537.36",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                "Accept-Language": "nl,en;q=0.9",
-                "Accept-Encoding": "identity",
-                "Cache-Control": "no-cache",
-            })
-            with urllib.request.urlopen(req, timeout=20) as resp:
-                raw_bytes = resp.read(1_000_000)
-                charset   = "utf-8"
-                ct = resp.headers.get("Content-Type","")
-                if "charset=" in ct:
-                    charset = ct.split("charset=")[-1].split(";")[0].strip()
-                html = raw_bytes.decode(charset, errors="replace")
-        except Exception as e:
-            if substack_text:
-                html = ""   # we hebben JSON-tekst, HTML niet nodig
-            else:
-                return {"ok":False,"error":"URL ophalen mislukt: "+str(e)}
+                # ── URL ophalen via snelle requests-helper ──────────────────────────
+        if not substack_text:
+            _fetched = self._fetch_url_content(url)
+            if not _fetched.get("ok"):
+                return {"ok": False, "error": _fetched.get("error", "Ophalen mislukt")}
+            html = ""  # bs4 al verwerkt; we gebruiken de markdown direct
+            # Overschrijf de downstream extractie met bs4-resultaat
+            _bs4_md = _fetched.get("markdown", "")
+            if not title: title = _fetched.get("title", "")
+        else:
+            html = ""
+            _bs4_md = ""
+
 
         # ── HTML → tekst + afbeelding-URLs via stdlib html.parser ────────────
         from html.parser import HTMLParser

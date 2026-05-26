@@ -71,7 +71,7 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
     lines:     value.split("\n"),
     cur:       {row:0, col:0},  // cursor positie
     scroll:    0,               // eerste zichtbare regel
-    mode:      "INSERT",
+    mode:      "NORMAL",   // start in NORMAL — klik of druk i om te typen
     cmdBuf:    "",
     undo:      [value.split("\n")],
     undoIdx:   0,
@@ -128,6 +128,9 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
       prevValue.current = value;
       const s = S.current;
       s.lines = value.split("\n");
+      // Cursor terug naar boven bij nieuwe notitie
+      s.cur   = {row: 0, col: 0};
+      s.scroll = 0;
       // Laad bewaarde undo-history voor deze notitie
       const saved = UNDO_LOAD(noteId);
       if (saved && saved.stack.length > 1) {
@@ -231,20 +234,28 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
       draw();
     }, 530);
 
-    // Muisklik → cursor plaatsen + focus
+    // Muisklik → cursor plaatsen
+    // Single click: cursor plaatsen in NORMAL mode
+    // Double click: cursor plaatsen + INSERT mode
+    let _clickTimer = null;
     const onMouseDown = (e) => {
       const r   = cv.getBoundingClientRect();
       const s   = S.current;
       const cw  = s.charW;
-      const nw  = (s.numCols + 1) * cw + PAD_LEFT; // breedte regelnummer-gebied
+      const nw  = (s.numCols + 1) * cw + PAD_LEFT;
       const row = Math.min(s.lines.length - 1,
                   Math.max(0, Math.floor((e.clientY - r.top) / LINE_H) + s.scroll));
       const col = Math.min(s.lines[row].length,
                   Math.max(0, Math.round((e.clientX - r.left - nw) / cw)));
       s.cur = {row, col};
-      setMode("INSERT");
       scrollToCursor(s);
       inp.focus();
+      if (e.detail === 2) {
+        // Dubbelklik → altijd INSERT mode (begin direct typen)
+        setMode("INSERT");
+      }
+      // Enkele klik: behoudt huidige mode (INSERT blijft INSERT, NORMAL blijft NORMAL)
+      // Zo werkt autocompletion door als de gebruiker al aan het typen was
       draw();
     };
     cv.addEventListener("mousedown", onMouseDown);
@@ -2140,7 +2151,9 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
     ctx.fillRect(0, sbY, CW, LINE_H);
 
     // Mode badge
-    const modeLabel  = ` ${s.mode} `;
+    const modeLabel  = s.mode === "NORMAL"
+      ? " NORMAL  i=typen  / ?=help "
+      : ` ${s.mode} `;
     const modeColor  = s.mode==="INSERT"  ? W.comment
                      : s.mode==="COMMAND" ? W.orange
                      : s.mode==="SEARCH"  ? W.purple
@@ -2411,8 +2424,13 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
         }
       },
       onKeyDown: (e) => {
+        // ? opent help ook zonder editor-focus
+        if (e.key === "?" && !e.ctrlKey && !e.metaKey) {
+          e.preventDefault();
+          setHelpOpen(true);
+          return;
+        }
         // Onderschep pijltjestoetsen op wrapper-niveau als popup open is
-        // zodat de browser ze niet voor scrollen gebruikt
         if (compRef.current.open &&
             (e.key === "ArrowDown" || e.key === "ArrowUp" ||
              e.key === "Tab" || e.key === "Enter")) {
@@ -2506,10 +2524,25 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
       ); // einde IIFE popup
       })(),
 
+      // ── ? help-knop (altijd zichtbaar, klaar voor gebruik) ─────────────────
+      React.createElement("button", {
+        onClick: () => setHelpOpen(true),
+        title: "Sneltoetsen (?) — ook via :? in commandomodus",
+        style: {
+          position: "absolute", top: "6px", right: "8px",
+          fontSize: "10px", color: W.fgDim,
+          background: W.bg2 + "cc", borderRadius: "4px",
+          padding: "2px 8px", letterSpacing: "0.5px",
+          border: `1px solid ${W.splitBg}`,
+          cursor: "pointer", zIndex: 10,
+          fontFamily: "inherit",
+        }
+      }, "?"),
+
       // ── Spell-indicator (rechts boven in editor) ─────────────────────────
       spellLang !== "off" && React.createElement("div", {
         style: {
-          position: "absolute", top: "6px", right: "8px",
+          position: "absolute", top: "6px", right: "36px",
           fontSize: "10px", color: W.fgMuted,
           background: W.bg2 + "cc", borderRadius: "4px",
           padding: "2px 6px", letterSpacing: "0.5px",

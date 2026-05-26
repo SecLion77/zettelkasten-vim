@@ -22,25 +22,8 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, onRefreshPd
 
   // URL-import
   const [url,            setUrl]            = useState("");
-  const currentUrlRef  = React.useRef("");
-  const doImportRef    = React.useRef(null); // altijd de laatste doImport
-  const prevAiLoading  = React.useRef(false);
-  React.useEffect(() => {
-    const isLoading = importPreview?.aiLoading;
-    if (prevAiLoading.current && !isLoading && summaryRef.current) {
-      // AI net klaar: scroll naar samenvatting voor review
-      setTimeout(() => summaryRef.current?.scrollIntoView({behavior:"smooth", block:"nearest"}), 200);
-    }
-    prevAiLoading.current = !!isLoading;
-  }, [importPreview?.aiLoading]);
   const [busy,           setBusy]           = useState(false);
   const [importing,      setImporting]      = useState(false);
-  const [importStep,     setImportStep]     = useState(0);
-  const [importElapsed,  setImportElapsed]  = useState(0);
-  const [jinaLoading,    setJinaLoading]    = useState(false);
-  const summaryRef  = React.useRef(null); // voor auto-scroll naar samenvatting
-  const [saveWarning, setSaveWarning]  = useState(""); // waarschuwing bij leeg veld
-  const importTimerRef = React.useRef(null);
   const [error,          setError]          = useState(null);
   const [editMd,         setEditMd]         = useState("");
   const [editTitle,      setEditTitle]      = useState("");
@@ -49,10 +32,8 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, onRefreshPd
   const [saved,          setSaved]          = useState(false);
   const [selectedImages, setSelectedImages] = useState(new Set());
   const [aiTagsLoading,  setAiTagsLoading]  = useState(false);
-  const [suggestedType,  setSuggestedType]  = useState(null);
-  const [selectedType,   setSelectedType]   = useState("");
-  const [editAuthor,     setEditAuthor]     = useState("");    // auteur van de bron
-  const [extractedAuthor,setExtractedAuthor]= useState("");    // automatisch gevonden auteur
+  const [suggestedType,  setSuggestedType]  = useState(null);  // AI-suggestie voor notitietype
+  const [selectedType,   setSelectedType]   = useState("");    // gekozen notitietype
   const [dupNote,        setDupNote]        = useState(null);
   const urlRef      = useRef(null);
   const prevPreview = useRef(importPreview);
@@ -109,99 +90,6 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, onRefreshPd
   };
 
   // ── Duplicate-check helper ─────────────────────────────────────────────────
-  // ── Import voortgangstimer ───────────────────────────────────────────────
-  React.useEffect(() => {
-    if (!importing) {
-      clearInterval(importTimerRef.current);
-      setImportStep(0);
-      setImportElapsed(0);
-      return;
-    }
-    let elapsed = 0;
-    setImportElapsed(0);
-    setImportStep(0);
-    importTimerRef.current = setInterval(() => {
-      elapsed += 1;
-      setImportElapsed(elapsed);
-      // Stap op basis van gemiddelde tijden:
-      // 0-3s = duplicaat check, 3-28s = website ophalen,
-      // 28-35s = verwerken, 35+ = AI samenvatting
-      if      (elapsed < 3)  setImportStep(0);
-      else if (elapsed < 28) setImportStep(1);
-      else if (elapsed < 35) setImportStep(2);
-      else                   setImportStep(3);
-    }, 1000);
-    return () => clearInterval(importTimerRef.current);
-  }, [importing]);
-
-  // ── Jina AI import (handmatige fallback) ────────────────────────────────
-  const doJinaImport = React.useCallback(async () => {
-    if (!url.trim() || importing) return;
-    // Gebruik dezelfde importing/stap flow als normale import
-    setImporting(true); setError(null); setImportPreview(null);
-    setImportStep(1); // direct naar "Website ophalen" stap
-    const jid = genId();
-    addJob && addJob({id:jid, type:"import", label:"🔗 Jina AI: "+url.replace(/^https?:\/\//,"").slice(0,35)+"…"});
-    try {
-      // ── Fase 1: Jina haalt artikel op ─────────────────────────────────────
-      const r = await fetch("/api/import-jina", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({url: url.trim(), model: llmModel||"llama3.2-vision"}),
-      });
-      const res = await r.json();
-      if (!res?.ok) {
-        setError(res?.error || "Jina AI kon de URL niet ophalen");
-        setImporting(false);
-        updateJob && updateJob(jid, {status:"error", error:res?.error||""});
-        return;
-      }
-
-      // Fase 1 klaar — toon preview direct
-      setImportStep(3); // spring naar AI-stap
-      setImportPreview({...res, url: url.trim(), aiLoading: true});
-      updateJob && updateJob(jid, {status:"running", result:"Jina OK — AI samenvatting…"});
-
-      // ── Fase 2: AI samenvatting ────────────────────────────────────────────
-      try {
-        const ctrl = new AbortController();
-        const t    = setTimeout(() => ctrl.abort(), 150_000);
-        const r2   = await fetch("/api/import-ai", {
-          method: "POST", headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({
-            text:  res.text || res.markdown || "",
-            url:   url.trim(),
-            title: res.title || "",
-            model: llmModel || "llama3.2-vision",
-          }),
-          signal: ctrl.signal,
-        });
-        clearTimeout(t);
-        const ai = await r2.json();
-        if (ai?.ok) {
-          setImportPreview(p => ({...p, aiLoading: false,
-            summary:  ai.summary  || p.summary,
-            noteType: ai.noteType || p.noteType,
-            author:   ai.author   || p.author || "",
-          }));
-          if (ai.noteType) { setSelectedType(ai.noteType); setSuggestedType(ai.noteType); }
-          if (ai.author)   { setExtractedAuthor(ai.author); setEditAuthor(a => a || ai.author); }
-        } else {
-          setImportPreview(p => p ? {...p, aiLoading: false} : p);
-        }
-      } catch(_e) {
-        setImportPreview(p => p ? {...p, aiLoading: false} : p);
-      }
-
-      updateJob && updateJob(jid, {status:"done", result:res.title?.slice(0,44)||"Klaar"});
-    } catch(e) {
-      setError("Jina AI mislukt: "+(e.message||"onbekend"));
-      updateJob && updateJob(jid, {status:"error", error:e.message});
-    } finally {
-      setImporting(false);
-    }
-  }, [url, llmModel, addJob, updateJob, importing]);
-
   const findDuplicateUrl = useCallback((checkUrl) => {
     if (!checkUrl) return null;
     // Normaliseer: verwijder trailing slash en tracking-parameters
@@ -318,13 +206,8 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, onRefreshPd
 
 
   const doImport = useCallback((force=false) => {
-    let u = url.trim();
+    const u = url.trim();
     if (!u) return;
-    // Voeg https:// toe als schema ontbreekt
-    if (u && !u.startsWith("http://") && !u.startsWith("https://")) {
-      u = "https://" + u;
-      setUrl(u); // update ook het invoerveld
-    }
 
     // Client-side duplicate check (snel, op basis van al geladen notities)
     if (!force) {
@@ -339,7 +222,6 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, onRefreshPd
     }
     setDupNote(null);
 
-    currentUrlRef.current = url; // altijd bijhouden voor retry
     setBusy(true); setError(null); setImporting(true);
     setImportPreview(null); setSaved(false);
     setTimeout(() => setBusy(false), 400);
@@ -347,136 +229,44 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, onRefreshPd
     const shortUrl = u.replace(/^https?:\/\//,"").slice(0,38);
     addJob && addJob({id:jid, type:"import", label:"🌐 Importeren: "+shortUrl+"…"});
     (async () => {
-      // ── Fase 1: website ophalen — snel (2-8s) ──────────────────────────
-      let fetchRes = null;
       try {
-        const ctrl1 = new AbortController();
-        const t1    = setTimeout(() => ctrl1.abort(), 30_000);
-        const r1    = await fetch("/api/fetch-url?url="+encodeURIComponent(u),
-                        {signal: ctrl1.signal});
-        clearTimeout(t1);
-        fetchRes = await r1.json();
-      } catch(e1) {
-        const msg = e1.name==="AbortError"
-          ? "⏱ Website niet bereikbaar binnen 30 seconden. Controleer de URL."
-          : "Ophalen mislukt: "+(e1.message||"");
-        setError(msg); setImporting(false);
-        updateJob && updateJob(jid,{status:"error",error:msg}); return;
-      }
-
-      if (!fetchRes?.ok) {
-        if (fetchRes?.duplicate) {
-          setDupNote({id:fetchRes.duplicate_id,title:fetchRes.duplicate_title});
+        const res = await api.importUrl({url: u, model: llmModel||"llama3.2-vision", force});
+        if (res?.duplicate) {
+          // Server meldt duplicate — toon waarschuwing met "Toch importeren" optie
+          setDupNote({ id: res.duplicate_id, title: res.duplicate_title });
           setImporting(false);
-          updateJob && updateJob(jid,{status:"done",result:"Al aanwezig"}); return;
-        }
-        const msg = fetchRes?.error || "Website kon niet geladen worden";
-        setError(msg); setImporting(false);
-        updateJob && updateJob(jid,{status:"error",error:msg}); return;
-      }
-
-      // Fase 1 klaar — controleer inhoud
-      let fetchedText = fetchRes.markdown || fetchRes.text || "";
-
-      // Stap 2a: als server leeg terugkwam, laat browser het proberen
-      if (fetchedText.trim().length < 30) {
-        setImportStep(1);
-        try {
-          // Browser heeft echte cookies, TLS-fingerprint en sessie
-          const bResp = await fetch(u, {mode: "cors", credentials: "include"});
-          if (bResp.ok) {
-            const html = await bResp.text();
-            // Server verwerkt de HTML die de browser al heeft
-            const pr = await fetch("/api/process-html", {
-              method: "POST", headers: {"Content-Type": "application/json"},
-              body: JSON.stringify({html, url: u}),
-            });
-            const parsed = await pr.json();
-            if (parsed?.ok && (parsed.text || "").length > 100) {
-              fetchedText = parsed.text || "";
-              if (!fetchRes.title && parsed.title) fetchRes.title = parsed.title;
-            }
+          updateJob && updateJob(jid,{status:"done", result:"Al aanwezig"});
+        } else if (res?.ok) {
+          setImportPreview(res);
+          if (res.images?.length && onRefreshImages) {
+            onRefreshImages();
+            // Beschrijving pas na opslaan — niet automatisch hier
           }
-        } catch(_corsErr) {
-          // Site blokkeert CORS — beide methoden mislukten
-        }
-      }
-
-      // Stap 2b: beide methoden mislukten
-      if (fetchedText.trim().length < 30) {
-        setError("jina_option");
-        setImporting(false);
-        updateJob && updateJob(jid, {status: "error", error: "Site blokkeert ophalen"});
-        return;
-      }
-
-      const preview = {
-        ok:true, url:u, aiLoading:true,
-        title:    fetchRes.title || u.replace(/^https?:\/\//,"").slice(0,60),
-        markdown: fetchedText,
-        images:   fetchRes.images  || [],
-        summary:  "",
-        author:   fetchRes.author  || "",
-      };
-      setImportPreview(preview);
-      // Auteur pre-invullen vanuit HTML meta-tags
-      if (fetchRes.author) { setEditAuthor(fetchRes.author); setExtractedAuthor(fetchRes.author); }
-      setImportStep(3); // spring naar AI-stap in de voortgangsindicator
-      updateJob && updateJob(jid,{status:"running",result:"Artikel geladen — AI start…"});
-
-      // ── Fase 2: AI samenvatting — traag, niet-blokkerend ────────────────
-      try {
-        const ctrl2 = new AbortController();
-        const t2    = setTimeout(() => ctrl2.abort(), 150_000);
-        const r2    = await fetch("/api/import-ai",{
-          method:"POST", headers:{"Content-Type":"application/json"},
-          body: JSON.stringify({
-            text:  fetchRes.text||fetchRes.markdown||"",
-            url:   u, title: fetchRes.title||"",
-            model: llmModel||"llama3.2-vision",
-          }),
-          signal: ctrl2.signal,
-        });
-        clearTimeout(t2);
-        const aiRes = await r2.json();
-        if (aiRes?.ok) {
-          setImportPreview(p => ({
-            ...p, aiLoading:false,
-            summary:  aiRes.summary  || p.summary,
-            noteType: aiRes.noteType || p.noteType,
-          }));
-          if (aiRes.noteType) { setSelectedType(aiRes.noteType); setSuggestedType(aiRes.noteType); }
+          // Sla alleen veilige scalaire velden op in job (geen circulaire refs)
+          const safeResult = {
+            title: res.title||"", url: res.url||"",
+            summary: res.summary||"", markdown: res.markdown||"",
+            images: (res.images||[]).map(i => ({name: i.name, url: i.url})),
+          };
+          updateJob && updateJob(jid,{status:"done", result: res.title?.slice(0,44)||"Klaar", importResult: safeResult});
         } else {
-          setImportPreview(p => p ? {...p, aiLoading:false} : p);
+          const msg = res?.error || "Import mislukt";
+          setError(msg); setImporting(false);
+          updateJob && updateJob(jid,{status:"error", error:msg});
         }
-      } catch(e2) {
-        // AI mislukt = niet fataal, preview met tekst blijft
-        setImportPreview(p => p ? {...p, aiLoading:false} : p);
+      } catch(e) {
+        const isTimeout = e.name==="AbortError" || e.message?.includes("Timeout") || e.message?.includes("timeout");
+        const msg = isTimeout
+          ? "⏱ Timeout — de website reageerde niet op tijd. Probeer opnieuw."
+          : e.message || "Import mislukt";
+        setError(msg); setImporting(false);
+        updateJob && updateJob(jid,{status:"error", error:msg});
       }
-
-      if (fetchRes.images?.length && onRefreshImages) onRefreshImages();
-      setImporting(false);
-      updateJob && updateJob(jid,{status:"done",result:fetchRes.title?.slice(0,44)||"Klaar"});
     })();
   }, [url, llmModel, onRefreshImages, addJob, updateJob, findDuplicateUrl]);
-  doImportRef.current = doImport; // altijd bijwerken na elke render
 
   const saveNote = useCallback(async () => {
     if (!importPreview) return;
-    if (importPreview?.aiLoading) {
-      setSaveWarning("⏳ Wacht even — de AI is nog bezig met de samenvatting.");
-      return;
-    }
-    if (!editTitle.trim()) {
-      setSaveWarning("✏ Vul eerst een titel in.");
-      return;
-    }
-    if (!editSummary.trim() && saveWarning !== "confirm_no_summary") {
-      setSaveWarning("confirm_no_summary");
-      summaryRef.current?.scrollIntoView({behavior:"smooth", block:"nearest"});
-      return;
-    }
-    setSaveWarning("");
     // Bouw content op: samenvatting bovenaan als callout, dan originele tekst
     let content = "";
     if (editSummary.trim()) {
@@ -502,7 +292,6 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, onRefreshPd
       id: genId(), title: editTitle, content, tags,
       noteType: selectedType || "",
       sourceUrl: importPreview.url,
-      fields: editAuthor ? {author: editAuthor} : undefined,
       importedAt: new Date().toISOString(),
       created: new Date().toISOString(), modified: new Date().toISOString(),
     });
@@ -514,7 +303,7 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, onRefreshPd
     setSaved(true);
     // Na 1.5s automatisch terug naar het invoerscherm
     setTimeout(() => reset(), 1500);
-  }, [importPreview, editTitle, editMd, editSummary, tags, selectedImages, selectedType, onAddNote, saveWarning]);
+  }, [importPreview, editTitle, editMd, editSummary, tags, selectedImages, selectedType, onAddNote]);
 
   const reset = () => {
     setUrl(""); setImportPreview(null);
@@ -522,8 +311,6 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, onRefreshPd
     setTags([]); setError(null); setSaved(false); setImporting(false);
     setSelectedImages(new Set()); setDupNote(null);
     setSuggestedType(null); setSelectedType("");
-    setEditAuthor(""); setExtractedAuthor("");
-    setSaveWarning("");
     setTimeout(()=>urlRef.current?.focus(), 50);
   };
 
@@ -590,70 +377,19 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, onRefreshPd
         padding:"32px 24px", gap:"20px"
       }},
         importing
-          ? (() => {
-              const STAPPEN = [
-                { icon:"🔍", label:"Controleren op duplicaten",    max:3  },
-                { icon:"🌐", label:"Website ophalen",               max:12 },
-                { icon:"📄", label:"Artikel extraheren",            max:16 },
-                { icon:"🧠", label:"AI samenvatting (lokaal)",      max:180},
-              ];
-              const step  = importStep;
-              const sec   = importElapsed;
-              const pct   = Math.min(100, step===3
-                ? 75 + Math.min(24, (sec-35)/2.5)
-                : (sec / STAPPEN[step].max) * [25,50,75,100][step]);
-              return React.createElement(React.Fragment, null,
-                // Stap-icoon
-                React.createElement("div", {style:{fontSize:"44px",lineHeight:1,animation:"ai-pulse 1.4s ease-in-out infinite"}},
-                  STAPPEN[step].icon),
-                // Stap-naam + URL
-                React.createElement("div", {style:{textAlign:"center",lineHeight:"1.7"}},
-                  React.createElement("div",{style:{fontSize:"16px",color:W.fg,fontWeight:"600"}},
-                    STAPPEN[step].label,"…"),
-                  React.createElement("div",{style:{fontSize:"13px",color:W.fgMuted,marginTop:"4px"}},
-                    url.replace(/^https?:\/\//,"").slice(0,55)+(url.length>60?"…":""))
-                ),
-                // Stap-balk
-                React.createElement("div",{style:{width:"340px",display:"flex",flexDirection:"column",gap:"10px"}},
-                  STAPPEN.map((s,i) =>
-                    React.createElement("div",{key:i,style:{
-                      display:"flex",alignItems:"center",gap:"10px",
-                      opacity: i < step ? 0.45 : i === step ? 1 : 0.25,
-                      transition:"opacity .4s"
-                    }},
-                      React.createElement("span",{style:{fontSize:"16px",minWidth:"22px"}},
-                        i < step ? "✓" : s.icon),
-                      React.createElement("div",{style:{flex:1}},
-                        React.createElement("div",{style:{
-                          fontSize:"13px",color:i===step?W.fg:W.fgMuted,
-                          fontWeight:i===step?"600":"400",marginBottom:"3px"
-                        }}, s.label),
-                        i===step && React.createElement("div",{style:{
-                          height:"3px",borderRadius:"2px",
-                          background:W.splitBg||"rgba(255,255,255,0.08)",
-                          overflow:"hidden"
-                        }},
-                          React.createElement("div",{style:{
-                            height:"100%",width:`${pct}%`,
-                            background:W.blue,borderRadius:"2px",
-                            transition:"width .9s ease-out"
-                          }})
-                        )
-                      ),
-                      i===step && React.createElement("span",{style:{fontSize:"12px",color:W.fgMuted,minWidth:"30px",textAlign:"right"}},
-                        sec+"s")
-                    )
-                  )
-                ),
-                // Annuleer
-                React.createElement("button",{
-                  onClick:()=>{setImporting(false);setError(null);},
-                  style:{background:"none",border:`1px solid ${W.splitBg}`,
-                    color:W.fgMuted,borderRadius:"6px",padding:"5px 16px",
-                    fontSize:"13px",cursor:"pointer",marginTop:"4px"}
-                },"× Annuleren")
-              );
-            })()
+          ? React.createElement(React.Fragment, null,
+              React.createElement("div", {style:{fontSize:"48px",lineHeight:1,animation:"ai-pulse 1.4s ease-in-out infinite"}}, "🌐"),
+              React.createElement("div", {style:{fontSize:"15px",color:W.fgDim,textAlign:"center",lineHeight:"1.7",maxWidth:"460px"}},
+                "Bezig met importeren…", React.createElement("br"),
+                React.createElement("span", {style:{fontSize:"14px",color:W.fgMuted}}, url.replace(/^https?:\/\//,"").slice(0,60))),
+              React.createElement("div", {style:{width:"320px",height:"3px",borderRadius:"2px",background:"rgba(255,255,255,0.08)",overflow:"hidden"}},
+                React.createElement("div", {style:{height:"100%",width:"35%",borderRadius:"2px",background:W.blue,animation:"progress-slide 1.4s ease-in-out infinite"}})),
+              React.createElement("div", {style:{fontSize:"14px",color:W.fgMuted,textAlign:"center",maxWidth:"420px",lineHeight:"1.6"}},
+                "Je kunt de app gewoon blijven gebruiken. De import verschijnt hier zodra hij klaar is."),
+              React.createElement("button", {
+                onClick:()=>{setImporting(false);setError(null);},
+                style:{background:"none",border:`1px solid ${W.splitBg}`,color:W.fgMuted,borderRadius:"6px",padding:"6px 16px",fontSize:"14px",cursor:"pointer"}
+              }, "× annuleer"))
           : React.createElement(React.Fragment, null,
               React.createElement("div", {style:{fontSize:"48px",lineHeight:1}}, "🌐"),
               React.createElement("div", {style:{fontSize:"15px",color:W.fgDim,textAlign:"center",lineHeight:"1.6",maxWidth:"460px"}},
@@ -663,8 +399,8 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, onRefreshPd
               React.createElement("div", {style:{display:"flex",gap:"10px",width:"100%",maxWidth:"560px"}},
                 React.createElement("input", {
                   ref:urlRef, type:"url", value:url, autoFocus:true,
-                  onChange:e=>{ setUrl(e.target.value); currentUrlRef.current=e.target.value; },
-                  onKeyDown:e=>{ currentUrlRef.current=url; if(e.key==="Enter") doImport(); },
+                  onChange:e=>setUrl(e.target.value),
+                  onKeyDown:e=>{ if(e.key==="Enter") doImport(); },
                   placeholder:"https://example.com/artikel",
                   style:{flex:1,background:W.bg2,border:`1px solid ${W.splitBg}`,borderRadius:"6px",
                          padding:"10px 14px",color:W.fg,fontSize:"14px",outline:"none",
@@ -677,49 +413,8 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, onRefreshPd
                          opacity:busy||!url.trim()?0.5:1,whiteSpace:"nowrap"}
                 }, "→ Importeren")),
               importing && React.createElement("div",{style:{fontSize:"12px",color:W.fgMuted,marginTop:"4px",maxWidth:"560px",width:"100%"}},
-                "⏳ Even geduld — website wordt opgehaald en samengevat (30–120 sec.)…"),
-              error && error === "jina_option"
-              ? React.createElement("div",{style:{
-                  background:W.bg3||"rgba(255,255,255,0.04)",
-                  border:`1px solid ${W.splitBg}`,
-                  borderRadius:"8px",padding:"14px 16px",
-                  maxWidth:"560px",width:"100%",
-                  display:"flex",flexDirection:"column",gap:"10px"
-                }},
-                React.createElement("div",{style:{color:W.orange,fontSize:"13px",fontWeight:"600"}},
-                  "⚠ Automatisch ophalen geblokkeerd door deze site"),
-                React.createElement("div",{style:{fontSize:"12px",color:W.fgMuted,lineHeight:"1.6"}},
-                  "Kies een alternatieve methode:"),
-                React.createElement("div",{style:{display:"flex",gap:"8px",flexWrap:"wrap"}},
-                  React.createElement("button",{
-                    onClick:()=>{setError(null);doJinaImport();},
-                    disabled:jinaLoading,
-                    style:{padding:"7px 14px",borderRadius:"6px",fontSize:"13px",
-                      background:W.blueBg||"rgba(138,198,242,0.1)",
-                      border:`1px solid ${W.blueBorder||"rgba(138,198,242,0.3)"}`,
-                      color:W.blue,cursor:"pointer",fontWeight:"600",
-                      opacity:jinaLoading?0.6:1}
-                  }, jinaLoading?"⏳ Jina AI bezig…":"🔗 Probeer via Jina AI"),
-                  React.createElement("button",{
-                    onClick:()=>{
-                      setError(null);
-                      setDupNote(null);
-                      setImportPreview(null);
-                      // Roep altijd de meest recente doImport aan via ref
-                      if (doImportRef.current) doImportRef.current(true);
-                    },
-                    style:{padding:"7px 14px",borderRadius:"6px",fontSize:"13px",
-                      background:"none",border:`1px solid ${W.splitBg}`,
-                      color:W.fgMuted,cursor:"pointer"}
-                  },"↻ Toch opnieuw proberen")
-                ),
-                React.createElement("div",{style:{fontSize:"11px",color:W.fgDim,
-                  borderTop:`1px solid ${W.splitBg}`,paddingTop:"8px",lineHeight:"1.5"}},
-                  "Of: open de URL in de browser → selecteer alles (Ctrl+A) → ",
-                  "kopieer (Ctrl+C) → plak in de 'Markdown' tab hierboven."
-                )
-              )
-              : error && React.createElement("div", {style:{color:W.orange,fontSize:"14px",
+                "⏳ Even geduld — website wordt opgehaald en samengevat (15–90 sec.)…"),
+              error && React.createElement("div", {style:{color:W.orange,fontSize:"14px",
                 background:"rgba(229,120,109,0.08)",border:`1px solid rgba(229,120,109,0.25)`,
                 borderRadius:"6px",padding:"10px 16px",maxWidth:"560px",width:"100%",
                 display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:"12px"}},
@@ -799,48 +494,17 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, onRefreshPd
                          boxSizing:"border-box"}
                 }),
                 React.createElement("button", {
-                  onClick: importPreview?.aiLoading ? null : saveNote,
-                  disabled: importPreview?.aiLoading || saved,
-                  title: importPreview?.aiLoading
-                    ? "Wacht tot de AI klaar is met verwerken"
-                    : "Opslaan als Zettelkasten-notitie",
-                  style:{
-                    background: importPreview?.aiLoading ? W.splitBg : W.comment,
-                    color: importPreview?.aiLoading ? W.fgMuted : W.bg,
-                    border:"none", borderRadius:"5px",
-                    padding:"6px 18px", fontSize:"13px",
-                    cursor: importPreview?.aiLoading ? "not-allowed" : "pointer",
-                    fontWeight:"700", whiteSpace:"nowrap", flexShrink:0,
-                    transition:"all .3s", opacity: importPreview?.aiLoading ? 0.6 : 1,
-                  }
-                }, importPreview?.aiLoading ? "⏳ AI bezig…" : "✓ Opslaan"),
+                  onClick: saveNote,
+                  style:{background:W.comment,color:W.bg,border:"none",
+                         borderRadius:"5px",padding:"6px 18px",fontSize:"13px",
+                         cursor:"pointer",fontWeight:"700",whiteSpace:"nowrap",flexShrink:0}
+                }, "✓ Opslaan"),
                 React.createElement("button", {
                   onClick: reset,
                   style:{background:"none",border:`1px solid ${W.splitBg}`,color:W.fgMuted,
                          borderRadius:"5px",padding:"6px 10px",fontSize:"13px",
                          cursor:"pointer",flexShrink:0}
                 }, "✕")
-              ),
-              // Waarschuwing / bevestiging
-              saveWarning && React.createElement("div", {style:{
-                fontSize:"12px", padding:"7px 12px", borderRadius:"6px", marginTop:"4px",
-                background: saveWarning==="confirm_no_summary"
-                  ? "rgba(234,196,53,0.12)" : "rgba(229,120,109,0.10)",
-                border: `1px solid ${
-                  saveWarning==="confirm_no_summary"
-                  ? "rgba(234,196,53,0.35)" : "rgba(229,120,109,0.3)"}`,
-                color: saveWarning==="confirm_no_summary" ? W.yellow : W.orange,
-                display:"flex", alignItems:"center", justifyContent:"space-between", gap:"12px",
-              }},
-                React.createElement("span", null,
-                  saveWarning==="confirm_no_summary"
-                  ? "⚠ Geen samenvatting — klik nogmaals om toch op te slaan"
-                  : saveWarning),
-                saveWarning==="confirm_no_summary" && React.createElement("button", {
-                  onClick: saveNote,
-                  style:{background:"none",border:"none",
-                    color:W.yellow,cursor:"pointer",fontSize:"12px",fontWeight:"600"}
-                }, "Toch opslaan →")
               )
         ),
 
@@ -848,32 +512,6 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, onRefreshPd
         React.createElement("div", {style:{
           flex:1, overflowY:"auto", padding:"16px 20px",
           display:"flex", flexDirection:"column", gap:"14px", minHeight:0, WebkitOverflowScrolling:"touch",}},
-
-          // ── AI Resultaten banner (toont status + scroll-hint) ────────────────
-          !saved && importPreview?.aiLoading && React.createElement("div", {style:{
-            background:W.bg3||"rgba(138,198,242,0.06)",
-            border:`1px solid ${W.blueBorder||"rgba(138,198,242,0.2)"}`,
-            borderRadius:"7px", padding:"10px 14px",
-            display:"flex", alignItems:"center", gap:"10px",
-          }},
-            React.createElement("span",{style:{animation:"ai-pulse 1.2s ease-in-out infinite",fontSize:"16px"}},"🧠"),
-            React.createElement("div",null,
-              React.createElement("div",{style:{fontSize:"13px",color:W.blue,fontWeight:"600"}},
-                "AI verwerkt samenvatting…"),
-              React.createElement("div",{style:{fontSize:"11px",color:W.fgMuted,marginTop:"2px"}},
-                "Opslaan is geblokkeerd totdat alle velden zijn ingevuld.")
-            )
-          ),
-
-          !saved && !importPreview?.aiLoading && importPreview?.summary && React.createElement("div", {style:{
-            background:"rgba(114,182,96,0.07)",
-            border:"1px solid rgba(114,182,96,0.25)",
-            borderRadius:"7px", padding:"9px 14px",
-            display:"flex", alignItems:"center", gap:"8px",
-            fontSize:"12px", color:W.comment||"#72b660",
-          }},
-            "✓ AI klaar — controleer de samenvatting hieronder en sla op"
-          ),
 
           // ── Notitietype ─────────────────────────────────────────────────────
           !saved && React.createElement("div", {style:{
@@ -936,42 +574,6 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, onRefreshPd
             )
           ),
 
-          // ── Auteur-veld (alleen bij literatuur notitietype) ──────────────────
-          selectedType === "literature" && !saved && React.createElement("div", {style:{
-            background:W.bg2, border:`1px solid ${W.blueBorder||"rgba(138,198,242,0.3)"}`,
-            borderRadius:"7px", padding:"10px 14px",
-          }},
-            React.createElement("div", {style:{
-              fontSize:"11px", color:W.blue||"#8ac6f2",
-              letterSpacing:"1.2px", marginBottom:"8px", fontWeight:"600",
-              display:"flex", alignItems:"center", gap:"8px",
-            }},
-              "AUTEUR",
-              extractedAuthor && editAuthor === extractedAuthor &&
-                React.createElement("span", {style:{
-                  fontSize:"10px", color:W.fgMuted, fontWeight:"400",
-                  letterSpacing:0, background:W.bg3, borderRadius:"3px",
-                  padding:"1px 6px",
-                }}, "✦ automatisch gevonden")
-            ),
-            React.createElement("input", {
-              type:"text", value:editAuthor,
-              onChange:e=>setEditAuthor(e.target.value),
-              placeholder:"Voornaam Achternaam",
-              style:{
-                width:"100%", background:W.bg,
-                border:`1px solid ${editAuthor
-                  ? (W.blueBorder||"rgba(138,198,242,0.4)")
-                  : W.splitBg}`,
-                borderRadius:"6px", color:W.fg, fontSize:"13px",
-                padding:"7px 11px", outline:"none", boxSizing:"border-box",
-              }
-            }),
-            React.createElement("div", {style:{fontSize:"11px",color:W.fgDim,marginTop:"5px"}},
-              "Opgeslagen als fields.author — zichtbaar in Bibliotheek → Boeken"
-            )
-          ),
-
           // ── Tags (SmartTagEditor) ───────────────────────────────────────────
           !saved && React.createElement("div", {style:{
             background:W.bg2, border:`1px solid ${W.splitBg}`,
@@ -1027,13 +629,11 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, onRefreshPd
             borderLeft:`3px solid ${W.blue}`,
             borderRadius:"6px", padding:"12px 16px",
           }},
-            React.createElement("div", {
-              ref: summaryRef,
-              style:{
-                fontSize:"11px",color:W.blue,letterSpacing:"1.2px",
-                fontWeight:"600",marginBottom:"8px",
-                display:"flex",alignItems:"center",gap:"6px",
-              }},
+            React.createElement("div", {style:{
+              fontSize:"11px",color:W.blue,letterSpacing:"1.2px",
+              fontWeight:"600",marginBottom:"8px",
+              display:"flex",alignItems:"center",gap:"6px",
+            }},
               "📋 SAMENVATTING",
               React.createElement("span",{style:{
                 fontSize:"10px",color:W.fgMuted,fontWeight:"400",
