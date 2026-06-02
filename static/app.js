@@ -1859,6 +1859,13 @@ const App = () => {
               notes,isTablet,
               llmModel: W.model || localStorage.getItem("zk_model") || "gemma3:12b",
               onRefreshPdfs:refreshPdfs,
+              onTogglePdfRead: async name => {
+                await fetch("/api/pdf-read-toggle",{
+                  method:"POST", headers:{"Content-Type":"application/json"},
+                  body:JSON.stringify({name}),
+                });
+                setServerPdfs(await PDFService.listPdfs());
+              },
               onPasteToNote: selId ? handlePasteToNote : null,
               onAddNote:async(note)=>{ await NoteStore.save(note); setNotes([...NoteStore.getAll()]); },
               onSaveNote:async(note)=>{ await NoteStore.save({...note,id:note.id||genId(),created:note.created||new Date().toISOString(),modified:new Date().toISOString()}); setNotes([...NoteStore.getAll()]); },
@@ -1954,6 +1961,13 @@ const App = () => {
             React.createElement(PDFUploadPanel,{
               serverPdfs,
               onRefreshPdfs: refreshPdfs,
+              onTogglePdfRead: async name => {
+                await fetch("/api/pdf-read-toggle",{
+                  method:"POST", headers:{"Content-Type":"application/json"},
+                  body:JSON.stringify({name}),
+                });
+                setServerPdfs(await PDFService.listPdfs());
+              },
               onOpenPdf: (name) => { setSplitTab("pdf"); setTab("pdf"); },
               allTags,
               notes,
@@ -2037,13 +2051,23 @@ const App = () => {
           if(t==="reading") return React.createElement("div",{style:{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",minHeight:0}},
             React.createElement(ReadingList,{
               notes,
+              serverPdfs,
               onSelectNote: id=>{ setSelId(id); setTab("notes"); },
+              onOpenPdf: name=>{ setTab("pdfs"); },
+              onTogglePdfRead: async name => {
+                await fetch("/api/pdf-read-toggle",{
+                  method:"POST",
+                  headers:{"Content-Type":"application/json"},
+                  body:JSON.stringify({name}),
+                });
+                const pdfs = await fetch("/api/pdfs").then(r=>r.json());
+                setServerPdfs(pdfs);
+              },
               onUpdateNote: async note=>{
                 await NoteStore.save(note);
                 setNotes([...NoteStore.getAll()]);
               },
               onDeleteNote: async ids => {
-                // ids is een array van note-IDs
                 const arr = Array.isArray(ids) ? ids : [ids];
                 for (const id of arr) {
                   await NoteStore.remove(id);

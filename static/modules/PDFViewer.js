@@ -99,7 +99,7 @@ const MODEL_COLOR = (m) => {
 };
 
 // ── PDFUploadPanel — clean upload-paneel voor Invoer → PDF tab ───────────────
-const PDFUploadPanel = ({ serverPdfs=[], onRefreshPdfs, onOpenPdf, llmModel,
+const PDFUploadPanel = ({ serverPdfs=[], onRefreshPdfs, onOpenPdf, onTogglePdfRead=null, llmModel,
                           allTags=[], notes=[], onAddNote, addJob, updateJob }) => {
   const { useState, useRef, useCallback } = React;
   const [dragOver,   setDragOver]   = useState(false);
@@ -244,15 +244,37 @@ const PDFUploadPanel = ({ serverPdfs=[], onRefreshPdfs, onOpenPdf, llmModel,
             onMouseEnter: e => e.currentTarget.style.background = "rgba(255,255,255,0.03)",
             onMouseLeave: e => e.currentTarget.style.background = "transparent",
           },
-            React.createElement("span", { style: { fontSize: "14px", flexShrink: 0 } }, "📄"),
+            React.createElement("div", {
+              onClick: e => { e.stopPropagation(); onTogglePdfRead?.(pdfName); },
+              title: pdf.isRead ? "Markeer als ongelezen" : "Markeer als gelezen",
+              style: {
+                width:"20px", height:"20px", borderRadius:"4px", flexShrink:0,
+                border:`2px solid ${pdf.isRead ? "#72b660" : W.splitBg}`,
+                background: pdf.isRead ? "#72b660" : "transparent",
+                display:"flex", alignItems:"center", justifyContent:"center",
+                cursor:"pointer", transition:"all .15s",
+              }
+            },
+              pdf.isRead && React.createElement("span",{
+                style:{color:W.bg,fontSize:"11px",fontWeight:"bold"}
+              },"✓")
+            ),
             React.createElement("div", { style: { flex: 1, minWidth: 0 } },
               React.createElement("div", {
                 style: { fontSize: "13px", color: W.fg,
                          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }
               }, pdfName),
-              pdfSize && React.createElement("div", {
-                style: { fontSize: "10px", color: W.fgMuted, marginTop: "1px" }
-              }, pdfSize)
+              React.createElement("div", {style:{display:"flex",gap:"6px",marginTop:"2px",alignItems:"center"}},
+                pdfSize && React.createElement("span", {
+                  style: { fontSize: "10px", color: W.fgMuted }
+                }, pdfSize),
+                pdf.estimatedMinutes > 0 && React.createElement("span",{
+                  style:{fontSize:"10px",color:W.fgDim}
+                }, `· ${pdf.estimatedMinutes} min`),
+                pdf.isRead && React.createElement("span",{
+                  style:{fontSize:"10px",color:"#72b660",fontWeight:"600"}
+                }, "· ✓ gelezen")
+              )
             ),
             // Paginabadge: onthoud pagina per PDF in localStorage
             (()=>{
@@ -289,7 +311,7 @@ const PDFUploadPanel = ({ serverPdfs=[], onRefreshPdfs, onOpenPdf, llmModel,
   );
 };
 
-const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, onAutoSummarize, onDeletePdf, onPasteToNote=null, onAddNote=null, notes=[], isTablet=false}) => {
+const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, onAutoSummarize, onDeletePdf, onPasteToNote=null, onAddNote=null, notes=[], isTablet=false, onTogglePdfRead=null}) => {
   const [pdfDoc,     setPdfDoc]     = useState(null);
   const [pdfFile,    setPdfFile]    = useState(null);
   const [pageNum,    setPageNum]    = useState(1);   // huidige zichtbare pagina (voor annotaties)
@@ -1306,6 +1328,8 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
     }
   }, [pdfDoc, scale, rotation, renderNearby, _highlightSearchInDom, _clearSearchHl]);
 
+
+
   const nextSearchHit = React.useCallback(() => {
     if (!searchHits.length) return;
     const next = (searchHitIdx + 1) % searchHits.length;
@@ -1358,6 +1382,26 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
         },`📚 Bibliotheek (${serverPdfs?.length||0})`),
         React.createElement("input",{ref:fileRef,type:"file",accept:".pdf",style:{display:"none"},onChange:onFileInput}),
         !pdfjsReady&&React.createElement("span",{style:{color:W.orange,fontSize:"14px"}},"pdf.js laden…"),
+        // ── Gelezen-status banner ─────────────────────────────────────────
+        pdfDoc && (() => {
+          const curPdf = (serverPdfs||[]).find(p=>(p.name||p)===pdfFile?.name);
+          if (!curPdf?.isRead) return null;
+          return React.createElement("div",{
+            style:{
+              display:"flex",alignItems:"center",gap:"6px",
+              background:"rgba(114,182,96,0.12)",
+              border:"1px solid rgba(114,182,96,0.35)",
+              borderRadius:"5px",padding:"3px 10px",
+              fontSize:"12px",color:"#72b660",
+            }
+          },
+            "✓ gelezen",
+            curPdf.readAt && React.createElement("span",{
+              style:{color:"rgba(114,182,96,0.7)",fontSize:"11px"}
+            }, curPdf.readAt.slice(0,10))
+          );
+        })()
+        ,
         // AI samenvatten indicator
         summarizing && React.createElement("div",{
           style:{display:"flex",alignItems:"center",gap:"5px",
@@ -1378,7 +1422,38 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
           title:summarizeErr,
           onClick:()=>setSummarizeErr(null)
         },"⚠ samenvatten mislukt ×"),
-        pdfDoc&&React.createElement(React.Fragment,null,
+
+        // ── Gelezen-knop ─────────────────────────────────────────────────
+        pdfDoc && onTogglePdfRead && (() => {
+          const curPdf = (serverPdfs||[]).find(p=>(p.name||p)===pdfFile?.name);
+          const isRead = curPdf?.isRead || false;
+          const mins   = curPdf?.estimatedMinutes || 0;
+          return React.createElement("button", {
+            onClick: () => onTogglePdfRead(pdfFile?.name),
+            title: isRead
+              ? `Gelezen op ${curPdf?.readAt?.slice(0,10)||"?"} — klik om te resetten`
+              : `Markeer als gelezen${mins ? ` (±${mins} min)` : ""}`,
+            style: {
+              display:"flex", alignItems:"center", gap:"5px",
+              background: isRead ? "rgba(114,182,96,0.15)" : "none",
+              border: `1px solid ${isRead ? "rgba(114,182,96,0.5)" : W.splitBg}`,
+              borderRadius:"5px", padding:"3px 10px",
+              color: isRead ? "#72b660" : W.fgMuted,
+              cursor:"pointer", fontSize:"13px", fontWeight: isRead ? "600" : "400",
+              marginLeft:"auto",  // duwt naar rechts
+            }
+          },
+            React.createElement("span",{style:{
+              width:"14px", height:"14px", borderRadius:"50%",
+              border:`2px solid ${isRead ? "#72b660" : W.fgMuted}`,
+              background: isRead ? "#72b660" : "transparent",
+              display:"flex", alignItems:"center", justifyContent:"center",
+              flexShrink:0, fontSize:"9px", color:W.bg,
+            }}, isRead ? "✓" : ""),
+            isRead ? "gelezen" : "ongelezen"
+          );
+        })()
+        ,pdfDoc&&React.createElement(React.Fragment,null,
           React.createElement("span",{style:{color:W.fgMuted}},"│"),
           React.createElement("button",{onClick:()=>{ const p=Math.max(1,pageNum-1); setPageNum(p); scrollToPage(p); if(pdfDoc) renderNearby(pdfDoc,scale,rotation,p); },style:{background:"none",border:"none",color:W.fg,cursor:"pointer",fontSize:"16px",padding:"0 3px"}},"◀"),
           React.createElement("span",{style:{color:W.statusFg,minWidth:"60px",textAlign:"center"}},pageNum," / ",numPages),
@@ -1788,34 +1863,6 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
               const thumb = thumbCache[p.name];
               const readMins = Math.max(1, Math.round(sizeKb / 50));
 
-            
-  // Laad native PDF outline via PDF.js getOutline()
-  React.useEffect(() => {
-    if (!pdfDoc) { setNativeOutline([]); return; }
-    (async () => {
-      try {
-        const outline = await pdfDoc.getOutline();
-        if (!outline || !outline.length) { setNativeOutline([]); return; }
-        const resolveItem = async (item, depth) => {
-          let page = null;
-          try {
-            if (item.dest) {
-              const dest = typeof item.dest === "string"
-                ? await pdfDoc.getDestination(item.dest)
-                : item.dest;
-              if (dest && dest[0]) page = (await pdfDoc.getPageIndex(dest[0])) + 1;
-            }
-          } catch(e) {}
-          const children = item.items
-            ? await Promise.all(item.items.map(c => resolveItem(c, depth+1)))
-            : [];
-          return { text: item.title||"", page, depth: depth||0, bold: item.bold, children };
-        };
-        const resolved = await Promise.all(outline.map(i => resolveItem(i, 0)));
-        setNativeOutline(resolved);
-      } catch(e) { setNativeOutline([]); }
-    })();
-  }, [pdfDoc]);
 
   return React.createElement("div", {
                 key: p.name,

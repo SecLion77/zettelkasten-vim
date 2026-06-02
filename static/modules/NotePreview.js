@@ -203,8 +203,12 @@ const NotePreview = ({
       const data = await resp.json();
       if (data.ok && data.summary) {
         await onSummarize?.(note, data.summary);
+        // Scroll naar boven zodat de nieuwe samenvatting zichtbaar is
+        setTimeout(() => scrollRef.current?.scrollTo({top: 0, behavior:"smooth"}), 150);
       } else {
-        setSumError(data.error || "Geen samenvatting ontvangen");
+        const msg = data.error || "Geen samenvatting ontvangen";
+        const hint = data.hint || "";
+        setSumError(hint ? `${msg} — ${hint}` : msg);
       }
     } catch(e) {
       setSumError(e.message);
@@ -401,6 +405,11 @@ const NotePreview = ({
                cursor: summarizing ? "not-allowed" : "pointer",
                animation: summarizing ? "ai-pulse 1.4s ease-in-out infinite" : "none" },
     }, summarizing ? "⏳ samenvatten…" : "🧠 samenvatten"),
+    sumError && React.createElement("span", {
+      style:{fontSize:"11px", color:"#e5786d", marginLeft:"6px",
+             maxWidth:"300px", overflow:"hidden", textOverflow:"ellipsis",
+             whiteSpace:"nowrap", verticalAlign:"middle"}
+    }, "⚠ " + sumError),
     sumError && React.createElement("span", {
       title: sumError,
       onClick: () => setSumError(null),

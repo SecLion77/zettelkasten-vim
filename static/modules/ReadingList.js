@@ -3,9 +3,12 @@
 // Velden per notitie: [✓] datum | titel | leestijd
 // Props: notes, onSelectNote, onUpdateNote
 
-const ReadingList = ({ notes = [], onSelectNote, onUpdateNote, onDeleteNote }) => {
+const ReadingList = ({ notes = [], onSelectNote, onUpdateNote, onDeleteNote, serverPdfs = [], onTogglePdfRead = null, onOpenPdf = null }) => {
   const { useState, useMemo, useCallback } = React;
+  const [activeTab,  setActiveTab]  = useState("articles"); // "articles" | "pdfs"
   const [filter, setFilter] = useState("unread");
+  const [pdfFilter, setPdfFilter] = useState("unread"); // "all" | "unread" | "read"
+  const [pdfSearch, setPdfSearch] = useState("");
   const [search, setSearch] = useState("");
   const [sortBy, setSortBy] = useState("date"); // "date" | "readtime_asc" | "readtime_desc"
   const [view, setView] = useState("list");    // "list" | "dupes"
@@ -195,8 +198,20 @@ const ReadingList = ({ notes = [], onSelectNote, onUpdateNote, onDeleteNote }) =
         }, `⚠ ${dupGroups.length} dubbel${dupGroups.length!==1?"en":""}`)
       ),
       React.createElement("div", { style:S.bar },
-        // View-tabs
-        React.createElement("button", {
+        // Hoofd-tabs: Artikelen / PDFs
+        React.createElement("div",{style:{display:"flex",gap:"4px",marginRight:"12px",
+          borderRight:`1px solid ${W.splitBg}`,paddingRight:"12px"}},
+          React.createElement("button",{
+            onClick:()=>setActiveTab("articles"),
+            style:S.pill(activeTab==="articles")
+          },"📖 Artikelen"),
+          React.createElement("button",{
+            onClick:()=>setActiveTab("pdfs"),
+            style:S.pill(activeTab==="pdfs")
+          },`📄 PDFs${serverPdfs.length ? " ("+serverPdfs.length+")" : ""}`)
+        ),
+        // View-tabs (alleen bij artikelen)
+        activeTab==="articles" && React.createElement("button", {
           style:S.pill(view==="list"),
           onClick:()=>setView("list")
         }, "📋 Lijst"),
@@ -242,7 +257,7 @@ const ReadingList = ({ notes = [], onSelectNote, onUpdateNote, onDeleteNote }) =
     ),
 
     // ── Duplicaten-paneel ───────────────────────────────────────────────────────
-    view === "dupes" && React.createElement("div", {
+    activeTab === "articles" && view === "dupes" && React.createElement("div", {
       style:{ flex:1, overflowY:"auto", padding:"16px 20px",
         WebkitOverflowScrolling:"touch" }
     },
@@ -378,7 +393,7 @@ const ReadingList = ({ notes = [], onSelectNote, onUpdateNote, onDeleteNote }) =
     ),
 
     // ── Tabel (alleen in lijst-weergave) ────────────────────────────────────────
-    view === "list" && (items.length === 0
+    activeTab === "articles" && view === "list" && (items.length === 0
       ? React.createElement("div", { style:S.empty },
           React.createElement("div", { style:{ fontSize:"40px" } }, "📭"),
           React.createElement("div", null, filter !== "all"
@@ -465,5 +480,115 @@ const ReadingList = ({ notes = [], onSelectNote, onUpdateNote, onDeleteNote }) =
           )
         )
     )
+    // ── PDF Leeslijst tab ─────────────────────────────────────────────────
+    ,activeTab === "pdfs" && (() => {
+      const fmtDate = d => { if(!d) return "—"; const dt=new Date(d); return dt.toLocaleDateString("nl-NL",{day:"2-digit",month:"short"}); };
+      const pdfs = serverPdfs
+        .filter(p => {
+          if (pdfFilter==="unread" && p.isRead) return false;
+          if (pdfFilter==="read"   && !p.isRead) return false;
+          if (pdfSearch && !p.name.toLowerCase().includes(pdfSearch.toLowerCase())) return false;
+          return true;
+        })
+        .sort((a,b) => new Date(b.modified)-new Date(a.modified));
+      const unread = serverPdfs.filter(p=>!p.isRead).length;
+      const read   = serverPdfs.filter(p=> p.isRead).length;
+      return React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:"10px"}},
+        // Filterbar
+        React.createElement("div",{style:{display:"flex",gap:"6px",alignItems:"center",flexWrap:"wrap"}},
+          ["all","unread","read"].map(f=>
+            React.createElement("button",{key:f,onClick:()=>setPdfFilter(f),style:S.pill(pdfFilter===f)},
+              f==="all"?"Alle":f==="unread"?`Ongelezen (${unread})`:`Gelezen (${read})`)
+          ),
+          React.createElement("input",{
+            value:pdfSearch, onChange:e=>setPdfSearch(e.target.value),
+            placeholder:"Zoek PDF…",
+            style:{marginLeft:"auto",padding:"4px 10px",borderRadius:"6px",
+              background:W.bg2,border:`1px solid ${W.splitBg}`,
+              color:W.fg,fontSize:"13px",outline:"none",width:"160px"}
+          })
+        ),
+        // PDF tabel
+        React.createElement("div",{style:{borderRadius:"8px",overflow:"hidden",
+          border:`1px solid ${W.splitBg}`}},
+          // Koptekst
+          React.createElement("div",{style:{display:"grid",
+            gridTemplateColumns:"40px 80px 1fr 70px 80px",
+            background:W.bg2,borderBottom:`1px solid ${W.splitBg}`,
+            padding:"6px 0",fontSize:"10px",color:W.fgMuted,letterSpacing:"1px"
+          }},
+            ["","DATUM","BESTANDSNAAM","PAG","LEESTIJD"].map((h,i)=>
+              React.createElement("div",{key:i,style:{padding:"0 10px",
+                textAlign:i>=3?"right":"left"}},h)
+            )
+          ),
+          pdfs.length===0 && React.createElement("div",{
+            style:{padding:"24px",textAlign:"center",color:W.fgMuted,fontSize:"13px"}
+          },pdfFilter==="unread"?"Alle PDFs gelezen 🎉":"Geen PDFs gevonden"),
+          pdfs.map((pdf,i)=>{
+            const [hov,setHov] = [false,()=>{}]; // simplified hover
+            return React.createElement("div",{
+              key:pdf.name,
+              style:{display:"grid",gridTemplateColumns:"40px 80px 1fr 70px 80px",
+                borderBottom: i<pdfs.length-1 ? `1px solid ${W.splitBg}` : "none",
+                background: pdf.isRead ? "rgba(114,182,96,0.04)" : "transparent",
+                cursor:"pointer",
+                transition:"background .1s",
+              },
+              onClick:()=>onOpenPdf?.(pdf.name),
+              onMouseEnter:e=>e.currentTarget.style.background=pdf.isRead?"rgba(114,182,96,0.08)":"rgba(255,255,255,0.03)",
+              onMouseLeave:e=>e.currentTarget.style.background=pdf.isRead?"rgba(114,182,96,0.04)":"transparent",
+            },
+              // Checkbox
+              React.createElement("div",{
+                style:{display:"flex",alignItems:"center",justifyContent:"center",padding:"10px 6px"},
+                onClick:e=>{ e.stopPropagation(); onTogglePdfRead?.(pdf.name); }
+              },
+                React.createElement("div",{
+                  title: pdf.isRead?"Markeer als ongelezen":"Markeer als gelezen",
+                  style:{width:"18px",height:"18px",borderRadius:"4px",
+                    border:`2px solid ${pdf.isRead?"#72b660":W.splitBg}`,
+                    background:pdf.isRead?"#72b660":"transparent",
+                    display:"flex",alignItems:"center",justifyContent:"center",
+                    flexShrink:0,transition:"all .12s"}
+                },
+                  pdf.isRead&&React.createElement("span",{
+                    style:{color:W.bg,fontSize:"11px",fontWeight:"bold",lineHeight:1}
+                  },"✓")
+                )
+              ),
+              // Datum
+              React.createElement("div",{style:{display:"flex",alignItems:"center",
+                padding:"10px",fontSize:"12px",color:W.fgMuted}},
+                fmtDate(pdf.readAt||pdf.modified)
+              ),
+              // Naam
+              React.createElement("div",{style:{display:"flex",alignItems:"center",
+                padding:"10px",fontSize:"13px",
+                color:pdf.isRead?W.fgMuted:W.fg,
+                fontWeight:pdf.isRead?"400":"500",
+                overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},
+                pdf.isRead&&React.createElement("span",{
+                  style:{marginRight:"6px",fontSize:"11px",color:"#72b660"}
+                },"✓ "),
+                pdf.name.replace(/\.pdf$/i,"")
+              ),
+              // Pagina's
+              React.createElement("div",{style:{display:"flex",alignItems:"center",
+                justifyContent:"flex-end",padding:"10px",
+                fontSize:"12px",color:W.fgDim}},
+                pdf.pageCount||"—"
+              ),
+              // Leestijd
+              React.createElement("div",{style:{display:"flex",alignItems:"center",
+                justifyContent:"flex-end",padding:"10px 16px 10px 0",
+                fontSize:"12px",color:W.fgDim}},
+                pdf.estimatedMinutes ? `${pdf.estimatedMinutes} min` : "—"
+              )
+            );
+          })
+        )
+      );
+    })()
   );
 };

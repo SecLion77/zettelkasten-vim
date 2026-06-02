@@ -252,10 +252,69 @@ class VaultManager:
         return {"ok": True}
 
     # PDFs
+    def _pdf_meta_path(self):
+        return self.vault / ".zettelkasten_pdf_meta.json"
+
+    def _load_pdf_meta(self) -> dict:
+        p = self._pdf_meta_path()
+        if not p.exists(): return {}
+        try: return json.loads(p.read_text("utf-8"))
+        except Exception: return {}
+
+    def _save_pdf_meta(self, meta: dict):
+        self._pdf_meta_path().write_text(
+            json.dumps(meta, ensure_ascii=False, indent=2), "utf-8")
+
+    def toggle_pdf_read(self, filename: str) -> dict:
+        """Zet isRead van een PDF om. Geeft het bijgewerkte meta-object terug."""
+        meta = self._load_pdf_meta()
+        entry = meta.get(filename, {})
+        new_val = not entry.get("isRead", False)
+        entry["isRead"] = new_val
+        entry["readAt"] = datetime.now().isoformat() if new_val else None
+        meta[filename] = entry
+        self._save_pdf_meta(meta)
+        return entry
+
+    def _pdf_page_count(self, filename: str) -> int:
+        """Tel pagina's van een PDF zonder zware rendering."""
+        try:
+            import pypdf as _pp
+            p = self.pdf_dir / filename
+            if not p.exists(): return 0
+            with open(p, "rb") as f:
+                return len(_pp.PdfReader(f).pages)
+        except Exception:
+            try:
+                # Fallback: schat op basis van bestandsgrootte (~50KB/pag)
+                size = (self.pdf_dir / filename).stat().st_size
+                return max(1, size // 51200)
+            except Exception:
+                return 0
+
     def list_pdfs(self):
-        return [{"name":p.name,"size":p.stat().st_size,
-                 "modified":datetime.fromtimestamp(p.stat().st_mtime).isoformat()}
-                for p in sorted(self.pdf_dir.glob("*.pdf"),key=lambda x:x.stat().st_mtime,reverse=True)]
+        meta = self._load_pdf_meta()
+        result = []
+        for p in sorted(self.pdf_dir.glob("*.pdf"),
+                        key=lambda x: x.stat().st_mtime, reverse=True):
+            m = meta.get(p.name, {})
+            # Sla paginatelling op in meta als die nog niet bekend is
+            if "pageCount" not in m:
+                m["pageCount"] = self._pdf_page_count(p.name)
+                m["estimatedMinutes"] = max(1, round(m["pageCount"] * 1.5))
+                meta[p.name] = m
+                try: self._save_pdf_meta(meta)
+                except Exception: pass
+            result.append({
+                "name":             p.name,
+                "size":             p.stat().st_size,
+                "modified":         datetime.fromtimestamp(p.stat().st_mtime).isoformat(),
+                "isRead":           m.get("isRead", False),
+                "readAt":           m.get("readAt"),
+                "pageCount":        m.get("pageCount", 0),
+                "estimatedMinutes": m.get("estimatedMinutes", 0),
+            })
+        return result
     def save_pdf(self, filename, data):
         safe="".join(c if c.isalnum() or c in "-_." else "_" for c in filename)
         (self.pdf_dir/safe).write_bytes(data); return safe
@@ -2216,6 +2275,12 @@ class ZKHandler(BaseHTTPRequestHandler):
             a=self._body()
             if isinstance(a,list): self.vault.save_img_annotations(a); return self._send(200,{"ok":True})
             return self._send(400,{"error":"Verwacht een lijst"})
+        if p=="/api/pdf-read-toggle":
+            body = self._body()
+            name = body.get("name","")
+            if not name: return self._send(400,{"error":"name vereist"})
+            entry = self.vault.toggle_pdf_read(name)
+            return self._send(200,{"ok":True,"name":name,**entry})
         if p=="/api/pdfs":
             ct=self.headers.get("Content-Type","")
             if "multipart" in ct:
@@ -3864,7 +3929,8 @@ class ZKHandler(BaseHTTPRequestHandler):
         """Genereer een AI-samenvatting van een notitie en geef die terug."""
         body  = self._body()
         nid   = body.get("note_id","")
-        model = self._best_local_model(body.get("model",""))
+        model = body.get("model","") or self._best_local_model("")
+        # Gebruik cloud-model als dat meegegeven is (niet forceren naar lokaal)
 
         # Haal notitie op
         note = next((n for n in self.vault.load_notes() if n["id"]==nid), None)
@@ -3894,7 +3960,19 @@ class ZKHandler(BaseHTTPRequestHandler):
 
         summary = response_text.strip()
         if not summary:
-            return self._send(500, {"error":"Model gaf geen samenvatting"})
+            hint = ""
+            try:
+                d = self._ollama_post("/api/tags", {}, 5)
+                has_local = bool(d.get("models"))
+            except Exception:
+                has_local = False
+            has_cloud = any(self.vault.get_api_key(p)
+                           for p in ["anthropic","openai","google","openrouter"])
+            if not has_cloud and not has_local:
+                hint = "Geen AI beschikbaar. Start Ollama of stel een API-sleutel in."
+            elif not has_local and not has_cloud:
+                hint = f"Model '{model}' niet gevonden. Probeer: ollama pull {model}"
+            return self._send(500, {"error":"Model gaf geen samenvatting", "hint": hint})
 
         # ── Robuuste HTML/CSS sanitering ─────────────────────────────────────────
         import re as _re_s
@@ -5452,13 +5530,44 @@ class ZKHandler(BaseHTTPRequestHandler):
 
         # Gebruik dezelfde LLM infra als de reguliere import
         try:
+            # Diagnose welke provider beschikbaar is
+            import urllib.request as _uq
+            def _check_ollama():
+                try:
+                    _uq.urlopen("http://localhost:11434/api/tags", timeout=3)
+                    return True
+                except Exception:
+                    return False
+            has_cloud = any(self.vault.get_api_key(p)
+                           for p in ["anthropic","openai","google","openrouter","mistral"])
+            has_ollama = _check_ollama()
+
+            if not has_cloud and not has_ollama:
+                return self._send(200, {"ok": False,
+                    "error": "Geen AI beschikbaar",
+                    "hint": "Start Ollama (ollama serve) of stel een API-sleutel in via Instellingen → AI-model."})
+
             summary   = self._call_llm_for_summary(context, model)
             note_type = self._call_llm_for_type(context, model)
             author    = self._call_llm_for_author(context, model)
+
+            if not summary and not has_cloud and has_ollama:
+                return self._send(200, {"ok": False,
+                    "error": "Ollama gaf geen samenvatting terug",
+                    "hint": f"Model '{model}' is mogelijk niet geïnstalleerd. Probeer: ollama pull {model}"})
+
             return self._send(200, {"ok": True, "summary": summary,
                                     "noteType": note_type, "author": author})
         except Exception as e:
-            return self._send(200, {"ok": False, "error": str(e)})
+            err = str(e)
+            hint = ""
+            if "timeout" in err.lower() or "timed out" in err.lower():
+                hint = "Ollama laadt het model — probeer opnieuw over 30 seconden."
+            elif "connection refused" in err.lower():
+                hint = "Ollama draait niet. Start met: ollama serve"
+            elif "api" in err.lower() and ("401" in err or "403" in err):
+                hint = "API-sleutel ongeldig. Controleer Instellingen → AI-model."
+            return self._send(200, {"ok": False, "error": err, "hint": hint})
 
     def _download_images(self, image_urls: list, base_url: str = "") -> list:
         """Download en sla afbeeldingen op in de vault. Geeft [{name, url}] terug.

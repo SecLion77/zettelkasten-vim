@@ -27,18 +27,29 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, onRefreshPd
   const prevAiLoading  = React.useRef(false);
   React.useEffect(() => {
     const isLoading = importPreview?.aiLoading;
-    if (prevAiLoading.current && !isLoading && summaryRef.current) {
-      // AI net klaar: scroll naar samenvatting voor review
-      setTimeout(() => summaryRef.current?.scrollIntoView({behavior:"smooth", block:"nearest"}), 200);
+    if (isLoading) {
+      // Start timer
+      setAiElapsed(0); setAiError(null);
+      aiTimerRef.current = setInterval(() => setAiElapsed(s => s + 1), 1000);
+    } else {
+      clearInterval(aiTimerRef.current);
+      if (prevAiLoading.current) {
+        // AI net klaar: scroll naar samenvatting
+        setTimeout(() => summaryRef.current?.scrollIntoView({behavior:"smooth", block:"nearest"}), 200);
+      }
     }
     prevAiLoading.current = !!isLoading;
+    return () => clearInterval(aiTimerRef.current);
   }, [importPreview?.aiLoading]);
   const [busy,           setBusy]           = useState(false);
   const [importing,      setImporting]      = useState(false);
   const [importStep,     setImportStep]     = useState(0);
   const [importElapsed,  setImportElapsed]  = useState(0);
   const [jinaLoading,    setJinaLoading]    = useState(false);
-  const summaryRef  = React.useRef(null); // voor auto-scroll naar samenvatting
+  const summaryRef  = React.useRef(null);
+  const [aiElapsed,   setAiElapsed]   = useState(0);  // seconden AI bezig
+  const [aiError,     setAiError]     = useState(null); // {error, hint} als AI mislukt
+  const aiTimerRef  = React.useRef(null);
   const [saveWarning, setSaveWarning]  = useState(""); // waarschuwing bij leeg veld
   const importTimerRef = React.useRef(null);
   const [error,          setError]          = useState(null);
@@ -55,7 +66,8 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, onRefreshPd
   const [extractedAuthor,setExtractedAuthor]= useState("");    // automatisch gevonden auteur
   const [dupNote,        setDupNote]        = useState(null);
   const urlRef      = useRef(null);
-  const prevPreview = useRef(importPreview);
+  const prevPreview    = useRef(importPreview);
+  const prevPreviewUrl = React.useRef("");
 
   // Markdown-import state
   const [mdFile,         setMdFile]         = useState(null);
@@ -188,9 +200,16 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, onRefreshPd
           if (ai.author)   { setExtractedAuthor(ai.author); setEditAuthor(a => a || ai.author); }
         } else {
           setImportPreview(p => p ? {...p, aiLoading: false} : p);
+          if (aiRes) setAiError({error: aiRes.error||"Geen samenvatting", hint: aiRes.hint||""});
         }
       } catch(_e) {
         setImportPreview(p => p ? {...p, aiLoading: false} : p);
+        setAiError({
+          error: _e.name==="AbortError" ? "Timeout (>150s)" : (_e.message||"onbekend"),
+          hint:  _e.name==="AbortError"
+            ? "Ollama laadt het model. Probeer opnieuw of kies een kleiner model."
+            : "Controleer of Ollama draait of een API-sleutel is ingesteld.",
+        });
       }
 
       updateJob && updateJob(jid, {status:"done", result:res.title?.slice(0,44)||"Klaar"});
@@ -266,11 +285,24 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, onRefreshPd
     if (importPreview === prevPreview.current) return;
     prevPreview.current = importPreview;
     if (!importPreview) return;
-    const {md, title, summary, tags: newTags} = initFromPreview(importPreview);
-    setEditMd(sanitizeText(md)); setEditTitle(title); setEditSummary(sanitizeText(summary)); setTags(newTags);
-    setSaved(false); setImporting(false);
 
-    // Automatische tag-suggestie direct na import
+    const {md, title, summary, tags: newTags} = initFromPreview(importPreview);
+    const isNewImport = importPreview.url !== prevPreviewUrl.current;
+    prevPreviewUrl.current = importPreview.url;
+
+    if (isNewImport) {
+      // Nieuwe import: alles resetten
+      setEditMd(sanitizeText(md)); setEditTitle(title);
+      setEditSummary(sanitizeText(summary)); setTags(newTags);
+      setSaved(false); setImporting(false);
+    } else {
+      // AI-update van dezelfde import: alleen samenvatting bijwerken
+      // NIET de tags/type resetten — AI heeft die al ingesteld
+      if (summary) setEditSummary(s => s || sanitizeText(summary));
+      return; // geen tag-suggestie opnieuw starten
+    }
+
+    // Automatische tag-suggestie — alleen bij nieuwe import
     if (llmModel && (md || summary)) {
       setAiTagsLoading(true);
       setSuggestedType(null); setSelectedType("");
@@ -477,6 +509,7 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, onRefreshPd
       return;
     }
     setSaveWarning("");
+    setAiError(null); setAiElapsed(0);
     // Bouw content op: samenvatting bovenaan als callout, dan originele tekst
     let content = "";
     if (editSummary.trim()) {
@@ -850,30 +883,68 @@ const WebImporter = ({llmModel, allTags, onAddNote, onRefreshImages, onRefreshPd
           display:"flex", flexDirection:"column", gap:"14px", minHeight:0, WebkitOverflowScrolling:"touch",}},
 
           // ── AI Resultaten banner (toont status + scroll-hint) ────────────────
-          !saved && importPreview?.aiLoading && React.createElement("div", {style:{
-            background:W.bg3||"rgba(138,198,242,0.06)",
-            border:`1px solid ${W.blueBorder||"rgba(138,198,242,0.2)"}`,
-            borderRadius:"7px", padding:"10px 14px",
-            display:"flex", alignItems:"center", gap:"10px",
-          }},
-            React.createElement("span",{style:{animation:"ai-pulse 1.2s ease-in-out infinite",fontSize:"16px"}},"🧠"),
-            React.createElement("div",null,
-              React.createElement("div",{style:{fontSize:"13px",color:W.blue,fontWeight:"600"}},
-                "AI verwerkt samenvatting…"),
-              React.createElement("div",{style:{fontSize:"11px",color:W.fgMuted,marginTop:"2px"}},
-                "Opslaan is geblokkeerd totdat alle velden zijn ingevuld.")
-            )
-          ),
+          // ── AI voortgangsindicator ─────────────────────────────────────────────
+          !saved && (() => {
+            const isLoading = importPreview?.aiLoading;
+            const hasSummary = !!(importPreview?.summary);
+            const hint = aiElapsed > 60
+              ? "Ollama laadt het model — bijna klaar of verhoog timeout"
+              : aiElapsed > 30
+              ? "Ollama verwerkt de tekst…"
+              : null;
 
-          !saved && !importPreview?.aiLoading && importPreview?.summary && React.createElement("div", {style:{
-            background:"rgba(114,182,96,0.07)",
-            border:"1px solid rgba(114,182,96,0.25)",
-            borderRadius:"7px", padding:"9px 14px",
-            display:"flex", alignItems:"center", gap:"8px",
-            fontSize:"12px", color:W.comment||"#72b660",
-          }},
-            "✓ AI klaar — controleer de samenvatting hieronder en sla op"
-          ),
+            if (isLoading) return React.createElement("div", {style:{
+              background:W.bg3||"rgba(138,198,242,0.05)",
+              border:`1px solid ${W.blueBorder||"rgba(138,198,242,0.2)"}`,
+              borderRadius:"7px", padding:"10px 14px",
+            }},
+              React.createElement("div",{style:{display:"flex",alignItems:"center",gap:"10px",marginBottom:"8px"}},
+                React.createElement("span",{style:{animation:"ai-pulse 1.2s ease-in-out infinite"}},"🧠"),
+                React.createElement("div",{style:{flex:1}},
+                  React.createElement("div",{style:{fontSize:"13px",color:W.blue,fontWeight:"600",display:"flex",justifyContent:"space-between"}},
+                    React.createElement("span",null,"AI samenvatting genereren…"),
+                    React.createElement("span",{style:{fontWeight:"400",fontVariantNumeric:"tabular-nums"}},aiElapsed+"s")
+                  ),
+                  hint && React.createElement("div",{style:{fontSize:"11px",color:W.fgMuted,marginTop:"2px"}},hint)
+                )
+              ),
+              // Voortgangsbalk op basis van tijd (0-120s)
+              React.createElement("div",{style:{height:"3px",background:W.splitBg,borderRadius:"2px",overflow:"hidden"}},
+                React.createElement("div",{style:{
+                  height:"100%",borderRadius:"2px",background:W.blue,
+                  width: aiElapsed < 5 ? "5%"
+                    : aiElapsed < 30  ? `${5 + (aiElapsed/30)*40}%`
+                    : aiElapsed < 90  ? `${45 + ((aiElapsed-30)/60)*40}%`
+                    : "92%",
+                  transition:"width 1s linear",
+                }})
+              )
+            );
+
+            if (aiError) return React.createElement("div",{style:{
+              background:"rgba(229,120,109,0.07)",
+              border:"1px solid rgba(229,120,109,0.25)",
+              borderRadius:"7px", padding:"10px 14px",
+            }},
+              React.createElement("div",{style:{fontSize:"13px",color:W.orange,fontWeight:"600",marginBottom:"4px"}},
+                "⚠ AI samenvatting mislukt — "+aiError.error),
+              aiError.hint && React.createElement("div",{style:{fontSize:"12px",color:W.fgMuted}},
+                "💡 ",aiError.hint),
+              React.createElement("div",{style:{fontSize:"11px",color:W.fgDim,marginTop:"6px"}},
+                "Je kunt de samenvatting zelf invullen in het veld hieronder en dan opslaan.")
+            );
+
+            if (hasSummary) return React.createElement("div",{style:{
+              background:"rgba(114,182,96,0.07)",
+              border:"1px solid rgba(114,182,96,0.25)",
+              borderRadius:"7px", padding:"9px 14px",
+              fontSize:"12px", color:W.comment||"#72b660",
+              display:"flex", alignItems:"center", gap:"8px",
+            }},
+              "✓ AI klaar — controleer de samenvatting hieronder en sla op"
+            );
+            return null;
+          })(),
 
           // ── Notitietype ─────────────────────────────────────────────────────
           !saved && React.createElement("div", {style:{
