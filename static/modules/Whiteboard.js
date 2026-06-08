@@ -905,6 +905,9 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
         dirtyRef.current = true;
         setEditingCon(null);
       }
+      // Lege canvas + linkerknop: begin panning
+      isPanning.current = true;
+      panStart.current  = { x: sx, y: sy, ox: viewRef.current.ox, oy: viewRef.current.oy };
       setSelected(null);
       setConnectFrom(null);
     }
@@ -1836,7 +1839,11 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
 
       // AI analyse knop
       llmModel && React.createElement("button", {
-        onClick: () => { setAiPanel(p => !p); if (!aiPanel) { setAiMode("analyse"); } },
+        onClick: () => {
+          const opening = !aiPanel;
+          setAiPanel(opening);
+          if (opening) { setAiMode("analyse"); runAiAnalyse(); }
+        },
         title: "AI-analyse van het canvas",
         style: {
           background: aiPanel ? "rgba(215,135,255,0.12)" : "transparent",
@@ -1907,6 +1914,93 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
                        fontSize: "11px", cursor: "pointer" }
             }, n.title.slice(0, 30))
           )
+      )
+    ),
+
+    // ── AI analyse panel ──────────────────────────────────────────────────────
+    aiPanel && React.createElement("div", {
+      style: {
+        position:"absolute", top:"48px", right:"8px", width:"320px",
+        background:W.bg2, border:`1px solid rgba(215,135,255,0.3)`,
+        borderRadius:"10px", zIndex:200, display:"flex", flexDirection:"column",
+        boxShadow:"0 4px 24px rgba(0,0,0,0.4)", maxHeight:"60vh", overflow:"hidden",
+      }
+    },
+      // Header
+      React.createElement("div",{style:{
+        display:"flex",alignItems:"center",gap:"6px",padding:"10px 14px",
+        borderBottom:`1px solid ${W.splitBg}`,flexShrink:0,
+      }},
+        React.createElement("span",{style:{fontSize:"15px"}},"🤖"),
+        React.createElement("span",{style:{fontSize:"13px",fontWeight:"600",color:W.purple||"#d787ff",flex:1}},"AI Canvas Analyse"),
+        // Mode knoppen
+        ["analyse","synthese","chat"].map(m=>
+          React.createElement("button",{
+            key:m, onClick:()=>{ setAiMode(m); if(m==="analyse") runAiAnalyse(); if(m==="synthese") runAiSynthese(); },
+            style:{
+              padding:"2px 8px",borderRadius:"4px",fontSize:"11px",cursor:"pointer",
+              background: aiMode===m ? "rgba(215,135,255,0.2)" : "none",
+              border:`1px solid ${aiMode===m ? "rgba(215,135,255,0.5)" : W.splitBg}`,
+              color: aiMode===m ? (W.purple||"#d787ff") : W.fgMuted,
+            }
+          }, m)
+        ),
+        React.createElement("button",{
+          onClick:()=>setAiPanel(false),
+          style:{background:"none",border:"none",color:W.fgMuted,cursor:"pointer",fontSize:"16px",padding:"0 4px"}
+        },"×")
+      ),
+      // Resultaat
+      React.createElement("div",{
+        style:{flex:1,overflowY:"auto",padding:"12px 14px",
+          fontSize:"13px",lineHeight:"1.65",color:W.fg,whiteSpace:"pre-wrap"}
+      },
+        aiStreaming
+          ? React.createElement(React.Fragment,null,
+              React.createElement("span",{style:{animation:"ai-pulse 1.2s ease-in-out infinite"}},"🧠 "),
+              aiResult || "Analyseren…"
+            )
+          : aiResult
+            ? React.createElement(React.Fragment,null,
+                React.createElement("div",{style:{whiteSpace:"pre-wrap",marginBottom:"10px"}},aiResult),
+                React.createElement("div",{style:{display:"flex",gap:"6px",flexShrink:0}},
+                  React.createElement("button",{
+                    onClick:runAiAnalyse,
+                    style:{padding:"4px 10px",borderRadius:"5px",fontSize:"12px",cursor:"pointer",
+                      background:"none",border:`1px solid ${W.splitBg}`,color:W.fgMuted}
+                  },"↻ Opnieuw"),
+                  onCreateNote && React.createElement("button",{
+                    onClick:saveAiAsNote,
+                    style:{padding:"4px 10px",borderRadius:"5px",fontSize:"12px",cursor:"pointer",
+                      background:"rgba(215,135,255,0.1)",
+                      border:"1px solid rgba(215,135,255,0.3)",
+                      color:W.purple||"#d787ff"}
+                  },"→ Opslaan als notitie")
+                )
+              )
+          : React.createElement("div",{style:{color:W.fgDim,fontStyle:"italic"}},
+              cards.length < 2 ? "Voeg minimaal 2 kaarten toe om te analyseren." : "Klik een modus om te starten.")
+      ),
+      // Chat invoer
+      aiMode === "chat" && React.createElement("div",{
+        style:{padding:"8px 10px",borderTop:`1px solid ${W.splitBg}`,flexShrink:0,
+          display:"flex",gap:"6px"}
+      },
+        React.createElement("input",{
+          placeholder:"Stel een vraag over het canvas…",
+          style:{flex:1,background:W.bg,border:`1px solid ${W.splitBg}`,
+            borderRadius:"6px",padding:"6px 10px",color:W.fg,fontSize:"12px",outline:"none"},
+          onKeyDown:e=>{ if(e.key==="Enter"&&e.target.value.trim()){ runAiChat(e.target.value.trim()); e.target.value=""; }}
+        }),
+        React.createElement("button",{
+          onClick:()=>{
+            const inp=document.querySelector(".wb-chat-input");
+            if(inp&&inp.value.trim()){runAiChat(inp.value.trim());inp.value="";}
+          },
+          style:{padding:"6px 12px",borderRadius:"6px",background:"rgba(215,135,255,0.1)",
+            border:"1px solid rgba(215,135,255,0.3)",color:W.purple||"#d787ff",
+            cursor:"pointer",fontSize:"12px"}
+        },"→")
       )
     ),
 
