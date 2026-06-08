@@ -1057,6 +1057,7 @@ const App = () => {
   const [pdfNotes,     setPdfNotes]    = useState([]);
   const [imgNotes,     setImgNotes]    = useState([]);
   const [serverPdfs,   setServerPdfs]  = useState([]);
+  const [isOffline,    setIsOffline]   = useState(!navigator.onLine);
   const [serverImages, setServerImages]= useState([]);
   const [llmModel,     setLlmModel]    = useState("gemma3:12b");
   const [aiMindmap,    setAiMindmap]   = useState(null);
@@ -1231,7 +1232,19 @@ const App = () => {
         if (ns.length > 0) setSelId(ns[0].id);
         setLoaded(true);
       } catch(e) {
-        setError("Kan server niet bereiken.\nStart de server met: python3 server.py");
+        // Offline of server niet bereikbaar — probeer vanuit service worker cache
+        setIsOffline(true);
+        try {
+          const [ns, as] = await Promise.all([
+            NoteStore.load().catch(()=>[]),
+            AnnotationStore.load().catch(()=>[]),
+          ]);
+          setNotes(ns||[]); setPdfNotes(as||[]);
+          if ((ns||[]).length > 0) setSelId(ns[0].id);
+          setLoaded(true); // app werkt in offline-modus
+        } catch(e2) {
+          setError("Kan server niet bereiken.\nStart de server met: python3 server.py");
+        }
       }
     };
     // Subscribe: NoteStore of AnnotationStore wijzigt → App-state bijwerken
@@ -1242,6 +1255,25 @@ const App = () => {
   }, []);
 
   const refreshPdfs   = async () => { setServerPdfs(await PDFService.listPdfs()); };
+
+  // ── Online/offline detectie ───────────────────────────────────────────
+  React.useEffect(() => {
+    const goOnline = async () => {
+      setIsOffline(false);
+      window.dispatchEvent(new CustomEvent("zk-online"));
+    };
+    const goOffline = () => {
+      setIsOffline(true);
+      window.dispatchEvent(new CustomEvent("zk-offline"));
+    };
+    window.addEventListener("online",  goOnline);
+    window.addEventListener("offline", goOffline);
+    return () => {
+      window.removeEventListener("online",  goOnline);
+      window.removeEventListener("offline", goOffline);
+    };
+  }, []);
+
   const refreshImages = async () => { setServerImages(await api.get("/images")||[]); };
 
   // ── Note helpers (allTags is nog nodig voor andere tabs) ─────────────────

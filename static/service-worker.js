@@ -1,6 +1,6 @@
 // ── Zettelkasten Service Worker ────────────────────────────────────────────
 // Versie: verhoog bij elke deploy om de cache te vernieuwen
-const SW_VERSION   = "zk-sw-v8";  // v3 → wist v2 cache inclusief modules
+const SW_VERSION   = "zk-sw-v9";  // v3 → wist v2 cache inclusief modules
 const SHELL_CACHE  = `${SW_VERSION}-shell`;   // statische bestanden
 const API_CACHE    = `${SW_VERSION}-api`;      // gecachede API-responses
 const IDB_NAME     = "zettelkasten-offline";
@@ -224,10 +224,23 @@ self.addEventListener("fetch", (event) => {
   // GET: LLM/import routes → NOOIT intercepteren (streaming + lange responses)
   const isLLMorImport = url.pathname.startsWith("/api/llm")
     || url.pathname.startsWith("/api/import")
-    || url.pathname.startsWith("/api/pdf")
-    || url.pathname.startsWith("/api/images");
+    || url.pathname.startsWith("/api/pdf-index") // zware indexering nooit cachen
+    || url.pathname.startsWith("/api/images");   // image uploads nooit cachen
   if (req.method === "GET" && isLLMorImport) {
     return; // direct doorgeven aan browser
+  }
+  // PDF-bestanden: cache bij eerste bezoek voor offline lezen
+  if (req.method === "GET" && url.pathname.startsWith("/api/pdf/")) {
+    event.respondWith(cachePdfFile(req));
+    return;
+  }
+  // PDF-lijst en config: netwerk eerst, cache als fallback
+  if (req.method === "GET" && (
+      url.pathname === "/api/pdfs" ||
+      url.pathname === "/api/config" ||
+      url.pathname === "/api/images-list")) {
+    event.respondWith(networkFirstApiCache(req));
+    return;
   }
   // GET: overige /api/ routes (notes, tags, version) → Network First
   if (req.method === "GET" && url.pathname.startsWith("/api/")) {
@@ -331,6 +344,20 @@ async function networkFirstNoCache(req) {
         headers: { "Content-Type": "application/json", "X-Served-By": "zk-sw-idb" },
       });
     }
+    // Geef lege defaults terug voor niet-kritieke endpoints
+    const pathname = new URL(req.url).pathname;
+    const emptyDefaults = {
+      "/api/config":       JSON.stringify({}),
+      "/api/pdfs":         JSON.stringify([]),
+      "/api/images-list":  JSON.stringify([]),
+    };
+    const fallback = emptyDefaults[pathname];
+    if (fallback) {
+      return new Response(fallback, {
+        status: 200,
+        headers: { "Content-Type": "application/json", "X-Offline-Default": "true" },
+      });
+    }
     return new Response(JSON.stringify({ error: "Offline", offline: true }), {
       status: 503, headers: { "Content-Type": "application/json" },
     });
@@ -377,6 +404,30 @@ async function networkFirstApiCache(req) {
   }
 }
 
+
+// ── Strategie 4: PDF-bestanden — cache bij eerste open, offline beschikbaar ──
+const PDF_CACHE = `${SW_VERSION}-pdfs`;
+
+async function cachePdfFile(req) {
+  const cache = await caches.open(PDF_CACHE);
+  // Cache first: al gecached? Direct serveren
+  const cached = await cache.match(req);
+  if (cached) return cached;
+  // Niet gecached: ophalen en opslaan
+  try {
+    const res = await fetch(req.clone(), { signal: AbortSignal.timeout(30000) });
+    if (res.ok) {
+      cache.put(req, res.clone()); // async opslaan, niet wachten
+    }
+    return res;
+  } catch {
+    // Offline en niet gecached
+    return new Response(
+      JSON.stringify({ error: "PDF niet offline beschikbaar", offline: true }),
+      { status: 503, headers: { "Content-Type": "application/json" } }
+    );
+  }
+}
 
 // ── Strategie 3: Mutaties → sync-queue als offline ──────────────────────────
 async function handleMutation(req) {
