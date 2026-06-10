@@ -1,6 +1,6 @@
 // ── Zettelkasten Service Worker ────────────────────────────────────────────
 // Versie: verhoog bij elke deploy om de cache te vernieuwen
-const SW_VERSION   = "zk-sw-v9";  // v3 → wist v2 cache inclusief modules
+const SW_VERSION  = "zk-sw-v10";  // v3 → wist v2 cache inclusief modules
 const SHELL_CACHE  = `${SW_VERSION}-shell`;   // statische bestanden
 const API_CACHE    = `${SW_VERSION}-api`;      // gecachede API-responses
 const IDB_NAME     = "zettelkasten-offline";
@@ -47,6 +47,9 @@ const SHELL_ASSETS = [
   "/modules/ReviewPanel.js",
   "/modules/BookLibrary.js",
   "/modules/ObjectFields.js",
+  "/modules/offlineStore.js",
+  "/modules/NotesMeta.js",
+  "/modules/sync.js",
 ];
 
 // API-routes die we cachen voor offline lezen
@@ -225,7 +228,8 @@ self.addEventListener("fetch", (event) => {
   const isLLMorImport = url.pathname.startsWith("/api/llm")
     || url.pathname.startsWith("/api/import")
     || url.pathname.startsWith("/api/pdf-index") // zware indexering nooit cachen
-    || url.pathname.startsWith("/api/images");   // image uploads nooit cachen
+    || url.pathname.startsWith("/api/images/");  // image uploads nooit cachen
+  // NB: /api/images (lijst) wél intercepteren voor offline defaults
   if (req.method === "GET" && isLLMorImport) {
     return; // direct doorgeven aan browser
   }
@@ -256,6 +260,19 @@ self.addEventListener("fetch", (event) => {
       url.pathname === "/index.html" ||
       url.pathname.endsWith(".html"))) {
     event.respondWith(networkFirstWithCache(req));
+    return;
+  }
+  // Navigatie-request (bijv. iPad opent app via home-screen)
+  if (req.method === "GET" && req.mode === "navigate") {
+    event.respondWith(
+      fetch(req, { signal: AbortSignal.timeout(5000) })
+        .catch(async () => {
+          const cached = await caches.match("/index.html")
+                      || await caches.match("/");
+          return cached || new Response("<h2>App niet offline beschikbaar.<br>Open de app eerst terwijl de server bereikbaar is.</h2>",
+            { status: 503, headers: { "Content-Type": "text/html" } });
+        })
+    );
     return;
   }
   if (req.method === "GET") {
@@ -347,9 +364,13 @@ async function networkFirstNoCache(req) {
     // Geef lege defaults terug voor niet-kritieke endpoints
     const pathname = new URL(req.url).pathname;
     const emptyDefaults = {
-      "/api/config":       JSON.stringify({}),
-      "/api/pdfs":         JSON.stringify([]),
-      "/api/images-list":  JSON.stringify([]),
+      "/api/config":           JSON.stringify({}),
+      "/api/pdfs":             JSON.stringify([]),
+      "/api/images":           JSON.stringify([]),
+      "/api/images-list":      JSON.stringify([]),
+      "/api/img-annotations":  JSON.stringify([]),
+      "/api/tags":             JSON.stringify([]),
+      "/api/version":          JSON.stringify({version:"offline"}),
     };
     const fallback = emptyDefaults[pathname];
     if (fallback) {

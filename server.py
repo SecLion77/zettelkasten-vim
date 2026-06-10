@@ -162,6 +162,9 @@ class VaultManager:
                     elif line.startswith("isRead:"):     note["isRead"]     = line[7:].strip().lower() == "true"
                     elif line.startswith("noteType:"):   note["noteType"]   = line[9:].strip()
                     elif line.startswith("layer:"):      note["layer"]      = line[6:].strip()
+                    elif line.startswith("fields:"):
+                        try: note["fields"] = json.loads(line[7:].strip())
+                        except: note["fields"] = {}
         else: note["content"] = text
         # Fallback: gebruik bestandsdatum als modified/created ontbreekt
         if not note["modified"] or not note["created"]:

@@ -1223,28 +1223,51 @@ const App = () => {
     const load = async () => {
       try {
         // NoteStore + AnnotationStore laden data — App spiegelt via subscribe
-        const [ns, as, ias, ps, imgs, cfg] = await Promise.all([
-          NoteStore.load(), AnnotationStore.load(), api.get("/img-annotations"),
-          api.get("/pdfs"), api.get("/images"), api.get("/config"),
+        // Promise.allSettled: start ook bij gedeeltelijk offline
+        const results = await Promise.allSettled([
+          NoteStore.load(),           // 0: notities
+          AnnotationStore.load(),     // 1: pdf-annotaties
+          api.get("/img-annotations"),// 2: afbeelding-annotaties
+          api.get("/pdfs"),           // 3: pdf-lijst
+          api.get("/images"),         // 4: afbeeldingen
+          api.get("/config"),         // 5: config
         ]);
+        const ok  = v => v?.status === "fulfilled" ? v.value : null;
+        const ns  = ok(results[0]) || [];
+        const as  = ok(results[1]) || [];
+        const ias = ok(results[2]) || [];
+        const ps  = ok(results[3]) || [];
+        const imgs= ok(results[4]) || [];
+        const cfg = ok(results[5]) || {};
+        const anyOffline = results.some(r => r.status === "rejected");
+        if (anyOffline) setIsOffline(true);
         setNotes(ns); setPdfNotes(as); setImgNotes(ias||[]); setServerPdfs(ps); setServerImages(imgs||[]);
         setVaultPath(cfg.vault_path || "…");
         if (ns.length > 0) setSelId(ns[0].id);
         setLoaded(true);
       } catch(e) {
-        // Offline of server niet bereikbaar — probeer vanuit service worker cache
-        setIsOffline(true);
+        // Onverwachte fout (bijv. SW nog niet actief bij eerste bezoek)
+        setIsOffline(!navigator.onLine);
+        setError(
+          navigator.onLine
+            ? "Kan server niet bereiken.\nStart de server met: python3 server.py"
+            : "Offline — notities laden zodra verbinding hersteld is."
+        );
+        // Probeer toch notities te laden uit SW-cache
         try {
-          const [ns, as] = await Promise.all([
-            NoteStore.load().catch(()=>[]),
-            AnnotationStore.load().catch(()=>[]),
-          ]);
-          setNotes(ns||[]); setPdfNotes(as||[]);
-          if ((ns||[]).length > 0) setSelId(ns[0].id);
-          setLoaded(true); // app werkt in offline-modus
-        } catch(e2) {
-          setError("Kan server niet bereiken.\nStart de server met: python3 server.py");
-        }
+          const ns = await NoteStore.load().catch(()=>[]);
+          if ((ns||[]).length) {
+            setNotes(ns); setSelId(ns[0].id);
+            setError(null); setLoaded(true);
+          } else {
+            // Cache leeg — nog nooit verbonden geweest
+            setError(
+              "📲 Offline — nog geen data gecached.\n\n"
+              + "Open de app eerst terwijl de laptop bereikbaar is.\n"
+              + "Daarna werkt offline-modus automatisch."
+            );
+          }
+        } catch {}
       }
     };
     // Subscribe: NoteStore of AnnotationStore wijzigt → App-state bijwerken
