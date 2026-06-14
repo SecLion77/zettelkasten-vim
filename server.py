@@ -5716,6 +5716,8 @@ class ZKHandler(BaseHTTPRequestHandler):
 
         parsed_base = urlparse(url)
         base_url    = f"{parsed_base.scheme}://{parsed_base.netloc}"
+        title       = ""  # vroeg initialiseren (voorkomt UnboundLocalError)
+        text        = ""  # idem
 
         # ── Substack JSON API: alleen voor echte Substack domeinen ──────────────
         substack_text = ""

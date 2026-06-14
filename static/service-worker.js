@@ -1,10 +1,10 @@
 // ── Zettelkasten Service Worker ────────────────────────────────────────────
 // Versie: verhoog bij elke deploy om de cache te vernieuwen
-const SW_VERSION  = "zk-sw-v10";  // v3 → wist v2 cache inclusief modules
+const SW_VERSION  = "zk-sw-v14";  // v3 → wist v2 cache inclusief modules
 const SHELL_CACHE  = `${SW_VERSION}-shell`;   // statische bestanden
 const API_CACHE    = `${SW_VERSION}-api`;      // gecachede API-responses
 const IDB_NAME     = "zettelkasten-offline";
-const IDB_VERSION  = 1;
+const IDB_VERSION  = 4;
 const QUEUE_STORE  = "syncQueue";              // offline mutaties
 const NOTES_STORE  = "notesCache";            // volledige notities-mirror
 
@@ -48,8 +48,6 @@ const SHELL_ASSETS = [
   "/modules/BookLibrary.js",
   "/modules/ObjectFields.js",
   "/modules/offlineStore.js",
-  "/modules/NotesMeta.js",
-  "/modules/sync.js",
 ];
 
 // API-routes die we cachen voor offline lezen
@@ -75,8 +73,19 @@ function openIDB() {
         const qs = db.createObjectStore(QUEUE_STORE, { keyPath: "id", autoIncrement: true });
         qs.createIndex("createdAt", "createdAt");
       }
-      if (!db.objectStoreNames.contains(NOTES_STORE)) {
-        db.createObjectStore(NOTES_STORE, { keyPath: "id" });
+      // Alle stores in één handler (versie 4)
+      for (const [store, key] of [
+        [NOTES_STORE, "id"],
+        [QUEUE_STORE, "id"],
+        ["pdfMeta",   "key"],
+        ["annotCache","_idbKey"],
+      ]) {
+        if (!db.objectStoreNames.contains(store)) {
+          const opts = store === QUEUE_STORE
+            ? { keyPath: "id", autoIncrement: true }
+            : { keyPath: key };
+          db.createObjectStore(store, opts);
+        }
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -159,10 +168,9 @@ self.addEventListener("activate", (event) => {
     caches.keys().then(keys =>
       Promise.all(
         keys
-          .filter(k => k !== SHELL_CACHE && k !== API_CACHE)
-          .map(k => {
-            return caches.delete(k);
-          })
+          .filter(k => k !== SHELL_CACHE && k !== API_CACHE
+                    && k !== PDF_CACHE)  // PDF offline cache NOOIT wissen
+          .map(k => caches.delete(k))
       )
     )
     .then(() => self.clients.claim())
@@ -213,9 +221,15 @@ self.addEventListener("fetch", (event) => {
 
   // Mutaties: alleen /api/notes* via de sync-queue
   // /api/llm/*, /api/import/*, etc. NOOIT onderscheppen — die hebben lange timeouts nodig
-  const isNotesMutation = MUTATION_METHODS.includes(req.method)
-    && (url.pathname.startsWith("/api/notes") || url.pathname === "/api/notes");
-  if (isNotesMutation) {
+  // Notes + annotaties + img-annotaties → offline queue
+  const isSyncable = MUTATION_METHODS.includes(req.method) && (
+    url.pathname.startsWith("/api/notes") ||
+    url.pathname === "/api/notes" ||
+    url.pathname === "/api/annotations" ||
+    url.pathname === "/api/img-annotations" ||
+    url.pathname === "/api/pdf-read-toggle"
+  );
+  if (isSyncable) {
     event.respondWith(handleMutation(req));
     return;
   }
@@ -238,9 +252,10 @@ self.addEventListener("fetch", (event) => {
     event.respondWith(cachePdfFile(req));
     return;
   }
-  // PDF-lijst en config: netwerk eerst, cache als fallback
+  // PDF-lijst, annotaties en config: netwerk eerst, cache als fallback
   if (req.method === "GET" && (
       url.pathname === "/api/pdfs" ||
+      url.pathname === "/api/annotations" ||
       url.pathname === "/api/config" ||
       url.pathname === "/api/images-list")) {
     event.respondWith(networkFirstApiCache(req));
@@ -283,7 +298,7 @@ self.addEventListener("fetch", (event) => {
 
 
 // Bestanden die altijd vers van de server gehaald worden (niet Cache First)
-const NETWORK_FIRST_PATHS = ["/app.js", "/modules/", "/sync.js"];
+const NETWORK_FIRST_PATHS = ["/app.js", "/modules/"];
 
 // ── Strategie 1: Cache First voor statische assets, Network First voor app-code ──
 async function networkFirstWithCache(req) {
@@ -366,6 +381,7 @@ async function networkFirstNoCache(req) {
     const emptyDefaults = {
       "/api/config":           JSON.stringify({}),
       "/api/pdfs":             JSON.stringify([]),
+      "/api/annotations":      JSON.stringify([]),
       "/api/images":           JSON.stringify([]),
       "/api/images-list":      JSON.stringify([]),
       "/api/img-annotations":  JSON.stringify([]),
@@ -427,27 +443,149 @@ async function networkFirstApiCache(req) {
 
 
 // ── Strategie 4: PDF-bestanden — cache bij eerste open, offline beschikbaar ──
-const PDF_CACHE = `${SW_VERSION}-pdfs`;
+const PDF_CACHE    = "zk-pdfs-v1";   // versie-onafhankelijk: blijft bij SW updates
+const PDF_MAX_MB   = 150;            // maximale opslag voor PDFs in MB
+// ── PDF metadata via IDB (localStorage niet beschikbaar in SW) ───────────────
+const PDF_META_STORE = "pdfMeta";
 
-async function cachePdfFile(req) {
-  const cache = await caches.open(PDF_CACHE);
-  // Cache first: al gecached? Direct serveren
-  const cached = await cache.match(req);
-  if (cached) return cached;
-  // Niet gecached: ophalen en opslaan
+async function getPdfMeta() {
   try {
-    const res = await fetch(req.clone(), { signal: AbortSignal.timeout(30000) });
-    if (res.ok) {
-      cache.put(req, res.clone()); // async opslaan, niet wachten
+    const db      = await openIDB();
+    const entries = await new Promise((res, rej) => {
+      const tx  = db.transaction(PDF_META_STORE, "readonly");
+      const req = tx.objectStore(PDF_META_STORE).getAll();
+      req.onsuccess = () => res(req.result);
+      req.onerror   = () => rej(req.error);
+    });
+    return Object.fromEntries(entries.map(e => [e.key, e]));
+  } catch { return {}; }
+}
+
+async function savePdfMeta(meta) {
+  try {
+    const db = await openIDB();
+    const tx = db.transaction(PDF_META_STORE, "readwrite");
+    const st = tx.objectStore(PDF_META_STORE);
+    for (const [k, v] of Object.entries(meta)) {
+      st.put({ ...v, key: k });
     }
-    return res;
+    return new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = rej; });
+  } catch {}
+}
+
+async function deletePdfMeta(key) {
+  try {
+    const db = await openIDB();
+    const tx = db.transaction(PDF_META_STORE, "readwrite");
+    tx.objectStore(PDF_META_STORE).delete(key);
+    return new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = rej; });
+  } catch {}
+}
+
+function getTotalPdfSizeMb(meta) {
+  return Object.values(meta).reduce((s, m) => s + (m.size || 0), 0) / (1024 * 1024);
+}
+
+// ── A: Serve from cache only, NOOIT automatisch cachen ───────────────────────
+async function cachePdfFile(req) {
+  const cache  = await caches.open(PDF_CACHE);
+  const cached = await cache.match(req);
+  if (cached) {
+    // Update lastAccessed asynchroon (niet wachten)
+    const key = new URL(req.url).pathname;
+    getPdfMeta().then(meta => {
+      if (meta[key]) savePdfMeta({ [key]: { ...meta[key], lastAccessed: Date.now() } });
+    }).catch(() => {});
+    return cached;
+  }
+  // Niet gecached: gewoon van server ophalen (zonder opslaan)
+  try {
+    return await fetch(req.clone(), { signal: AbortSignal.timeout(30000) });
   } catch {
-    // Offline en niet gecached
     return new Response(
-      JSON.stringify({ error: "PDF niet offline beschikbaar", offline: true }),
+      JSON.stringify({ error: "PDF niet beschikbaar (voeg toe via ⬇ Offline knop)", offline: true }),
       { status: 503, headers: { "Content-Type": "application/json" } }
     );
   }
+}
+
+// ── B: Expliciet cachen op verzoek van app (met LRU-evictie) ─────────────────
+async function cacheOfflinePdf(pdfUrl, pdfName) {
+  const cache = await caches.open(PDF_CACHE);
+  const meta  = await getPdfMeta();
+  const key   = new URL(pdfUrl, self.location.origin).pathname;
+
+  // Al gecached? (check ook met absolute URL)
+  const absUrl = pdfUrl.startsWith("http") ? pdfUrl
+    : new URL(pdfUrl, self.location.origin).href;
+  if (await cache.match(absUrl)) {
+    return { ok: true, cached: true, size: meta[key]?.size || 0 };
+  }
+
+  // Download
+  let res;
+  try {
+    res = await fetch(absUrl, { signal: AbortSignal.timeout(60000) });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+  } catch(e) {
+    return { ok: false, error: e.message };
+  }
+
+  const blob = await res.clone().arrayBuffer();
+  const sizeMb = blob.byteLength / (1024 * 1024);
+
+  // B: LRU-evictie als limiet bereikt wordt
+  let totalMb = getTotalPdfSizeMb(meta) + sizeMb;
+  if (totalMb > PDF_MAX_MB) {
+    const sorted = Object.entries(meta)
+      .sort((a, b) => (a[1].lastAccessed || 0) - (b[1].lastAccessed || 0));
+    for (const [evictKey, evictMeta] of sorted) {
+      if (totalMb <= PDF_MAX_MB * 0.8) break;
+      await cache.delete(evictKey);
+      await deletePdfMeta(evictKey);
+      totalMb -= (evictMeta.size || 0) / (1024 * 1024);
+      console.log("[SW] LRU evicted:", evictKey);
+    }
+  }
+
+  await cache.put(absUrl, res);
+  const newMeta = { key, name: pdfName, size: blob.byteLength,
+                    cachedAt: Date.now(), lastAccessed: Date.now() };
+  await savePdfMeta({ [key]: newMeta });
+  return { ok: true, cached: false, size: blob.byteLength, sizeMb };
+}
+
+async function removePdfFromCache(pdfUrl) {
+  const cache  = await caches.open(PDF_CACHE);
+  const absUrl = pdfUrl.startsWith("http") ? pdfUrl
+    : new URL(pdfUrl, self.location.origin).href;
+  const key    = new URL(absUrl).pathname;
+  await cache.delete(absUrl);
+  await cache.delete(pdfUrl); // ook relatieve URL proberen
+  await deletePdfMeta(key);
+  return { ok: true };
+}
+
+async function getStorageInfo() {
+  const meta     = await getPdfMeta();
+  const pdfTotalMb = getTotalPdfSizeMb(meta);
+  let storageEst = null;
+  try {
+    const est = await navigator.storage.estimate();
+    storageEst = { used: est.usage, quota: est.quota };
+  } catch {}
+  return {
+    pdfs: Object.entries(meta).map(([k, v]) => ({
+      key:          k,
+      name:         v.name || decodeURIComponent(k.split("/").pop()),
+      size:         v.size || 0,
+      cachedAt:     v.cachedAt,
+      lastAccessed: v.lastAccessed,
+    })),
+    pdfTotalMb,
+    pdfMaxMb: PDF_MAX_MB,
+    storage:  storageEst,
+  };
 }
 
 // ── Strategie 3: Mutaties → sync-queue als offline ──────────────────────────
@@ -546,10 +684,29 @@ async function processSyncQueue() {
 
 // ── Messages van de app ontvangen ────────────────────────────────────────────
 self.addEventListener("message", async (event) => {
-  const { type, payload } = event.data || {};
+  const { type, url, name } = event.data || {};
+
+  if (type === "CACHE_PDF") {
+    const result = await cacheOfflinePdf(url, name || url.split("/").pop());
+    event.ports[0]?.postMessage({ type: "CACHE_PDF_RESULT", ...result });
+    return;
+  }
+  if (type === "REMOVE_PDF") {
+    const result = await removePdfFromCache(url);
+    event.ports[0]?.postMessage({ type: "REMOVE_PDF_RESULT", ...result });
+    return;
+  }
+  if (type === "GET_STORAGE_INFO") {
+    const info = await getStorageInfo();
+    event.ports[0]?.postMessage({ type: "STORAGE_INFO", ...info });
+    return;
+  }
+  // bestaande handlers volgen...
+
+  const { type: msgType, payload } = event.data || {};
 
   // App vraagt: hoeveel offline items staan er in de queue?
-  if (type === "GET_QUEUE_STATUS") {
+  if (msgType === "GET_QUEUE_STATUS") {
     const queue = await idbGetAll(QUEUE_STORE);
     const notes = await idbGetAll(NOTES_STORE);
     event.ports[0]?.postMessage({
@@ -562,7 +719,7 @@ self.addEventListener("message", async (event) => {
   }
 
   // App vraagt: verwerk de sync-queue nu (gebruiker is terug online)
-  if (type === "SYNC_NOW") {
+  if (msgType === "SYNC_NOW") {
     const result = await processSyncQueue();
     event.ports[0]?.postMessage({ type: "SYNC_RESULT", ...result });
 
@@ -573,7 +730,7 @@ self.addEventListener("message", async (event) => {
   }
 
   // App vraagt: update de shell-cache (na deploy)
-  if (type === "UPDATE_SHELL") {
+  if (msgType === "UPDATE_SHELL") {
     const cache = await caches.open(SHELL_CACHE);
     await Promise.allSettled(SHELL_ASSETS.map(url => cache.add(url)));
     event.ports[0]?.postMessage({ type: "SHELL_UPDATED", version: SW_VERSION });

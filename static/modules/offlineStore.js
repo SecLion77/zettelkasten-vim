@@ -9,9 +9,16 @@
 const OfflineStore = (() => {
 
   const IDB_NAME    = "zettelkasten-offline";
-  const IDB_VERSION = 1;
+  const _idbOpen = () => new Promise((res, rej) => {
+    const r = indexedDB.open(IDB_NAME, IDB_VERSION);
+    r.onsuccess = () => res(r.result);
+    r.onerror   = () => rej(r.error);
+  });
+
+  const IDB_VERSION = 4;
   const NOTES_STORE = "notesCache";
   const QUEUE_STORE = "syncQueue";
+  const ANNOT_STORE = "annotCache";
   const LS_PENDING  = "zk_offline_pending";  // localStorage key
 
   // ── Pending IDs in localStorage (persistent over refresh) ─────────────────
@@ -40,6 +47,10 @@ const OfflineStore = (() => {
           db.createObjectStore(QUEUE_STORE, { keyPath: "id", autoIncrement: true });
         if (!db.objectStoreNames.contains(NOTES_STORE))
           db.createObjectStore(NOTES_STORE, { keyPath: "id" });
+        if (!db.objectStoreNames.contains(ANNOT_STORE))
+          db.createObjectStore(ANNOT_STORE, { keyPath: "_idbKey" });
+        if (!db.objectStoreNames.contains("pdfMeta"))
+          db.createObjectStore("pdfMeta", { keyPath: "key" });
       };
       r.onsuccess = () => { _db = r.result; ok(_db); };
       r.onerror   = () => err(r.error);
@@ -323,4 +334,48 @@ const OfflineStore = (() => {
       queued:  _getQueue().length,
     }),
   };
+  // ── PATCH 4: AnnotationStore offline — sla annotaties op in IDB ──────
+  if (typeof AnnotationStore !== "undefined" && AnnotationStore.add) {
+    const _origAdd    = AnnotationStore.add.bind(AnnotationStore);
+    const _origUpdate = AnnotationStore.update.bind(AnnotationStore);
+    const _origRemove = AnnotationStore.remove.bind(AnnotationStore);
+    const _origSetAll = AnnotationStore.setAll.bind(AnnotationStore);
+    const _origLoad   = AnnotationStore.load.bind(AnnotationStore);
+
+    // Sla annotaties op in IDB na elke wijziging
+    const _syncAnnotIDB = async () => {
+      const all = AnnotationStore.getAll();
+      const db  = await _idbOpen();
+      const tx  = db.transaction(ANNOT_STORE, "readwrite");
+      const st  = tx.objectStore(ANNOT_STORE);
+      st.clear();
+      all.forEach(a => st.put({ ...a, id: a.id || a.file + "_" + (a.page||0) + "_" + (a.start||0) }));
+    };
+
+    AnnotationStore.add    = async (...a) => { const r = await _origAdd(...a);    _syncAnnotIDB().catch(()=>{}); return r; };
+    AnnotationStore.update = async (...a) => { const r = await _origUpdate(...a); _syncAnnotIDB().catch(()=>{}); return r; };
+    AnnotationStore.remove = async (...a) => { const r = await _origRemove(...a); _syncAnnotIDB().catch(()=>{}); return r; };
+    AnnotationStore.setAll = async (...a) => { const r = await _origSetAll(...a); _syncAnnotIDB().catch(()=>{}); return r; };
+
+    // Bij load: probeer IDB als server niet bereikbaar is
+    AnnotationStore.load = async () => {
+      try {
+        return await _origLoad();
+      } catch {
+        // Server niet bereikbaar — laad uit IDB
+        try {
+          const db  = await _idbOpen();
+          const all = await new Promise((res, rej) => {
+            const tx  = db.transaction(ANNOT_STORE, "readonly");
+            const req = tx.objectStore(ANNOT_STORE).getAll();
+            req.onsuccess = () => res(req.result);
+            req.onerror   = () => rej(req.error);
+          });
+          AnnotationStore._setOffline(all || []);
+          return all || [];
+        } catch { return []; }
+      }
+    };
+  }
+
 })();

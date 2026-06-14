@@ -99,12 +99,52 @@ const MODEL_COLOR = (m) => {
 };
 
 // ── PDFUploadPanel — clean upload-paneel voor Invoer → PDF tab ───────────────
+// ── Offline helper: communiceert met SW via MessageChannel ────────────────────
+async function swRequest(data) {
+  // Wacht tot SW actief is — max 3s in stappen van 100ms
+  if (!navigator.serviceWorker?.controller) {
+    for (let i = 0; i < 30 && !navigator.serviceWorker?.controller; i++) {
+      await new Promise(res => setTimeout(res, 100));
+    }
+  }
+  return new Promise((resolve, reject) => {
+    const ctrl = navigator.serviceWorker?.controller;
+    if (!ctrl) { reject(new Error("Service Worker niet actief. Sluit de app en open opnieuw.")); return; }
+    const ch = new MessageChannel();
+    ch.port1.onmessage = e => resolve(e.data);
+    ctrl.postMessage(data, [ch.port2]);
+    setTimeout(() => reject(new Error("SW timeout na 60s")), 60000);
+  });
+}
+async function cachePdfOffline(pdfName) {
+  const url = `/api/pdf/${encodeURIComponent(pdfName)}`;
+  return swRequest({ type: "CACHE_PDF", url, name: pdfName });
+}
+async function removePdfOffline(pdfName) {
+  const url = `/api/pdf/${encodeURIComponent(pdfName)}`;
+  return swRequest({ type: "REMOVE_PDF", url });
+}
+async function getStorageInfo() {
+  return swRequest({ type: "GET_STORAGE_INFO" });
+}
+
 const PDFUploadPanel = ({ serverPdfs=[], onRefreshPdfs, onOpenPdf, onTogglePdfRead=null, llmModel,
                           allTags=[], notes=[], onAddNote, addJob, updateJob }) => {
   const { useState, useRef, useCallback } = React;
   const [dragOver,   setDragOver]   = useState(false);
   const [uploading,  setUploading]  = useState(false);
   const [uploaded,   setUploaded]   = useState([]);   // [{name, isNew}]
+  const [offlinePdfs,setOfflinePdfs]= React.useState(new Set());
+
+  // Laad welke PDFs offline beschikbaar zijn bij elke serverPdfs update
+  React.useEffect(() => {
+    getStorageInfo().then(info => {
+      if (info?.pdfs) setOfflinePdfs(new Set(
+        info.pdfs.map(p => decodeURIComponent((p.key||"").split("/").pop()))
+      ));
+    }).catch(()=>{});
+  }, [serverPdfs.length]);
+
   const [error,      setError]      = useState(null);
   const fileRef = useRef(null);
 
@@ -233,22 +273,25 @@ const PDFUploadPanel = ({ serverPdfs=[], onRefreshPdfs, onOpenPdf, onTogglePdfRe
         }, `IN VAULT (${serverPdfs.length})`),
         ...serverPdfs.map((pdf, i) => {
           const pdfName = typeof pdf === "string" ? pdf : pdf.name;
-          const pdfSize = pdf.size ? ` · ${(pdf.size/1024/1024).toFixed(1)} MB` : "";
+          const pdfSize = pdf.size ? (pdf.size > 1048576
+            ? (pdf.size/1048576).toFixed(1)+" MB"
+            : Math.round(pdf.size/1024)+" KB") : "";
+          const isOfl   = offlinePdfs.has(pdfName);
           return React.createElement("div", {
-            key: i,
-            style: { display: "flex", alignItems: "center", gap: "10px",
-                     padding: "7px 12px", borderRadius: "5px",
-                     borderBottom: `1px solid ${W.splitBg}`,
-                     cursor: "pointer" },
-            onClick: () => onOpenPdf?.(pdfName),
-            onMouseEnter: e => e.currentTarget.style.background = "rgba(255,255,255,0.03)",
-            onMouseLeave: e => e.currentTarget.style.background = "transparent",
+            key: pdfName,
+            style: {
+              display:"flex", alignItems:"center", gap:"10px",
+              padding:"8px 12px", cursor:"pointer",
+              borderBottom:`1px solid ${W.splitBg}`,
+              background: i%2===0 ? "transparent" : "rgba(255,255,255,0.01)",
+            },
+            onClick: () => onOpenPdf(pdfName),
           },
+            // Gelezen checkbox
             React.createElement("div", {
               onClick: e => { e.stopPropagation(); onTogglePdfRead?.(pdfName); },
-              title: pdf.isRead ? "Markeer als ongelezen" : "Markeer als gelezen",
-              style: {
-                width:"20px", height:"20px", borderRadius:"4px", flexShrink:0,
+              style:{
+                width:"18px", height:"18px", borderRadius:"4px", flexShrink:0,
                 border:`2px solid ${pdf.isRead ? "#72b660" : W.splitBg}`,
                 background: pdf.isRead ? "#72b660" : "transparent",
                 display:"flex", alignItems:"center", justifyContent:"center",
@@ -259,28 +302,56 @@ const PDFUploadPanel = ({ serverPdfs=[], onRefreshPdfs, onOpenPdf, onTogglePdfRe
                 style:{color:W.bg,fontSize:"11px",fontWeight:"bold"}
               },"✓")
             ),
-            React.createElement("div", { style: { flex: 1, minWidth: 0 } },
+            // Naam + info
+            React.createElement("div", { style:{ flex:1, minWidth:0 } },
               React.createElement("div", {
-                style: { fontSize: "13px", color: W.fg,
-                         overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }
+                style:{ fontSize:"13px", color:W.fg,
+                  overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }
               }, pdfName),
               React.createElement("div", {style:{display:"flex",gap:"6px",marginTop:"2px",alignItems:"center"}},
-                pdfSize && React.createElement("span", {
-                  style: { fontSize: "10px", color: W.fgMuted }
-                }, pdfSize),
-                pdf.estimatedMinutes > 0 && React.createElement("span",{
-                  style:{fontSize:"10px",color:W.fgDim}
-                }, `· ${pdf.estimatedMinutes} min`),
-                pdf.isRead && React.createElement("span",{
-                  style:{fontSize:"10px",color:"#72b660",fontWeight:"600"}
-                }, "· ✓ gelezen")
+                pdfSize && React.createElement("span",{style:{fontSize:"10px",color:W.fgMuted}}, pdfSize),
+                pdf.estimatedMinutes > 0 && React.createElement("span",{style:{fontSize:"10px",color:W.fgDim}},
+                  `· ${pdf.estimatedMinutes} min`),
+                pdf.isRead && React.createElement("span",{style:{fontSize:"10px",color:"#72b660",fontWeight:"600"}},
+                  "· ✓ gelezen")
               )
             ),
-            // Paginabadge: onthoud pagina per PDF in localStorage
-            (()=>{
+            // Offline knop
+            React.createElement("button", {
+              onClick: async e => {
+                e.stopPropagation();
+                const btn = e.currentTarget;
+                btn.disabled = true;
+                btn.textContent = "⏳";
+                try {
+                  if (isOfl) {
+                    await removePdfOffline(pdfName);
+                    setOfflinePdfs(s => { const n=new Set(s); n.delete(pdfName); return n; });
+                  } else {
+                    await cachePdfOffline(pdfName);
+                    setOfflinePdfs(s => new Set([...s, pdfName]));
+                  }
+                } catch(err) {
+                  btn.title = err.message || "Fout";
+                  btn.textContent = "⚠ Fout";
+                  btn.style.color = "#e5786d";
+                }
+                btn.disabled = false;
+              },
+              title: isOfl ? "Verwijder offline kopie" : "Bewaar voor offline gebruik",
+              style:{
+                fontSize:"10px", padding:"2px 7px", borderRadius:"4px",
+                border:`1px solid ${isOfl ? "rgba(114,182,96,0.5)" : W.splitBg}`,
+                background: isOfl ? "rgba(114,182,96,0.1)" : "none",
+                color: isOfl ? "#72b660" : W.fgDim,
+                cursor:"pointer", whiteSpace:"nowrap", flexShrink:0,
+              }
+            }, isOfl ? "✓ Offline" : "⬇ Offline"),
+            // Pagina-badge
+            (() => {
               try {
                 const saved = parseInt(localStorage.getItem("zk_pdf_page_"+pdfName));
-                if(saved > 1) return React.createElement("span",{
+                if (saved > 1) return React.createElement("span",{
                   style:{fontSize:"11px",color:W.blue,flexShrink:0,
                     background:W.blueBg||"rgba(138,198,242,.1)",
                     border:`1px solid ${W.blueBorder||"rgba(138,198,242,.25)"}`,
@@ -417,6 +488,16 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
   }, [thumbCache]);
 
   // Genereer thumbnails voor alle PDFs zodra de bibliotheek zichtbaar is
+  // Check welke PDFs offline beschikbaar zijn
+  const [offlinePdfs, setOfflinePdfs] = React.useState(new Set());
+  React.useEffect(() => {
+    getStorageInfo().then(info => {
+      if (info?.pdfs) setOfflinePdfs(new Set(
+        info.pdfs.map(p => decodeURIComponent((p.key||"").split("/").pop()))
+      ));
+    }).catch(()=>{});
+  }, []);
+
   React.useEffect(() => {
     if (!showLibrary || !pdfDoc === false) return;
     (serverPdfs || []).forEach(p => {

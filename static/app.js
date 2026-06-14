@@ -2180,6 +2180,31 @@ const App = () => {
               else { setSelId(id); setTab("notes"); }
             },
           });
+          if(t==="notes") return React.createElement("div",{
+            style:{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",minHeight:0}
+          },
+            React.createElement(NotesTab,{
+              notes, pdfNotes, serverPdfs, serverImages, allTags,
+              selId: isSplitRight ? splitSelId : selId,
+              onSelectNote: id => {
+                if (isSplitRight) { setSplitSelId(id); }
+                else { setSelId(id); }
+              },
+              llmModel, isTablet, isDesktop,
+              onAddNote: async note => {
+                const saved = await NoteStore.save(note);
+                setNotes([...NoteStore.getAll()]);
+                if (!isSplitRight) setSelId(saved.id);
+              },
+              onUpdateNote: async note => {
+                await NoteStore.save(note); setNotes([...NoteStore.getAll()]);
+              },
+              onDeleteNote: async id => {
+                await NoteStore.remove(id); setNotes([...NoteStore.getAll()]);
+                if (isSplitRight && splitSelId===id) setSplitSelId(null);
+              },
+            })
+          );
           if(t==="query") return React.createElement(QueryPanel,{
             notes, allTags,
             onOpenNote: id => {
@@ -2275,6 +2300,7 @@ const App = () => {
                  {id:"mindmap",    icon:"🗺",  label:"Mindmap"},
                  {id:"llm",        icon:"🧠", label:"Notebook"},
                  {id:"whiteboard", icon:"🎨", label:"Canvas"},
+                 {id:"notes",       icon:"📝", label:"Notities"},
                  {id:"tasks",       icon:"✓",  label:"Taken"},
                  {id:"annotations", icon:"✦",  label:"Annotaties"},
                  {id:"query",       icon:"🔎", label:"Query"},

@@ -47,6 +47,8 @@ const AnnotationStore = (() => {
 
     /** Haal alle annotaties op (synchroon) */
     getAll: () => _annotations,
+    // Offline: zet annotaties direct zonder server
+    _setOffline: (annots) => { _annotations = annots; _notify(); },
 
     /** Haal annotaties op voor één bestand */
     getForFile: (filename) => _annotations.filter(h => h.file === filename),

@@ -3,7 +3,7 @@
 
 const VaultSettings = ({vaultPath, onChangeVault, onClose}) => {
   const { useState, useEffect } = React;
-  const [tab,      setTab]     = useState("vault");   // "vault" | "keys" | "pdf" | "weergave"
+  const [tab,      setTab]     = useState("vault");   // "vault" | "keys" | "pdf" | "weergave" | "offline"
   const [newPath,  setNewPath] = useState(vaultPath);
   const [msg,      setMsg]     = useState("");
   const [fontSize, setFontSize] = useState(() => {
@@ -17,6 +17,41 @@ const VaultSettings = ({vaultPath, onChangeVault, onClose}) => {
     localStorage.setItem("zk_font_size", clamped);
     document.documentElement.style.setProperty("--app-font-size", clamped + "px");
   };
+
+  // ── Offline opslag state ────────────────────────────────────────────────
+  const [storageInfo,  setStorageInfo]  = useState(null);
+  const [pdfMaxMb,     setPdfMaxMb]     = useState(150);
+  const [storageMsg,   setStorageMsg]   = useState("");
+
+  const loadStorageInfo = async () => {
+    if (!navigator.serviceWorker?.controller) return;
+    try {
+      const ch = new MessageChannel();
+      const result = await new Promise((res, rej) => {
+        ch.port1.onmessage = e => res(e.data);
+        navigator.serviceWorker.controller.postMessage({type:"GET_STORAGE_INFO"}, [ch.port2]);
+        setTimeout(() => rej(new Error("timeout")), 5000);
+      });
+      setStorageInfo(result);
+    } catch(e) { setStorageInfo({error: e.message}); }
+  };
+
+  const removePdf = async (pdfUrl) => {
+    if (!navigator.serviceWorker?.controller) return;
+    const ch = new MessageChannel();
+    await new Promise(res => {
+      ch.port1.onmessage = res;
+      navigator.serviceWorker.controller.postMessage({type:"REMOVE_PDF", url:pdfUrl}, [ch.port2]);
+    });
+    await loadStorageInfo();
+    setStorageMsg("✓ Verwijderd");
+    setTimeout(() => setStorageMsg(""), 2000);
+  };
+
+  // Laad storage info als offline tab actief wordt
+  React.useEffect(() => {
+    if (tab === "offline") loadStorageInfo();
+  }, [tab]);
 
   // API-sleutels state
   const [keys, setKeys] = useState({ anthropic:"", openai:"", google:"", openrouter:"", mistral:"", jan:"" });
@@ -264,6 +299,7 @@ const VaultSettings = ({vaultPath, onChangeVault, onClose}) => {
           {id:"modellen", icon:"🤖", label:"Modellen"},
           {id:"pdf",      icon:"📄", label:"PDF"},
           {id:"weergave", icon:"🔤", label:"Weergave"},
+          {id:"offline",  icon:"📲", label:"Offline"},
         ].map(t => React.createElement("button",{
           key:t.id, onClick:()=>{ setTab(t.id); setMsg(""); setKeysMsg(""); },
           style:{
@@ -853,6 +889,126 @@ const VaultSettings = ({vaultPath, onChangeVault, onClose}) => {
               }, modelsMsg)
             )
           )
+        ),
+
+        tab==="offline" && React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:"16px"}},
+          // Header
+          React.createElement("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between"}},
+            React.createElement("div",{style:{fontSize:"15px",fontWeight:"600",color:W.fg}},"📲 Offline opslag"),
+            React.createElement("button",{
+              onClick:loadStorageInfo,
+              style:{background:"none",border:`1px solid ${W.splitBg}`,color:W.fgMuted,
+                borderRadius:"5px",padding:"4px 10px",fontSize:"12px",cursor:"pointer"}
+            },"↻ Vernieuwen")
+          ),
+
+          // Opslaggebruik overview
+          storageInfo && !storageInfo.error && React.createElement("div",{style:{
+            background:W.bg2,border:`1px solid ${W.splitBg}`,borderRadius:"8px",padding:"14px",
+          }},
+            React.createElement("div",{style:{fontSize:"12px",color:W.fgMuted,marginBottom:"10px",fontWeight:"600",letterSpacing:"1px"}},"GEBRUIK"),
+            // App-modules
+            React.createElement("div",{style:{display:"flex",justifyContent:"space-between",fontSize:"13px",marginBottom:"6px"}},
+              React.createElement("span",{style:{color:W.fg}},"App (modules + HTML)"),
+              React.createElement("span",{style:{color:W.fgMuted}},"~10 MB")
+            ),
+            // Notities (IDB)
+            React.createElement("div",{style:{display:"flex",justifyContent:"space-between",fontSize:"13px",marginBottom:"6px"}},
+              React.createElement("span",{style:{color:W.fg}},"Notities (IndexedDB)"),
+              React.createElement("span",{style:{color:W.fgMuted}},"~"+Math.round((storageInfo.storage?.used||0)/1048576-10)+" MB")
+            ),
+            // PDFs
+            React.createElement("div",{style:{display:"flex",justifyContent:"space-between",fontSize:"13px",marginBottom:"10px"}},
+              React.createElement("span",{style:{color:W.fg}},"PDFs offline"),
+              React.createElement("span",{style:{color:storageInfo.pdfTotalMb>100?W.orange:"#72b660",fontWeight:"600"}},
+                storageInfo.pdfTotalMb.toFixed(1)+" / "+storageInfo.pdfMaxMb+" MB")
+            ),
+            // Voortgangsbalk PDF cache
+            React.createElement("div",{style:{height:"6px",background:W.bg3||W.splitBg,borderRadius:"3px",overflow:"hidden"}},
+              React.createElement("div",{style:{
+                height:"100%",borderRadius:"3px",
+                background: (storageInfo.pdfTotalMb/storageInfo.pdfMaxMb)>0.8 ? W.orange : "#72b660",
+                width:`${Math.min(100,(storageInfo.pdfTotalMb/storageInfo.pdfMaxMb)*100).toFixed(1)}%`,
+                transition:"width .3s",
+              }})
+            ),
+            // Totaal
+            storageInfo.storage && React.createElement("div",{style:{fontSize:"11px",color:W.fgDim,marginTop:"8px"}},
+              "Totaal apparaat: ",
+              Math.round(storageInfo.storage.used/1048576)+" MB gebruikt van ",
+              Math.round(storageInfo.storage.quota/1048576)+" MB beschikbaar"
+            )
+          ),
+
+          // Limiet instelling
+          React.createElement("div",{style:{background:W.bg2,border:`1px solid ${W.splitBg}`,borderRadius:"8px",padding:"14px"}},
+            React.createElement("div",{style:{fontSize:"12px",color:W.fgMuted,marginBottom:"10px",fontWeight:"600",letterSpacing:"1px"}},"PDF CACHE LIMIET"),
+            React.createElement("div",{style:{display:"flex",alignItems:"center",gap:"10px"}},
+              React.createElement("input",{
+                type:"range", min:50, max:500, step:25, value:pdfMaxMb,
+                onChange:e=>setPdfMaxMb(Number(e.target.value)),
+                style:{flex:1}
+              }),
+              React.createElement("span",{style:{fontSize:"13px",color:W.fg,minWidth:"55px"}},pdfMaxMb+" MB")
+            ),
+            React.createElement("div",{style:{fontSize:"11px",color:W.fgDim,marginTop:"6px"}},
+              "Bij overschrijding worden de minst recent gebruikte PDFs automatisch verwijderd."
+            )
+          ),
+
+          // Gecachede PDFs
+          storageInfo?.pdfs?.length > 0 && React.createElement("div",{style:{
+            background:W.bg2,border:`1px solid ${W.splitBg}`,borderRadius:"8px",overflow:"hidden"
+          }},
+            React.createElement("div",{style:{
+              fontSize:"12px",color:W.fgMuted,padding:"10px 14px",fontWeight:"600",
+              letterSpacing:"1px",borderBottom:`1px solid ${W.splitBg}`,
+              display:"flex",justifyContent:"space-between",alignItems:"center",
+            }},
+              `OFFLINE PDFS (${storageInfo.pdfs.length})`,
+              React.createElement("button",{
+                onClick:async()=>{
+                  if(!confirm("Alle offline PDFs verwijderen?")) return;
+                  for(const p of storageInfo.pdfs) await removePdf(p.key);
+                },
+                style:{background:"none",border:`1px solid rgba(229,120,109,0.3)`,
+                  color:W.orange,borderRadius:"4px",fontSize:"11px",padding:"2px 8px",cursor:"pointer"}
+              },"Alles wissen")
+            ),
+            ...storageInfo.pdfs.map((p,i)=>
+              React.createElement("div",{key:p.key,style:{
+                display:"flex",alignItems:"center",padding:"8px 14px",gap:"10px",
+                borderBottom:i<storageInfo.pdfs.length-1?`1px solid ${W.splitBg}`:"none",
+              }},
+                React.createElement("span",{style:{flex:1,fontSize:"13px",color:W.fg,
+                  overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},
+                  p.name || decodeURIComponent(p.key.split("/").pop())
+                ),
+                React.createElement("span",{style:{fontSize:"11px",color:W.fgMuted,flexShrink:0}},
+                  p.size ? ((p.size/1048576).toFixed(1)+" MB") : "?"
+                ),
+                React.createElement("button",{
+                  onClick:()=>removePdf(p.key),
+                  style:{background:"none",border:`1px solid ${W.splitBg}`,
+                    color:W.fgMuted,borderRadius:"4px",fontSize:"11px",
+                    padding:"2px 8px",cursor:"pointer",flexShrink:0}
+                },"✕")
+              )
+            )
+          ),
+
+          storageInfo?.pdfs?.length === 0 && React.createElement("div",{style:{
+            color:W.fgDim,fontSize:"13px",textAlign:"center",padding:"20px",
+            fontStyle:"italic",
+          }},"Geen PDFs offline beschikbaar.\nGebruik de ⬇ Offline knop in de PDF bibliotheek."),
+
+          !storageInfo && React.createElement("div",{style:{color:W.fgMuted,fontSize:"13px"}},
+            "Service Worker niet actief. Open de app eerst terwijl de server bereikbaar is."),
+
+          storageInfo?.error && React.createElement("div",{style:{color:W.orange,fontSize:"13px"}},
+            "⚠ "+storageInfo.error),
+
+          storageMsg && React.createElement("div",{style:{color:"#72b660",fontSize:"13px"}},storageMsg)
         ),
 
         tab==="weergave" && React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:"20px"}},
