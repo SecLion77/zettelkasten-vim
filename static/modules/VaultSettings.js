@@ -6,6 +6,21 @@ const VaultSettings = ({vaultPath, onChangeVault, onClose}) => {
   const [tab,      setTab]     = useState("vault");   // "vault" | "keys" | "pdf" | "weergave" | "offline"
   const [newPath,  setNewPath] = useState(vaultPath);
   const [msg,      setMsg]     = useState("");
+  const [appVersion, setAppVersion] = React.useState({sw:"…", app:"…"});
+
+  React.useEffect(() => {
+    // Haal app + SW versie op
+    fetch("/api/version").then(r=>r.json()).then(d=>
+      setAppVersion(v=>({...v, app: d.version||d.app||"onbekend"}))
+    ).catch(()=>{});
+    // SW versie uit cache
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.getRegistration().then(reg => {
+        const sw = reg?.active?.scriptURL?.match(/v(\d+)/)?.[0] || "?";
+        setAppVersion(v=>({...v, sw}));
+      }).catch(()=>{});
+    }
+  }, []);
   const [fontSize, setFontSize] = useState(() => {
     const saved = localStorage.getItem("zk_font_size");
     return saved ? Math.max(11, Math.min(18, parseInt(saved))) : 13;
@@ -409,6 +424,32 @@ const VaultSettings = ({vaultPath, onChangeVault, onClose}) => {
               );
             })
           )
+        ),
+
+        // ── Versienummer (onderaan vault tab) ───────────────────────────────
+        tab==="vault" && React.createElement("div",{style:{
+          marginTop:"24px", paddingTop:"16px",
+          borderTop:`1px solid ${W.splitBg}`,
+          display:"flex", justifyContent:"space-between", alignItems:"center",
+        }},
+          React.createElement("div",null,
+            React.createElement("div",{style:{fontSize:"11px",color:W.fgDim,
+              letterSpacing:"1px",marginBottom:"4px"}},"VERSIE"),
+            React.createElement("div",{style:{fontSize:"13px",color:W.fg,
+              fontFamily:"monospace",display:"flex",gap:"14px"}},
+              React.createElement("span",null,"App: ",
+                React.createElement("span",{style:{color:W.blue}},appVersion.app)),
+              React.createElement("span",null,"SW: ",
+                React.createElement("span",{style:{color:W.comment}},appVersion.sw))
+            )
+          ),
+          React.createElement("button",{
+            onClick:()=>window.location.reload(true),
+            title:"Herladen om updates te activeren",
+            style:{background:"none",border:`1px solid ${W.splitBg}`,
+              color:W.fgMuted,borderRadius:"5px",padding:"4px 10px",
+              fontSize:"12px",cursor:"pointer"}
+          },"↻ Herladen")
         ),
 
         tab==="keys" && React.createElement(React.Fragment,null,

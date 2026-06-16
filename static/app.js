@@ -1368,6 +1368,7 @@ const App = () => {
         {id:"mindmap",  icon:"🗺",  label:"Mindmap"},
         {id:"llm",      icon:"🧠", label:"Notebook"},
         {id:"query",    icon:"🔎", label:"Query"},
+        {id:"tags",     icon:"🏷",  label:"Tags"},
     ]},
     { id:"input",      icon:"🌐", label:"Invoer",      sub: [
         {id:"import",    icon:"🌐", label:"URL / Word"},
