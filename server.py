@@ -2047,7 +2047,6 @@ class ZKHandler(BaseHTTPRequestHandler):
             import json as _json, time as _time
             data = _json.dumps({
                 "hash":    h.hexdigest()[:8],
-                "sw":      "zk-sw-v1",
                 "mtime":   mtime,
                 "ts":      int(_time.time()),
             }).encode()

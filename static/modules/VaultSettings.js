@@ -11,7 +11,10 @@ const VaultSettings = ({vaultPath, onChangeVault, onClose}) => {
   React.useEffect(() => {
     // Haal app + SW versie op
     fetch("/api/version").then(r=>r.json()).then(d=>
-      setAppVersion(v=>({...v, app: d.version||d.app||"onbekend"}))
+      setAppVersion(v=>({...v,
+        app: d.hash || d.version || d.app || "onbekend",
+        sw:  d.sw   || v.sw,
+      }))
     ).catch(()=>{});
     // SW versie uit cache
     if ("serviceWorker" in navigator) {

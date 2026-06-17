@@ -1,6 +1,6 @@
 // ── Zettelkasten Service Worker ────────────────────────────────────────────
 // Versie: verhoog bij elke deploy om de cache te vernieuwen
-const SW_VERSION  = "zk-sw-v14";  // v3 → wist v2 cache inclusief modules
+const SW_VERSION  = "zk-sw-v16";  // v3 → wist v2 cache inclusief modules
 const SHELL_CACHE  = `${SW_VERSION}-shell`;   // statische bestanden
 const API_CACHE    = `${SW_VERSION}-api`;      // gecachede API-responses
 const IDB_NAME     = "zettelkasten-offline";
@@ -257,6 +257,7 @@ self.addEventListener("fetch", (event) => {
       url.pathname === "/api/pdfs" ||
       url.pathname === "/api/annotations" ||
       url.pathname === "/api/config" ||
+      url.pathname === "/api/version" ||
       url.pathname === "/api/images-list")) {
     event.respondWith(networkFirstApiCache(req));
     return;
@@ -277,17 +278,18 @@ self.addEventListener("fetch", (event) => {
     event.respondWith(networkFirstWithCache(req));
     return;
   }
-  // Navigatie-request (bijv. iPad opent app via home-screen)
+  // Navigatie (index.html): cache-first met network-update
   if (req.method === "GET" && req.mode === "navigate") {
-    event.respondWith(
-      fetch(req, { signal: AbortSignal.timeout(5000) })
-        .catch(async () => {
-          const cached = await caches.match("/index.html")
-                      || await caches.match("/");
-          return cached || new Response("<h2>App niet offline beschikbaar.<br>Open de app eerst terwijl de server bereikbaar is.</h2>",
-            { status: 503, headers: { "Content-Type": "text/html" } });
-        })
-    );
+    event.respondWith(serveAppShell(req));
+    return;
+  }
+  // JS/CSS modules: cache-first (NOOIT wachten op netwerk offline)
+  if (req.method === "GET" && (
+      url.pathname.endsWith(".js") ||
+      url.pathname.endsWith(".css") ||
+      url.pathname === "/" ||
+      url.pathname.endsWith(".html"))) {
+    event.respondWith(cacheFirstWithNetwork(req));
     return;
   }
   if (req.method === "GET") {
@@ -300,11 +302,37 @@ self.addEventListener("fetch", (event) => {
 // Bestanden die altijd vers van de server gehaald worden (niet Cache First)
 const NETWORK_FIRST_PATHS = ["/app.js", "/modules/"];
 
+// ── Strategie 0: App Shell — cache-first, netwerkupdate op achtergrond ──────
+async function serveAppShell(req) {
+  const cache  = await caches.open(SHELL_CACHE);
+  const cached = await cache.match(req)
+              || await cache.match("/index.html")
+              || await cache.match("/");
+  if (cached) {
+    // Stuur gecachede versie direct — update cache op achtergrond
+    fetch(req, { signal: AbortSignal.timeout(3000) })
+      .then(res => { if (res.ok) cache.put(req, res); })
+      .catch(() => {});
+    return cached;
+  }
+  // Niet gecached: probeer netwerk (eerste bezoek)
+  try {
+    const res = await fetch(req, { signal: AbortSignal.timeout(8000) });
+    if (res.ok) cache.put(req, res.clone());
+    return res;
+  } catch {
+    return new Response(
+      "<h2 style='font-family:sans-serif;padding:20px'>Offline — open de app eerst terwijl de server bereikbaar is.</h2>",
+      { status: 503, headers: { "Content-Type": "text/html" } }
+    );
+  }
+}
+
 // ── Strategie 1: Cache First voor statische assets, Network First voor app-code ──
 async function networkFirstWithCache(req) {
   const cache = await caches.open(SHELL_CACHE);
   try {
-    const resp = await fetch(req, { signal: AbortSignal.timeout(5000) });
+    const resp = await fetch(req, { signal: AbortSignal.timeout(2000) });
     if (resp.ok) { cache.put(req, resp.clone()); return resp; }
   } catch {}
   const cached = await cache.match(req);
@@ -315,20 +343,31 @@ async function cacheFirstWithNetwork(req) {
   const url  = new URL(req.url);
   const path = url.pathname;
 
-  // app.js en modules: altijd proberen van server (Network First)
+  // app.js en modules: cache-first met snelle achtergrond-update
+  // KRITIEK: korte timeout — anders hangt de app offline (zwart scherm)
   const isAppCode = NETWORK_FIRST_PATHS.some(p => path.startsWith(p));
   if (isAppCode) {
+    const cachedAppCode = await caches.match(req);
+    if (cachedAppCode) {
+      // Direct teruggeven, update op de achtergrond (niet wachten)
+      fetch(req, { cache: "no-store", signal: AbortSignal.timeout(2500) })
+        .then(res => { if (res.ok) caches.open(SHELL_CACHE).then(c => c.put(req, res)); })
+        .catch(() => {});
+      return cachedAppCode;
+    }
+    // Niets gecached: probeer netwerk met timeout
     try {
-      const res = await fetch(req, { cache: "no-store" });
+      const res = await fetch(req, { cache: "no-store", signal: AbortSignal.timeout(2500) });
       if (res.ok) {
         const cache = await caches.open(SHELL_CACHE);
-        cache.put(req, res.clone()); // update cache met nieuwe versie
+        cache.put(req, res.clone());
       }
       return res;
     } catch {
-      // Server offline: val terug op cache
-      const cached = await caches.match(req);
-      if (cached) return cached;
+      return new Response(
+        "// Module niet beschikbaar offline: " + path,
+        { status: 503, headers: { "Content-Type": "application/javascript" } }
+      );
     }
   }
 
@@ -380,6 +419,7 @@ async function networkFirstNoCache(req) {
     const pathname = new URL(req.url).pathname;
     const emptyDefaults = {
       "/api/config":           JSON.stringify({}),
+      "/api/version":          JSON.stringify({version:"offline",sw:"zk-sw-v14"}),
       "/api/pdfs":             JSON.stringify([]),
       "/api/annotations":      JSON.stringify([]),
       "/api/images":           JSON.stringify([]),
