@@ -16,11 +16,16 @@ const VaultSettings = ({vaultPath, onChangeVault, onClose}) => {
         sw:  d.sw   || v.sw,
       }))
     ).catch(()=>{});
-    // SW versie uit cache
+    // SW versie via directe message (scriptURL bevat geen versienummer)
     if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.getRegistration().then(reg => {
-        const sw = reg?.active?.scriptURL?.match(/v(\d+)/)?.[0] || "?";
-        setAppVersion(v=>({...v, sw}));
+      navigator.serviceWorker.ready.then(reg => {
+        const ctrl = reg.active;
+        if (!ctrl) return;
+        const ch = new MessageChannel();
+        ch.port1.onmessage = e => {
+          if (e.data?.version) setAppVersion(v=>({...v, sw: e.data.version}));
+        };
+        ctrl.postMessage({ type: "GET_VERSION" }, [ch.port2]);
       }).catch(()=>{});
     }
   }, []);

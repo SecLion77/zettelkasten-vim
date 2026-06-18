@@ -714,6 +714,11 @@ async function processSyncQueue() {
 self.addEventListener("message", async (event) => {
   const { type, url, name } = event.data || {};
 
+  if (type === "GET_VERSION") {
+    event.ports[0]?.postMessage({ type: "VERSION", version: SW_VERSION });
+    return;
+  }
+
   if (type === "CACHE_PDF") {
     const result = await cacheOfflinePdf(url, name || url.split("/").pop());
     event.ports[0]?.postMessage({ type: "CACHE_PDF_RESULT", ...result });
