@@ -85,10 +85,23 @@ LOCAL = {
     "REACT_DOM_SRC": "/vendor/react-dom.production.min.js",
 }
 
+def _vendor_files_present() -> bool:
+    """Controleer of de kern-vendorbestanden lokaal aanwezig zijn."""
+    required = ["react.production.min.js", "react-dom.production.min.js",
+                "pdf.min.js", "pdf.worker.min.js"]
+    return all((VENDOR_DIR / f).exists() for f in required)
+
 def render_index(offline: bool) -> bytes:
-    """Laad index.html en vul @@PLACEHOLDER@@ variabelen in op basis van modus."""
+    """Laad index.html en vul @@PLACEHOLDER@@ variabelen in.
+
+    Gebruikt ALTIJD lokale vendor-bestanden als die aanwezig zijn — ook
+    zonder --offline vlag. Zo werkt de offline-PWA (iPad zonder server)
+    altijd, zonder dat de gebruiker een specifieke startvlag moet onthouden.
+    CDN wordt alleen gebruikt als fallback wanneer vendor-bestanden ontbreken.
+    """
     tpl = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
-    values = LOCAL if offline else CDN
+    use_local = offline or _vendor_files_present()
+    values = LOCAL if use_local else CDN
     for key, val in values.items():
         tpl = tpl.replace(f"@@{key}@@", val)
     return tpl.encode("utf-8")
@@ -2052,7 +2065,11 @@ class ZKHandler(BaseHTTPRequestHandler):
             }).encode()
             self.send_response(200)
             self.send_header("Content-Type",  "application/json")
-
+            self.send_header("Content-Length", len(data))
+            self.send_header("Cache-Control", "no-cache, no-store")
+            self.end_headers()
+            self.wfile.write(data)
+            return
 
         # ── /api/build-version — automatische versie op basis van bestandsdatum ───
         # Verandert automatisch als app.js of een module aangepast wordt.

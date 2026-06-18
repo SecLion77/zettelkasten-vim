@@ -1,6 +1,6 @@
 // ── Zettelkasten Service Worker ────────────────────────────────────────────
 // Versie: verhoog bij elke deploy om de cache te vernieuwen
-const SW_VERSION  = "zk-sw-v16";  // v3 → wist v2 cache inclusief modules
+const SW_VERSION  = "zk-sw-v17";  // v3 → wist v2 cache inclusief modules
 const SHELL_CACHE  = `${SW_VERSION}-shell`;   // statische bestanden
 const API_CACHE    = `${SW_VERSION}-api`;      // gecachede API-responses
 const IDB_NAME     = "zettelkasten-offline";
@@ -48,6 +48,14 @@ const SHELL_ASSETS = [
   "/modules/BookLibrary.js",
   "/modules/ObjectFields.js",
   "/modules/offlineStore.js",
+  // Vendor-bestanden: React/PDF.js lokaal cachen zodat de app ook werkt
+  // zonder internetverbinding (niet alleen zonder de eigen server)
+  "/vendor/react.production.min.js",
+  "/vendor/react-dom.production.min.js",
+  "/vendor/pdf.min.js",
+  "/vendor/pdf.worker.min.js",
+  "/vendor/hack.css",
+  "/vendor/dm-sans.css",
 ];
 
 // API-routes die we cachen voor offline lezen
@@ -268,16 +276,6 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // GET: App Shell → Cache First (met Network First voor code-bestanden)
-  // JS + HTML: altijd netwerk eerst — updates direct zichtbaar
-  if (req.method === "GET" && (
-      url.pathname.endsWith(".js") ||
-      url.pathname === "/" ||
-      url.pathname === "/index.html" ||
-      url.pathname.endsWith(".html"))) {
-    event.respondWith(networkFirstWithCache(req));
-    return;
-  }
   // Navigatie (index.html): cache-first met network-update
   if (req.method === "GET" && req.mode === "navigate") {
     event.respondWith(serveAppShell(req));
@@ -329,16 +327,6 @@ async function serveAppShell(req) {
 }
 
 // ── Strategie 1: Cache First voor statische assets, Network First voor app-code ──
-async function networkFirstWithCache(req) {
-  const cache = await caches.open(SHELL_CACHE);
-  try {
-    const resp = await fetch(req, { signal: AbortSignal.timeout(2000) });
-    if (resp.ok) { cache.put(req, resp.clone()); return resp; }
-  } catch {}
-  const cached = await cache.match(req);
-  return cached || new Response("Offline", { status: 503 });
-}
-
 async function cacheFirstWithNetwork(req) {
   const url  = new URL(req.url);
   const path = url.pathname;
