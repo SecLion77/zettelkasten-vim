@@ -3888,10 +3888,43 @@ if(!document.getElementById("llm-css")){
   document.head.appendChild(s);
 }
 
+// ── Bionic Reading ────────────────────────────────────────────────────────────
+// Markeert de eerste letters (fixatiepunten) van elk woord vetgedrukt.
+// Versnelt lezen door het visuele anker per woord te versterken.
+function bionicReading(html) {
+  // Stap 1: markeer blok-level tags die we NIET verwerken (code, pre, a, b, strong)
+  const SKIP = /<(pre|code|script|style|a|b|strong|em|h[1-6])[^>]*>[\s\S]*?<\/>/gi;
+  const slots = [];
+  const placeholder = html.replace(SKIP, m => {
+    slots.push(m);
+    return ` SLOT${slots.length - 1} `;
+  });
+
+  // Stap 2: verwerk tekst buiten tags
+  const processed = placeholder.replace(
+    /(<[^>]+>)|([^< ]+)/g,
+    (match, tag, text) => {
+      if (tag) return tag;
+      // Verwerk woorden: minimaal 2 tekens, ook Nederlandse/geaccendeerde letters
+      return text.replace(/[A-Za-zÀ-ÿĀ-ɏ]{2,}/g, word => {
+        const n = word.length <= 3 ? 1
+                : word.length <= 5 ? 2
+                : word.length <= 9 ? 3
+                : Math.ceil(word.length * 0.42);
+        return `<b class="zk-bio">${word.slice(0, n)}</b>${word.slice(n)}`;
+      });
+    }
+  );
+
+  // Stap 3: herstel overgeslagen blokken
+  return processed.replace(/ SLOT(\d+) /g, (_, i) => slots[+i]);
+}
+
 // ── MarkdownWithMermaid ───────────────────────────────────────────────────────
 // Rendert markdown maar vervangt mermaid-mindmap blokken door MermaidPreviewBlock.
-const MarkdownWithMermaid = ({ content, notes, renderMode, isMobile, onClick, onEditMermaid }) => {
-  const html = renderMd(content, notes);
+const MarkdownWithMermaid = ({ content, notes, renderMode, isMobile, onClick, onEditMermaid, bionic=false }) => {
+  const rawHtml = renderMd(content, notes);
+  const html    = bionic ? bionicReading(rawHtml) : rawHtml;
 
   // Splits HTML op mermaid placeholders
   const MARKER = /<div class="mermaid-mindmap-block" data-mermaid="([^"]+)"><\/div>/g;
@@ -3928,7 +3961,7 @@ const MarkdownWithMermaid = ({ content, notes, renderMode, isMobile, onClick, on
       }
       return React.createElement("div", {
         key: i,
-        className: renderMode==="rich" ? "mdv mdv-rich" : "mdv",
+        className: (renderMode==="rich" ? "mdv mdv-rich" : "mdv") + (bionic ? " mdv-bionic" : ""),
         dangerouslySetInnerHTML: { __html: p.html },
       });
     })

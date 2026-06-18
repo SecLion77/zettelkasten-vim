@@ -279,7 +279,22 @@
       background: rgba(159,202,86,0.06);
     }
     .laag-blok-eigen .laag-blok-label { color: #9fca56; }
-  </style>
+  
+    /* ── Bionic Reading ─────────────────────────────────────── */
+    .mdv-bionic { font-weight: 300; }
+    .mdv-bionic b.zk-bio {
+      font-weight: 700;
+      font-style: normal;
+    }
+    /* Zachter contrast voor het niet-vette gedeelte */
+    .mdv-bionic { color: rgba(var(--fg-rgb, 233,235,220), 0.72); }
+    .mdv-bionic b.zk-bio { color: var(--fg, #e9ebdc); }
+    /* Koppen niet dimmen */
+    .mdv-bionic h1, .mdv-bionic h2, .mdv-bionic h3,
+    .mdv-bionic h4, .mdv-bionic h5, .mdv-bionic h6 { color: var(--fg, #e9ebdc); font-weight: 600; }
+    /* Code niet aanpassen */
+    .mdv-bionic code, .mdv-bionic pre { font-weight: 400; color: inherit; }
+</style>
 
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">

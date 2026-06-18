@@ -189,6 +189,12 @@ const NotePreview = ({
   const scrollRef = React.useRef(null);
   const [summarizing,     setSummarizing]     = React.useState(false);
   const [sumError,        setSumError]        = React.useState(null);
+  const [bionic,          setBionic]          = React.useState(
+    () => localStorage.getItem("zk_bionic") === "1"
+  );
+  const toggleBionic = React.useCallback(() => {
+    setBionic(b => { const n=!b; localStorage.setItem("zk_bionic",n?"1":"0"); return n; });
+  }, []);
   const [showLinkPanel,   setShowLinkPanel]   = React.useState(false);
 
   const doSummarize = React.useCallback(async () => {
@@ -394,6 +400,17 @@ const NotePreview = ({
       title: "Wisselen tussen plain en rijke markdown weergave",
       style: btnBase(renderMode === "rich", W.blue, "rgba(138,198,242,0.12)"),
     }, renderMode === "rich" ? "📄 plain" : "🎨 render"),
+    React.createElement("button", {
+      onClick: toggleBionic,
+      title: bionic ? "Bionic Reading uit" : "Bionic Reading aan — fixatiepunten per woord vetgedrukt",
+      style: {
+        background:   bionic ? "rgba(138,198,242,0.12)" : "none",
+        border:       `1px solid ${bionic ? "rgba(138,198,242,0.4)" : W.splitBg}`,
+        borderRadius: "5px", color: bionic ? W.blue : W.fgMuted,
+        fontSize: "11px", padding: "3px 9px", cursor: "pointer",
+        fontWeight: bionic ? "700" : "400", transition: "all .15s",
+      }
+    }, bionic ? "𝗕 Bionic" : "B Bionic"),
 
     // ── Samenvatten knop ─────────────────────────────────────────────────────
     llmModel && React.createElement("button", {
@@ -514,6 +531,7 @@ const NotePreview = ({
       isMobile,
       onClick:      onLinkClick,
       onEditMermaid,
+      bionic,
     }),
     note && React.createElement(SimilarPanel, {
       noteId: note.id,
