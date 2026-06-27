@@ -1850,6 +1850,44 @@ class ZKHandler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError, OSError):
             pass
 
+    def _send_index_conditional(self):
+        """Stuur index.html met Last-Modified/If-Modified-Since (304 bij ongewijzigd).
+
+        Voorkomt dat de VOLLEDIGE pagina bij elke navigatie over een trage of
+        wisselvallige verbinding (bijv. extern IP-adres) verstuurd moet worden.
+        Garandeert tegelijk dat wijzigingen altijd zichtbaar worden (no-cache
+        dwingt revalidatie, maar bij een 304 is het antwoord vrijwel instant).
+        """
+        try:
+            import email.utils as _eut
+            app_js_fp  = STATIC_DIR / "app.js"
+            idx_fp     = STATIC_DIR / "index.html"
+            mtime      = max(
+                app_js_fp.stat().st_mtime if app_js_fp.exists() else 0,
+                idx_fp.stat().st_mtime    if idx_fp.exists()    else 0,
+            )
+            last_mod   = _eut.formatdate(mtime, usegmt=True)
+
+            inm = self.headers.get("If-Modified-Since")
+            if inm and inm == last_mod:
+                self.send_response(304)
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("Last-Modified", last_mod)
+                self.end_headers()
+                return
+
+            body = render_index(self.offline)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Length", len(body))
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Last-Modified", last_mod)
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
+
     def _send_file(self, path, ct):
         """Verstuur een groot bestand in chunks om buffer-overflow te vermijden."""
         try:
@@ -2041,7 +2079,7 @@ class ZKHandler(BaseHTTPRequestHandler):
             return self._send(404,{"error":"Afbeelding niet gevonden"})
         # Statische bestanden — index.html via template (online/offline)
         if p == "/":
-            return self._send(200, render_index(self.offline), "text/html")
+            return self._send_index_conditional()
         if p == "/app.js":
             fp = STATIC_DIR / "app.js"
             if fp.exists(): return self._send_nocache(fp.read_bytes(), "application/javascript")

@@ -960,8 +960,17 @@ const OfflineBadge = () => {
     update:   { bg:"rgba(159,202,86,.12)",  border:"rgba(159,202,86,.35)",  color:"#9fca56", label:"↑ Update beschikbaar", pulse:false },
   }[state] || {};
 
-  const handleClick = () => {
-    if (state === "update") { window.location.reload(); return; }
+  const handleClick = async () => {
+    if (state === "update") {
+      // Forceer SW-update vóór herladen (belangrijk op iOS)
+      try {
+        const reg = await navigator.serviceWorker?.getRegistration();
+        await reg?.update();
+        if (reg?.waiting) reg.waiting.postMessage({ type: "SKIP_WAITING" });
+      } catch {}
+      window.location.reload();
+      return;
+    }
     if (state === "queued") {
       setState("syncing");
       // Probeer SW-sync én directe queue sync

@@ -1,6 +1,6 @@
 // ── Zettelkasten Service Worker ────────────────────────────────────────────
 // Versie: verhoog bij elke deploy om de cache te vernieuwen
-const SW_VERSION  = "zk-sw-v17";  // v3 → wist v2 cache inclusief modules
+const SW_VERSION  = "zk-sw-v19";  // v3 → wist v2 cache inclusief modules
 const SHELL_CACHE  = `${SW_VERSION}-shell`;   // statische bestanden
 const API_CACHE    = `${SW_VERSION}-api`;      // gecachede API-responses
 const IDB_NAME     = "zettelkasten-offline";
@@ -713,6 +713,11 @@ async function processSyncQueue() {
 // ── Messages van de app ontvangen ────────────────────────────────────────────
 self.addEventListener("message", async (event) => {
   const { type, url, name } = event.data || {};
+
+  if (type === "SKIP_WAITING") {
+    self.skipWaiting();
+    return;
+  }
 
   if (type === "GET_VERSION") {
     event.ports[0]?.postMessage({ type: "VERSION", version: SW_VERSION });
