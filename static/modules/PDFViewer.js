@@ -313,7 +313,12 @@ const PDFUploadPanel = ({ serverPdfs=[], onRefreshPdfs, onOpenPdf, onTogglePdfRe
                 pdf.estimatedMinutes > 0 && React.createElement("span",{style:{fontSize:"10px",color:W.fgDim}},
                   `· ${pdf.estimatedMinutes} min`),
                 pdf.isRead && React.createElement("span",{style:{fontSize:"10px",color:"#72b660",fontWeight:"600"}},
-                  "· ✓ gelezen")
+                  "· ✓ gelezen"),
+                annotCount > 0 && React.createElement("span",{style:{
+                  fontSize:"10px",color:W.yellow||"#eac435",
+                  background:"rgba(234,196,53,0.08)",border:"1px solid rgba(234,196,53,0.2)",
+                  borderRadius:"8px",padding:"1px 6px",
+                }}, `✦ ${annotCount}`)
               )
             ),
             // Offline knop
@@ -382,7 +387,7 @@ const PDFUploadPanel = ({ serverPdfs=[], onRefreshPdfs, onOpenPdf, onTogglePdfRe
   );
 };
 
-const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, onAutoSummarize, onDeletePdf, onPasteToNote=null, onAddNote=null, notes=[], isTablet=false, onTogglePdfRead=null}) => {
+const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, onAutoSummarize, onDeletePdf, onPasteToNote=null, onAddNote=null, notes=[], isTablet=false, onTogglePdfRead=null, pdfAnnotations=[]}) => {
   const [pdfDoc,     setPdfDoc]     = useState(null);
   const [pdfFile,    setPdfFile]    = useState(null);
   const [pageNum,    setPageNum]    = useState(1);   // huidige zichtbare pagina (voor annotaties)
@@ -421,6 +426,7 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
   const [quickTags,  setQuickTags]  = useState([]);
   const [showLibrary,   setShowLibrary]   = useState(true);
   const [libSearch,     setLibSearch]     = useState("");
+  const [libFilter,     setLibFilter]     = useState("all");
   const [libView,       setLibView]       = useState("grid"); // "grid" | "list"
   const [thumbCache,    setThumbCache]    = useState({});  // {pdfName: dataURL}
   const [showAnnotPanel,setShowAnnotPanel]= useState(!isTablet);
@@ -1788,6 +1794,35 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
                 cursor: "pointer", fontSize: "14px", lineHeight: 1, padding: "2px 4px",
               }
             }, "×")
+          ),
+
+          // ── Status filter-pills ────────────────────────────────────────────
+          React.createElement("div", { style: { display: "flex", gap: "6px", flexWrap: "wrap" }},
+            (() => {
+              const all    = serverPdfs || [];
+              const unread = all.filter(p => !p.isRead).length;
+              const read   = all.filter(p =>  p.isRead).length;
+              const offl   = all.filter(p => offlinePdfs.has(p.name)).length;
+              return [
+                { id:"all",     label:`Alle (${all.length})` },
+                { id:"unread",  label:`Ongelezen (${unread})` },
+                { id:"read",    label:`Gelezen (${read})` },
+                { id:"offline", label:`Offline (${offl})` },
+              ].map(f =>
+                React.createElement("button", {
+                  key: f.id,
+                  onClick: () => setLibFilter(f.id),
+                  style: {
+                    padding: "3px 10px", borderRadius: "12px", fontSize: "11px",
+                    cursor: "pointer", border: "none",
+                    background: libFilter === f.id ? "rgba(138,198,242,0.18)" : W.bg2,
+                    color:      libFilter === f.id ? W.blue : W.fgMuted,
+                    fontWeight: libFilter === f.id ? "600" : "400",
+                    outline: libFilter === f.id ? `1px solid rgba(138,198,242,0.35)` : "none",
+                  }
+                }, f.label)
+              );
+            })()
           )
         ),
 
@@ -1813,12 +1848,14 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
         // ── Inhoud: gefilterde lijst ───────────────────────────────────────
         serverPdfs && serverPdfs.length > 0 && (() => {
           const q = libSearch.toLowerCase().trim();
-          const filtered = q
-            ? (serverPdfs || []).filter(p =>
-                p.name.toLowerCase().includes(q) ||
-                p.name.replace(/_/g," ").toLowerCase().includes(q)
-              )
-            : (serverPdfs || []);
+          const filtered = (serverPdfs || []).filter(p => {
+            if (q && !p.name.toLowerCase().includes(q) &&
+                !p.name.replace(/_/g," ").toLowerCase().includes(q)) return false;
+            if (libFilter === "unread"  && p.isRead) return false;
+            if (libFilter === "read"    && !p.isRead) return false;
+            if (libFilter === "offline" && !offlinePdfs.has(p.name)) return false;
+            return true;
+          });
 
           if (filtered.length === 0) return React.createElement("div", { style: {
             padding: "48px 20px", textAlign: "center", color: W.fgMuted, fontSize: "13px",

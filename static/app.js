@@ -1381,7 +1381,6 @@ const App = () => {
     ]},
     { id:"input",      icon:"🌐", label:"Invoer",      sub: [
         {id:"import",    icon:"🌐", label:"URL / Word"},
-        {id:"pdfimport", icon:"📄", label:"PDF"},
         {id:"stats",     icon:"📊", label:"Statistieken"},
     ]},
 ];
@@ -1924,6 +1923,7 @@ const App = () => {
               notes,isTablet,
               llmModel: W.model || localStorage.getItem("zk_model") || "gemma3:12b",
               onRefreshPdfs:refreshPdfs,
+              pdfAnnotations: pdfNotes,
               onTogglePdfRead: async name => {
                 await fetch("/api/pdf-read-toggle",{
                   method:"POST", headers:{"Content-Type":"application/json"},
@@ -2022,24 +2022,7 @@ const App = () => {
                 setSelId(saved.id);
                 setTab("notes");
               }}));
-          if(t==="pdfimport") return React.createElement("div",{style:{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",minHeight:0}},
-            React.createElement(PDFUploadPanel,{
-              serverPdfs,
-              onRefreshPdfs: refreshPdfs,
-              onTogglePdfRead: async name => {
-                await fetch("/api/pdf-read-toggle",{
-                  method:"POST", headers:{"Content-Type":"application/json"},
-                  body:JSON.stringify({name}),
-                });
-                setServerPdfs(await PDFService.listPdfs());
-              },
-              onOpenPdf: (name) => { setSplitTab("pdf"); setTab("pdf"); },
-              allTags,
-              notes,
-              onAddNote: async(note) => { await NoteStore.save(note); setNotes([...NoteStore.getAll()]); },
-              llmModel,
-              addJob, updateJob,
-            }));
+          
           if(t==="import") return React.createElement("div",{style:{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",minHeight:0}},
             React.createElement(WebImporter,{llmModel,allTags,
               notes,

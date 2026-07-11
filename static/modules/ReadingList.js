@@ -205,10 +205,9 @@ const ReadingList = ({ notes = [], onSelectNote, onUpdateNote, onDeleteNote, ser
             onClick:()=>setActiveTab("articles"),
             style:S.pill(activeTab==="articles")
           },"📖 Artikelen"),
-          React.createElement("button",{
-            onClick:()=>setActiveTab("pdfs"),
-            style:S.pill(activeTab==="pdfs")
-          },`📄 PDFs${serverPdfs.length ? " ("+serverPdfs.length+")" : ""}`)
+          React.createElement("span",{style:{fontSize:"11px",color:W.fgDim,
+            padding:"3px 8px",borderRadius:"10px",background:W.bg2}},
+            "📄 PDF-status → PDF-bibliotheek")
         ),
         // View-tabs (alleen bij artikelen)
         activeTab==="articles" && React.createElement("button", {
@@ -257,7 +256,7 @@ const ReadingList = ({ notes = [], onSelectNote, onUpdateNote, onDeleteNote, ser
     ),
 
     // ── Duplicaten-paneel ───────────────────────────────────────────────────────
-    activeTab === "articles" && view === "dupes" && React.createElement("div", {
+    view === "dupes" && React.createElement("div", {
       style:{ flex:1, overflowY:"auto", padding:"16px 20px",
         WebkitOverflowScrolling:"touch" }
     },
@@ -393,7 +392,7 @@ const ReadingList = ({ notes = [], onSelectNote, onUpdateNote, onDeleteNote, ser
     ),
 
     // ── Tabel (alleen in lijst-weergave) ────────────────────────────────────────
-    activeTab === "articles" && view === "list" && (items.length === 0
+    view === "list" && (items.length === 0
       ? React.createElement("div", { style:S.empty },
           React.createElement("div", { style:{ fontSize:"40px" } }, "📭"),
           React.createElement("div", null, filter !== "all"
@@ -481,7 +480,7 @@ const ReadingList = ({ notes = [], onSelectNote, onUpdateNote, onDeleteNote, ser
         )
     )
     // ── PDF Leeslijst tab ─────────────────────────────────────────────────
-    ,activeTab === "pdfs" && (() => {
+    ,false && (() => {
       const fmtDate = d => { if(!d) return "—"; const dt=new Date(d); return dt.toLocaleDateString("nl-NL",{day:"2-digit",month:"short"}); };
       const pdfs = serverPdfs
         .filter(p => {
