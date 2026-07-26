@@ -281,27 +281,18 @@
     .laag-blok-eigen .laag-blok-label { color: #9fca56; }
   
     /* ── Bionic Reading ─────────────────────────────────────── */
-    /* Werkt op ALLE thema's (licht én donker): opacity is altijd relatief
-       aan de huidige tekstkleur — geen hardcoded kleuren meer. */
+    /* Fixatiepunt: vet + volle kleur (inherit = werkt op elk thema) */
     .mdv-bionic b.zk-bio {
       font-weight: 800;
       font-style: normal;
+      color: inherit;
       opacity: 1;
     }
-    /* Niet-vette letters iets dimmen — werkt op licht én donker */
-    .mdv-bionic :not(b):not(code):not(pre):not(h1):not(h2):not(h3):not(h4):not(h5):not(h6):not(a) {
-      opacity: 0.55;
+    /* Suffix: zelfde kleur maar iets gedimd voor contrast */
+    .mdv-bionic span.zk-rest {
+      opacity: 0.42;
+      font-weight: 400;
     }
-    /* Herstel opacity voor structurele elementen */
-    .mdv-bionic p, .mdv-bionic li, .mdv-bionic div,
-    .mdv-bionic ul, .mdv-bionic ol, .mdv-bionic blockquote { opacity: 1; }
-    /* Koppen altijd vol zichtbaar */
-    .mdv-bionic h1, .mdv-bionic h2, .mdv-bionic h3,
-    .mdv-bionic h4, .mdv-bionic h5, .mdv-bionic h6 { font-weight: 700; }
-    .mdv-bionic h1 b.zk-bio, .mdv-bionic h2 b.zk-bio, .mdv-bionic h3 b.zk-bio { font-weight: 900; }
-    /* Code, links en callouts niet aanpassen */
-    .mdv-bionic code, .mdv-bionic pre,
-    .mdv-bionic a, .mdv-bionic .callout { opacity: 1; font-weight: inherit; }
 </style>
 
   <meta name="mobile-web-app-capable" content="yes">

@@ -3911,7 +3911,9 @@ function bionicReading(html) {
                 : word.length <= 5 ? 2
                 : word.length <= 9 ? 3
                 : Math.ceil(word.length * 0.42);
-        return `<b class="zk-bio">${word.slice(0, n)}</b>${word.slice(n)}`;
+        const suffix = word.slice(n);
+        return `<b class="zk-bio">${word.slice(0, n)}</b>`
+             + (suffix ? `<span class="zk-rest">${suffix}</span>` : "");
       });
     }
   );
