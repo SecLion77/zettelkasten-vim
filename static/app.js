@@ -1012,7 +1012,7 @@ const App = () => {
   const [canvasPendingNotes, setCanvasPendingNotes] = useState(null); // noteIds wachten op canvas
   const [goyoMode, setGoyoMode] = useState(false); // App-level: beïnvloedt topbar
   const [splitMode,  setSplitMode]  = useState(false);
-  const [splitTab,   setSplitTab]   = useState("pdf");
+  const [splitTab,   setSplitTab]   = useState("daily");
   const [splitFocus, setSplitFocus] = useState("left");  // "left" | "right"
   const [splitLeft,  setSplitLeft]  = useState("notes"); // "notes" | "whiteboard"
   // Tellers om focus te triggeren bij split-wissel
@@ -1062,7 +1062,7 @@ const App = () => {
   }, []);
   const [selId,    setSelId]   = useState(null);
   const [splitSelId, setSplitSelId] = useState(null); // rechter paneel notitie-preview
-  const [tab,      setTab]     = useState("notes");
+  const [tab,      setTab]     = useState("today");
   const [pdfNotes,     setPdfNotes]    = useState([]);
   const [imgNotes,     setImgNotes]    = useState([]);
   const [serverPdfs,   setServerPdfs]  = useState([]);
@@ -1360,6 +1360,7 @@ const App = () => {
   );
 
   const MAIN_TABS = [
+    { id:"today",      icon:"⚡", label:"Vandaag",     sub: null },
     { id:"notes",      icon:"📝", label:"Schrijven",   sub: null },
     { id:"whiteboard", icon:"🎨", label:"Canvas",      sub: null },
     { id:"library",    icon:"📚", label:"Bibliotheek", sub: [
@@ -1373,6 +1374,7 @@ const App = () => {
     ]},
     { id:"discover",   icon:"🔍", label:"Ontdekken",   sub: [
         {id:"search",   icon:"🔍", label:"Zoeken"},
+        {id:"semantic", icon:"🧠", label:"Semantisch"},
         {id:"graph",    icon:"🕸",  label:"Graaf"},
         {id:"mindmap",  icon:"🗺",  label:"Mindmap"},
         {id:"llm",      icon:"🧠", label:"Notebook"},
@@ -1918,6 +1920,15 @@ const App = () => {
               onSelect:id=>{setSelId(id);setTab("notes");},selectedId:selId,
               onUpdateNote:async(note)=>{ await NoteStore.save(note); setNotes([...NoteStore.getAll()]); },
               onDeleteNote:(id)=>{ NoteStore.remove(id).then(()=>setNotes([...NoteStore.getAll()])); }}));
+          if(t==="daily") return React.createElement(DailyView, {
+            notes, llmModel,
+            onOpenNote: id => { setSelId(id); setTab("notes"); },
+            onAddNote:  async note => {
+              const saved = await NoteStore.save(note);
+              setNotes([...NoteStore.getAll()]);
+              if(saved?.id){ setSelId(saved.id); setTab("notes"); }
+            },
+          });
           if(t==="pdf") return React.createElement("div",{style:{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",minHeight:0}},
             React.createElement(PDFViewer,{pdfNotes,setPdfNotes,allTags,serverPdfs,
               notes,isTablet,
@@ -2140,7 +2151,16 @@ const App = () => {
               onPasteToNote: selId ? handlePasteToNote : null,
               prefillMsg: window._notebookPrefill || null,
             }));
-          if(t==="tags") return React.createElement("div",{style:{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",minHeight:0}},
+          if(t==="semantic") return React.createElement(SemanticSearch,{
+            notes,
+            llmModel,
+            onOpenNote: id => {
+              if (isSplitRight) { setSplitSelId(id); }
+              else { setSelId(id); setTab("notes"); }
+            },
+          });
+          if(t==="tags") return React.createElement("div",
+{style:{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",minHeight:0}},
             React.createElement(TagManagerPanel,{
               allTags, notes,
               llmModel,
@@ -2171,6 +2191,16 @@ const App = () => {
             onOpenNote: id => {
               if (isSplitRight) { setSplitSelId(id); }
               else { setSelId(id); setTab("notes"); }
+            },
+          });
+          if(t==="today" || t==="daily") return React.createElement(DailyView,{
+            notes,
+            llmModel,
+            onOpenNote: id => { setSelId(id); setTab("notes"); },
+            onAddNote:  async note => {
+              const saved = await NoteStore.save(note);
+              setNotes([...NoteStore.getAll()]);
+              setSelId(saved.id); setTab("notes");
             },
           });
           if(t==="notes") return React.createElement("div",{
@@ -2297,6 +2327,7 @@ const App = () => {
                  {id:"tasks",       icon:"✓",  label:"Taken"},
                  {id:"annotations", icon:"✦",  label:"Annotaties"},
                  {id:"query",       icon:"🔎", label:"Query"},
+                 {id:"semantic",    icon:"🧠", label:"Semantisch"},
                  {id:"pdf",        icon:"📄", label:"PDF"},
                  {id:"images",     icon:"🖼",  label:"Plaatjes"},
                 ].map(({id,icon,label})=>React.createElement("button",{

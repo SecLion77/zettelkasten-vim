@@ -193,7 +193,10 @@ class VaultManager:
         return [n for n in (self._parse_note(p) for p in
                 sorted(self.notes_dir.glob("*.md"),key=lambda x:x.stat().st_mtime,reverse=True)) if n]
     def save_note(self, note):
-        import tempfile as _tf, os as _os
+        import tempfile as _tf, os as _os, uuid as _uuid
+        # Zorg dat elke notitie een id heeft
+        if not note.get("id"):
+            note["id"] = _uuid.uuid4().hex[:12]
         # Verwijder surrogate characters die UTF-8 niet kan encoderen
         def strip_surrogates(s):
             if not isinstance(s, str): return s
@@ -227,6 +230,9 @@ class VaultManager:
                 raise
         except OSError:
             path.write_text(text, encoding="utf-8")
+        # Versiegeschiedenis bijhouden
+        try: self.save_note_version(note.get("id",""), text)
+        except Exception: pass
         return note
     def delete_note(self, nid):
         p = self._note_path(nid)
@@ -268,6 +274,21 @@ class VaultManager:
         return {"ok": True}
 
     # PDFs
+    # ── Semantisch zoeken via Ollama embeddings ──────────────────────────────
+    def _embedding_path(self):
+        return self.vault / ".zettelkasten_embeddings.json"
+
+    def _load_embeddings(self) -> dict:
+        p = self._embedding_path()
+        if not p.exists(): return {}
+        try: return json.loads(p.read_text("utf-8"))
+        except Exception: return {}
+
+    def _save_embeddings(self, data: dict):
+        self._embedding_path().write_text(
+            json.dumps(data, ensure_ascii=False), "utf-8")
+
+
     def _pdf_meta_path(self):
         return self.vault / ".zettelkasten_pdf_meta.json"
 
@@ -331,6 +352,39 @@ class VaultManager:
                 "estimatedMinutes": m.get("estimatedMinutes", 0),
             })
         return result
+    # ── Notitiehistorie ───────────────────────────────────────────────────
+    def _history_dir(self, note_id: str):
+        """Map voor versiegeschiedenis van een notitie."""
+        safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in note_id)
+        d = self.vault / ".history" / safe
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def save_note_version(self, note_id: str, content: str):
+        """Sla een snapshot op bij elke save (max 50 versies per notitie)."""
+        ts   = datetime.now().strftime("%Y%m%d_%H%M%S")
+        dest = self._history_dir(note_id) / f"{ts}.md"
+        dest.write_text(content, encoding="utf-8")
+        # Opruimen: bewaar alleen de laatste 50 versies
+        versions = sorted(self._history_dir(note_id).glob("*.md"))
+        for old in versions[:-50]:
+            old.unlink(missing_ok=True)
+
+    def list_note_versions(self, note_id: str) -> list:
+        """Geeft lijst van {ts, size} gesorteerd nieuw→oud."""
+        versions = sorted(self._history_dir(note_id).glob("*.md"), reverse=True)
+        return [{
+            "ts":   v.stem,
+            "date": v.stem[:8],
+            "time": v.stem[9:].replace("_", ":"),
+            "size": v.stat().st_size,
+        } for v in versions]
+
+    def get_note_version(self, note_id: str, ts: str) -> str | None:
+        """Laad een specifieke versie."""
+        p = self._history_dir(note_id) / f"{ts}.md"
+        return p.read_text("utf-8") if p.exists() else None
+
     def save_pdf(self, filename, data):
         safe="".join(c if c.isalnum() or c in "-_." else "_" for c in filename)
         (self.pdf_dir/safe).write_bytes(data); return safe
@@ -2332,12 +2386,86 @@ class ZKHandler(BaseHTTPRequestHandler):
             a=self._body()
             if isinstance(a,list): self.vault.save_img_annotations(a); return self._send(200,{"ok":True})
             return self._send(400,{"error":"Verwacht een lijst"})
+        if p=="/api/ollama-models":
+            try:
+                d = self._ollama_post("/api/tags", {}, 5)
+                models = [m["name"] for m in d.get("models", [])]
+                return self._send(200, {"ok": True, "models": models})
+            except Exception:
+                return self._send(200, {"ok": True, "models": []})
+
+        if p=="/api/semantic/embed":
+
+            body  = self._body()
+            texts = body.get("texts", [])  # lijst van {id, text}
+            model = body.get("model", "nomic-embed-text")
+            if not texts:
+                return self._send(400, {"error": "texts vereist"})
+            try:
+                store   = self.vault._load_embeddings()
+                updated = 0
+                for item in texts:
+                    tid, text = item.get("id",""), item.get("text","")
+                    if not tid or not text: continue
+                    # Roep Ollama /api/embeddings aan
+                    result = self._ollama_post("/api/embeddings",
+                        {"model": model, "prompt": text[:2000]}, 30)
+                    emb = result.get("embedding", [])
+                    if emb:
+                        store[tid] = {"embedding": emb, "ts": __import__("time").time()}
+                        updated += 1
+                self.vault._save_embeddings(store)
+                return self._send(200, {"ok": True, "updated": updated, "total": len(store)})
+            except Exception as e:
+                return self._send(200, {"ok": False, "error": str(e),
+                    "hint": "Installeer nomic-embed-text: ollama pull nomic-embed-text"})
+
+        if p=="/api/semantic/search":
+            body  = self._body()
+            query = body.get("query", "")
+            limit = int(body.get("limit", 10))
+            model = body.get("model", "nomic-embed-text")
+            if not query:
+                return self._send(400, {"error": "query vereist"})
+            try:
+                import math
+                # Embed de zoekvraag
+                q_result = self._ollama_post("/api/embeddings",
+                    {"model": model, "prompt": query}, 15)
+                q_emb = q_result.get("embedding", [])
+                if not q_emb:
+                    return self._send(200, {"ok": False, "error": "Geen embedding ontvangen",
+                        "hint": "ollama pull nomic-embed-text"})
+                # Cosine similarity met alle notities
+                store   = self.vault._load_embeddings()
+                results = []
+                q_norm  = math.sqrt(sum(x*x for x in q_emb)) or 1
+                for nid, entry in store.items():
+                    emb = entry.get("embedding", [])
+                    if len(emb) != len(q_emb): continue
+                    dot  = sum(a*b for a,b in zip(q_emb, emb))
+                    norm = math.sqrt(sum(x*x for x in emb)) or 1
+                    sim  = dot / (q_norm * norm)
+                    results.append({"id": nid, "score": round(sim, 4)})
+                results.sort(key=lambda x: x["score"], reverse=True)
+                return self._send(200, {"ok": True, "results": results[:limit]})
+            except Exception as e:
+                return self._send(200, {"ok": False, "error": str(e)})
+
+        if p=="/api/semantic/status":
+            store = self.vault._load_embeddings()
+            return self._send(200, {"ok": True, "indexed": len(store)})
+
         if p=="/api/pdf-read-toggle":
             body = self._body()
             name = body.get("name","")
             if not name: return self._send(400,{"error":"name vereist"})
             entry = self.vault.toggle_pdf_read(name)
             return self._send(200,{"ok":True,"name":name,**entry})
+
+        if p=="/api/transcribe":
+            return self._transcribe_audio()
+
         if p=="/api/pdfs":
             ct=self.headers.get("Content-Type","")
             if "multipart" in ct:
@@ -3496,7 +3624,7 @@ class ZKHandler(BaseHTTPRequestHandler):
                 self._jan_url() + "/v1/models",
                 headers={"Authorization": "Bearer " + (self.vault.get_api_key("jan") or "jan-local")}
             )
-            with urllib.request.urlopen(req, timeout=5) as r:
+            with urllib.request.urlopen(req, 5) as r:
                 d = json.loads(r.read())
                 return [m["id"] for m in d.get("data", [])]
         except Exception:
@@ -5018,7 +5146,7 @@ class ZKHandler(BaseHTTPRequestHandler):
                     req = _r2.Request("https://api.anthropic.com/v1/messages", data=payload,
                         headers={"Content-Type":"application/json","x-api-key":api_key,
                                  "anthropic-version":"2023-06-01"}, method="POST")
-                    with _r2.urlopen(req, timeout=30) as r:
+                    with _r2.urlopen(req, 30) as r:
                         summary = json.loads(r.read()).get("content",[{}])[0].get("text","")
 
             elif model.startswith("gpt") or model.startswith("o"):
@@ -5030,7 +5158,7 @@ class ZKHandler(BaseHTTPRequestHandler):
                     req = _r2.Request("https://api.openai.com/v1/chat/completions", data=payload,
                         headers={"Content-Type":"application/json","Authorization":"Bearer "+api_key},
                         method="POST")
-                    with _r2.urlopen(req, timeout=30) as r:
+                    with _r2.urlopen(req, 30) as r:
                         summary = json.loads(r.read()).get("choices",[{}])[0].get("message",{}).get("content","")
 
             elif model.startswith("gemini"):
@@ -5042,7 +5170,7 @@ class ZKHandler(BaseHTTPRequestHandler):
                     url2 = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
                     req = _r2.Request(url2, data=payload,
                         headers={"Content-Type":"application/json"}, method="POST")
-                    with _r2.urlopen(req, timeout=30) as r:
+                    with _r2.urlopen(req, 30) as r:
                         summary = json.loads(r.read()).get("candidates",[{}])[0].get("content",{}).get("parts",[{}])[0].get("text","")
 
             elif model.startswith("mistral") or model.startswith("magistral"):
@@ -5054,7 +5182,7 @@ class ZKHandler(BaseHTTPRequestHandler):
                     req = _r2.Request("https://api.mistral.ai/v1/chat/completions", data=payload,
                         headers={"Content-Type":"application/json","Authorization":"Bearer "+api_key},
                         method="POST")
-                    with _r2.urlopen(req, timeout=30) as r:
+                    with _r2.urlopen(req, 30) as r:
                         summary = json.loads(r.read()).get("choices",[{}])[0].get("message",{}).get("content","")
 
             elif model.startswith("mistral") or "/" in model:  # Mistral direct of OpenRouter
@@ -5068,7 +5196,7 @@ class ZKHandler(BaseHTTPRequestHandler):
                     req = _r2.Request("https://openrouter.ai/api/v1/chat/completions", data=payload,
                         headers={"Content-Type":"application/json","Authorization":"Bearer "+api_key,
                                  "HTTP-Referer":"http://localhost:7842"}, method="POST")
-                    with _r2.urlopen(req, timeout=30) as r:
+                    with _r2.urlopen(req, 30) as r:
                         summary = json.loads(r.read()).get("choices",[{}])[0].get("message",{}).get("content","")
 
             else:
@@ -5789,7 +5917,7 @@ class ZKHandler(BaseHTTPRequestHandler):
                     "Accept-Language": "nl,en;q=0.9",
                     "Referer": url,
                 })
-                with urllib.request.urlopen(jreq, timeout=15) as jr:
+                with urllib.request.urlopen(jreq, 15) as jr:
                     jdata = json.loads(jr.read().decode("utf-8", errors="replace"))
                 # Substack JSON bevat "post" object met "body_html" of "body_text"
                 post = jdata if "body_html" in jdata else jdata.get("post", {})

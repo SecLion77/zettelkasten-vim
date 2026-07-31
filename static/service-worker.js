@@ -1,6 +1,6 @@
 // ── Zettelkasten Service Worker ────────────────────────────────────────────
 // Versie: verhoog bij elke deploy om de cache te vernieuwen
-const SW_VERSION  = "zk-sw-v19";  // v3 → wist v2 cache inclusief modules
+const SW_VERSION  = "zk-sw-v21";  // v3 → wist v2 cache inclusief modules
 const SHELL_CACHE  = `${SW_VERSION}-shell`;   // statische bestanden
 const API_CACHE    = `${SW_VERSION}-api`;      // gecachede API-responses
 const IDB_NAME     = "zettelkasten-offline";
@@ -48,6 +48,9 @@ const SHELL_ASSETS = [
   "/modules/BookLibrary.js",
   "/modules/ObjectFields.js",
   "/modules/offlineStore.js",
+  "/modules/SemanticSearch.js",
+  "/modules/DailyView.js",
+  "/modules/DailyView.js",
   // Vendor-bestanden: React/PDF.js lokaal cachen zodat de app ook werkt
   // zonder internetverbinding (niet alleen zonder de eigen server)
   "/vendor/react.production.min.js",
