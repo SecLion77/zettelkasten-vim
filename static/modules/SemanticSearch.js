@@ -148,10 +148,10 @@ const SemanticSearch = ({ notes = [], onOpenNote, llmModel = "" }) => {
         }),
         React.createElement("button", {
           onClick: doSearch, disabled: searching || !query.trim(),
-          style: { background:W.blue, color:W.bg, border:"none",
+          style: { background:W.blue||"#7aa8c8", color:W.bg||"#1a1a1a", border:"none",
                    borderRadius:"7px", padding:"9px 18px",
                    cursor: searching ? "wait" : "pointer",
-                   fontSize:"13px", fontWeight:"600",
+                   fontSize:"13px", fontWeight:"700",
                    opacity: searching ? 0.7 : 1 }
         }, searching ? "⏳" : "Zoek")
       ),
@@ -193,18 +193,28 @@ const SemanticSearch = ({ notes = [], onOpenNote, llmModel = "" }) => {
           onClick: () => buildIndex(true),
           disabled: indexing,
           title: "Indexeer ontbrekende notities (nieuwe + gewijzigde)",
-          style: { background:"none", border:`1px solid ${W.splitBg}`,
-                   color:W.fgMuted, borderRadius:"5px",
-                   padding:"3px 10px", fontSize:"11px",
-                   cursor: indexing ? "wait" : "pointer" }
+          style: {
+            background: indexing ? "rgba(138,198,242,0.1)" : "rgba(255,255,255,0.07)",
+            border: `1px solid ${W.blue||"#7aa8c8"}`,
+            color: W.blue||"#7aa8c8",
+            borderRadius:"6px", padding:"4px 12px",
+            fontSize:"12px", fontWeight:"600",
+            cursor: indexing ? "wait" : "pointer",
+            opacity: indexing ? 0.7 : 1,
+          }
         }, indexing ? `⏳ ${indexPct}%` : "↻ Index bijwerken"),
 
         covered < 100 && !indexing && React.createElement("button", {
           onClick: () => buildIndex(false),
           title: "Herindexeer alle notities",
-          style: { background:"none", border:`1px solid ${W.splitBg}`,
-                   color:W.fgDim, borderRadius:"5px",
-                   padding:"3px 8px", fontSize:"11px", cursor:"pointer" }
+          style: {
+            background: "rgba(255,255,255,0.05)",
+            border: `1px solid ${W.splitBg||"#444"}`,
+            color: W.fg||"#d4d4d4",
+            borderRadius:"6px", padding:"4px 10px",
+            fontSize:"12px", fontWeight:"500",
+            cursor:"pointer",
+          }
         }, "Alles herindexeren"),
       ),
 
@@ -291,7 +301,9 @@ const SemanticSearch = ({ notes = [], onOpenNote, llmModel = "" }) => {
           `${results.length} resultaten gevonden voor "${query}"`),
         results.map((hit, i) => {
           const pct   = Math.round(hit.score * 100);
-          const color = pct > 80 ? "#72b660" : pct > 60 ? W.blue : W.fgMuted;
+          const color = pct > 80 ? "#72b660"
+            : pct > 60 ? (W.blue || "#8ac6f2")
+            : (W.fgMuted || "#888888");
           const excerpt = (hit.note.content || "")
             .replace(/^---[\s\S]*?---/, "").replace(/#{1,6}\s/g, "")
             .trim().slice(0, 160);
@@ -312,7 +324,7 @@ const SemanticSearch = ({ notes = [], onOpenNote, llmModel = "" }) => {
             // Similarity score
             React.createElement("div",{style:{
               width:"42px",height:"42px",borderRadius:"50%",flexShrink:0,
-              background:`rgba(${color.replace("#","").match(/../g)?.map(h=>parseInt(h,16)).join(",")},0.12)`,
+              background:(()=>{ try { const h=color.replace("#",""); const [r,g,b]=h.match(/../g).map(x=>parseInt(x,16)); return `rgba(${r},${g},${b},0.12)`; } catch { return "rgba(128,128,128,0.12)"; } })(),
               border:`2px solid ${color}`,
               display:"flex",alignItems:"center",justifyContent:"center",
               fontSize:"11px",fontWeight:"700",color

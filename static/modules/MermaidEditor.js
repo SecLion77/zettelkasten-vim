@@ -2357,7 +2357,7 @@ const LLMNotebook = ({notes, pdfNotes, serverPdfs, serverImages, allTags, onAddN
   const [messages,      setMessages]     = useState([]);
   const [input,         setInput]        = useState("");
   const [streaming,     setStreaming]    = useState(false);
-  const [model,         setModel]        = useState("llama3.2-vision");
+  const [model,         setModel]        = useState(llmModel||"gemma3:12b");
   const [availModels,   setAvailModels]  = useState([]);
   const [ollamaStatus,  setOllamaStatus] = useState("onbekend"); // ok / fout / laden
   const [ollamaUrl,     setOllamaUrl]    = useState("http://localhost:11434");
@@ -2453,9 +2453,11 @@ const LLMNotebook = ({notes, pdfNotes, serverPdfs, serverImages, allTags, onAddN
       const d = await r.json();
       setOllamaUrl(d.ollama_url);
       if (d.ok && d.models.length > 0) {
-        setAvailModels(d.models);
+        const EMBED=["embed","nomic","mxbai","bge","e5-"];
+        const genModels=d.models.filter(m=>!EMBED.some(p=>m.toLowerCase().includes(p)));
+        setAvailModels(genModels);
         setOllamaStatus("ok");
-        if (!d.models.includes(model)) setModel(d.models[0]);
+        if(genModels.length&&!genModels.includes(model))setModel(genModels[0]);
       } else if (d.ok) {
         setAvailModels([]);
         setOllamaStatus("geen-modellen");

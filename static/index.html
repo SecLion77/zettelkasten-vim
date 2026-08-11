@@ -281,17 +281,19 @@
     .laag-blok-eigen .laag-blok-label { color: #9fca56; }
   
     /* ── Bionic Reading ─────────────────────────────────────── */
-    /* Fixatiepunt: vet + volle kleur (inherit = werkt op elk thema) */
+    /* Fixatiepunt: vet + iets zwaarder voor extra contrast */
     .mdv-bionic b.zk-bio {
-      font-weight: 800;
+      font-weight: 900;
       font-style: normal;
       color: inherit;
       opacity: 1;
     }
-    /* Suffix: zelfde kleur maar iets gedimd voor contrast */
+    /* Suffix: 0.65 opacity — leesbaar op donkere thema's (Graphite)
+       én lichte thema's. Onderzoek: 0.42 geeft ~2.8:1 contrast op
+       donker (te laag); 0.65 geeft ~4.5:1 (WCAG AA minimum). */
     .mdv-bionic span.zk-rest {
-      opacity: 0.42;
-      font-weight: 400;
+      opacity: 0.65;
+      font-weight: 350;
     }
 </style>
 
@@ -327,13 +329,13 @@
 <script src="modules/noteStore.js"></script>
 <script src="modules/pdfService.js"></script>
 <script src="modules/annotationStore.js"></script>
-<script src="modules/offlineStore.js?v=16"></script>  <!-- offline-aware patches op NoteAPI/NoteStore -->
-<!-- app.js: globals, constants, api, renderMd, TagPill, TagEditor -->
-<script src="modules/SemanticSearch.js"></script>
-  <script src="modules/DailyView.js"></script>
-  <script src="app.js?v=16"></script>
+<script src="modules/offlineStore.js?v=1786394046"></script>  <!-- offline-aware patches op NoteAPI/NoteStore -->
+<!-- app.js?v=1786475863: globals, constants, api, renderMd, TagPill, TagEditor -->
+<script src="modules/SemanticSearch.js?v=1786476387"></script>
+  <script src="modules/DailyView.js?v=1786476979"></script>
+  <script src="app.js?v=1786475863"></script>
 <script src="modules/OutlineEditor.js"></script>
-<script src="modules/Whiteboard.js?v=16"></script>
+<script src="modules/Whiteboard.js?v=1786394046"></script>
 <script src="modules/VaultCleanup.js"></script>
 <script src="modules/TasksPanel.js"></script>
 <script src="modules/AnnotationsPanel.js"></script>
@@ -355,23 +357,23 @@
 <!-- Afbeeldingen -->
 <script src="modules/ImagesGallery.js"></script>
 <!-- Mermaid, MindMap, LLMNotebook, FuzzySearch -->
-<script src="modules/MermaidEditor.js?v=16"></script>
+<script src="modules/MermaidEditor.js?v=1786476128"></script>
 <!-- Model picker -->
-<script src="modules/ModelPicker.js"></script>
-<!-- Overige UI-modules: laden NA app.js zodat W, TagPill etc. beschikbaar zijn -->
-<script src="modules/NoteList.js?v=16"></script>
+<script src="modules/ModelPicker.js?v=1786423750"></script>
+<!-- Overige UI-modules: laden NA app.js?v=1786475863 zodat W, TagPill etc. beschikbaar zijn -->
+<script src="modules/NoteList.js?v=1786394046"></script>
 <script src="modules/SmartLinkSuggester.js"></script>
     <script src="modules/LinksSidebar.js"></script>
-<script src="modules/NoteEditor.js?v=16"></script>
+<script src="modules/NoteEditor.js?v=1786394046"></script>
 <script src="modules/NotePreview.js"></script>
 <script src="modules/NotesMeta.js"></script>
 <script src="modules/TagManager.js"></script>
-<script src="modules/NotesTab.js?v=16"></script>
+<script src="modules/NotesTab.js?v=1786394046"></script>
 <script src="modules/WebImporter.js"></script>
 <script src="modules/ReadingList.js"></script>
 <script src="modules/StatsPanel.js"></script>
-<script src="modules/ReviewPanel.js"></script>
-<!-- Live sync zit al in app.js — sync.js verwijderd -->
+<script src="modules/ReviewPanel.js?v=1786394046"></script>
+<!-- Live sync zit al in app.js?v=1786475863 — sync.js verwijderd -->
 
 <!-- Bootstrap: mount React NADAT alle modules geladen zijn -->
 <script>
@@ -384,7 +386,7 @@
 
         // ── Auto-reload zodra een nieuwe SW de controle overneemt ─────────
         // skipWaiting() activeert de nieuwe SW direct, maar de al-geladen
-        // pagina blijft de OUDE app.js in het geheugen draaien tot een reload.
+        // pagina blijft de OUDE app.js?v=1786475863 in het geheugen draaien tot een reload.
         // Zonder dit blijft de iPad vastzitten op de oude versie, ook al is
         // de nieuwe SW al actief.
         let _zkReloading = false;
@@ -416,7 +418,7 @@
         // WebKit zelden spontaan op SW-updates. We forceren dit zelf:
         // 1) reg.update() forceert een verse fetch van service-worker.js
         // 2) /api/version vergelijking detecteert wijzigingen ook als de
-        //    service-worker.js zelf niet gewijzigd is (alleen app.js/modules)
+        //    service-worker.js zelf niet gewijzigd is (alleen app.js?v=1786475863/modules)
         const _zkCheckForUpdate = async () => {
           try { await reg.update(); } catch {}
           try {
@@ -493,7 +495,7 @@
   root.render(React.createElement(App));
 
   // Zorg dat tag-kleuren correct zijn na React render
-  // (werkt ook als de service worker een oudere app.js serveert)
+  // (werkt ook als de service worker een oudere app.js?v=1786475863 serveert)
   function _fixTagColors() {
     var themeId = (typeof localStorage !== "undefined" && localStorage.getItem("zk_theme")) || "void-cyan";
     var themes  = (typeof THEMES !== "undefined") ? THEMES : {};

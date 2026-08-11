@@ -1,297 +1,295 @@
-# 🗃️ Zettelkasten VIM
+# Zettelkasten VIM — Persoonlijk Kennisbeheersysteem
 
-> Zelfstandige Python desktop-app voor kennisbeheer. Notities als Markdown op schijf, PDF-bibliotheek met annotaties, afbeeldingenbeheer, Obsidian-stijl kennisgraaf, **visueel onderzoekscanvas**, VIM-editor, split-screen modus, interactieve mindmap, web-importer, Markdown- en Word-import, bidirectionele links, dagelijkse notitie, full-text én fuzzy zoeken, leeslijst, semantische kennisverrijking (TF-IDF + GraphRAG), SmartTagEditor met AI-suggesties, en een lokale AI-notebook via Ollama én cloud-modellen — optioneel volledig offline.
+Een lokale, privacy-first PKM-applicatie (Personal Knowledge Management) gebouwd als Progressive Web App. Draait volledig op de eigen machine — geen cloud, geen abonnement, geen advertenties.
 
 ---
 
-## 🚀 Installatie
+## Inhoudsopgave
 
-### Vereisten
+1. [Installatie & opstarten](#installatie--opstarten)
+2. [Architectuur](#architectuur)
+3. [Functies per module](#functies-per-module)
+4. [Navigatiestructuur](#navigatiestructuur)
+5. [Offline gebruik iPad](#offline-gebruik-ipad)
+6. [Vereisten](#vereisten)
 
-| Vereiste | Versie | Verplicht |
-|----------|--------|-----------|
-| Python | 3.11+ | ✅ Ja |
-| Moderne browser | Chrome / Firefox / Safari | ✅ Ja |
-| Ollama | nieuwste | ⚪ Optioneel (lokale AI) |
+---
 
-> Bij het eerste opstarten installeert de server automatisch: `pypdf`, `pikepdf`, `pdfminer.six`, `python-docx`
-
-### Stap 1 — Bestanden neerzetten
-
-```
-~/Apps/zettelkasten-vim/
-├── server.py
-├── service-worker.js      ← PWA offline + sync
-├── README.md
-└── static/
-    ├── index.html
-    ├── app.js             ← globals, W(), TagPill, genId, live sync
-    └── modules/
-        ├── Whiteboard.js  ← canvas + radial menu + touch
-        ├── offlineStore.js
-        ├── SpellEngine.js
-        ├── VimEditor.js
-        ├── TagFilterBar.js
-        ├── Graph.js
-        ├── PDFViewer.js
-        ├── MermaidEditor.js   ← Mermaid, MindMap, LLMNotebook, FuzzySearch
-        ├── NoteEditor.js
-        ├── NotePreview.js
-        ├── NotesTab.js
-        ├── NoteList.js
-        ├── NotesMeta.js
-        ├── TagManager.js
-        ├── WebImporter.js
-        ├── ReadingList.js
-        ├── StatsPanel.js
-        ├── ReviewPanel.js
-        ├── pdfService.js
-        ├── noteApi.js
-        ├── noteStore.js
-        └── annotationStore.js
-```
-
-### Stap 2 — Server starten
+## Installatie & opstarten
 
 ```bash
-cd ~/Apps/zettelkasten-vim
+# Server starten (lokaal netwerk — ook bereikbaar via iPad)
+cd /Users/hj/Applications/zettelkasten-vim
+python3 server.py --host 0.0.0.0 --port 8888
 
-python3 server.py                                        # standaard (~/Zettelkasten, poort 7842)
-python3 server.py --vault ~/Documenten/MijnNotities     # eigen vault map
-python3 server.py --port 8080                            # andere poort
-python3 server.py --host 0.0.0.0                         # bereikbaar op iPad / netwerk
+# Vendor-bestanden downloaden (eenmalig, voor offline gebruik)
+cd static/vendor && bash download-vendors.sh
+
+# Ollama modellen installeren
+ollama pull gemma3:12b        # generatief model (aanbevolen)
+ollama pull nomic-embed-text  # embedding model voor semantisch zoeken
 ```
 
-De browser opent automatisch. Bij `--host 0.0.0.0` toont het opstartbericht ook het netwerk-IP.
-
-### Stap 3 — AI instellen
-
-#### Lokaal via Ollama
-
-```bash
-curl -fsSL https://ollama.com/install.sh | sh
-ollama serve
-ollama pull llama3.2-vision      # aanbevolen (~8 GB)
-```
-
-#### Cloud-modellen
-
-Voeg sleutels toe via ⚙ **Instellingen → API-sleutels**.
-
-| Provider | Modellen |
-|----------|----------|
-| Anthropic | Claude Opus 4, Sonnet 4, Haiku 4.5 |
-| OpenAI | GPT-4.1, GPT-4.1 mini, o4-mini |
-| Google | Gemini 2.5 Pro, 2.0 Flash |
-| Mistral AI | Mistral Medium 3, Small 3.1 |
-| OpenRouter | Llama 4, DeepSeek R1, Qwen3 |
+Open de app via `http://localhost:8888` of via het IP-adres van de laptop op de iPad.
 
 ---
 
-## 📡 Offline & Live Sync
-
-### PWA installeren (iPad / iPhone)
-
-1. Open de app in Safari op het netwerk-IP (bijv. `http://192.168.1.42:8080`)
-2. Tik op **Delen → Zet op beginscherm**
-3. De app werkt nu als native app, ook offline
-
-### Live sync (laptop ↔ iPad)
-
-- Wijzigingen zijn binnen 15 seconden zichtbaar op andere apparaten
-- Bij focus-wisseling (tik op iPad) wordt direct gecontroleerd
-- Toast `↺ Notities bijgewerkt` verschijnt bij een wijziging
-
-### Offline werken
-
-- Notities lezen, schrijven en aanmaken werkt altijd offline
-- Mutaties worden automatisch gesynchroniseerd zodra de verbinding hersteld is
-- Serverstatus: groen ● online / rood ● offline (zichtbaar in de topbar)
-
----
-
-## 🗂️ Tabbladen
-
-| Tab | Icoon | Inhoud |
-|-----|-------|--------|
-| **Schrijven** | 📝 | Notities schrijven, bekijken, doorzoeken |
-| **Canvas** | 🎨 | Visueel onderzoekscanvas met kaarten en verbindingen |
-| **Bibliotheek** | 📚 | PDF · Plaatjes · Leeslijst · Review · Taken · Annotaties · Boeken |
-| **Ontdekken** | 🔍 | Zoeken · Graaf · Mindmap · Notebook · Query |
-| **Invoer** | 🌐 | URL / Word · PDF · Statistieken |
-
----
-
-## 🎨 Canvas
-
-Het canvas is de visuele onderzoeksruimte: plaats notities als kaarten, trek verbindingen, en verken relaties.
-
-### Navigatie
-
-| Actie (muis) | Werking |
-|--------------|---------|
-| Slepen op leeg vlak | Pannen |
-| Scroll | Zoomen |
-| Alt + slepen | Pannen (alternatief) |
-| Dubbelklikken op kaart | Tekst bewerken |
-| Rechtsklikken | Radiaal contextmenu |
-
-| Gebaar (touch — iPad) | Werking |
-|-----------------------|---------|
-| Één vinger op kaart slepen | Kaart verplaatsen |
-| Één vinger op leeg vlak | Pannen |
-| Twee vingers pinch | In-/uitzoomen |
-| Dubbeltikken op kaart | Bewerken |
-| Lang indrukken (500 ms) | Radiaal contextmenu |
-| Apple Pencil | Identiek aan vinger |
-
-### Kaarttypen en kleuren
-
-| Kleur | Betekenis | Noottype |
-|-------|-----------|----------|
-| 🟡 Geel | Idee / vluchtig | `fleeting` |
-| 🔵 Blauw | Bron / notitie | `literature` |
-| 🔴 Rood | Vraag / spanning | — |
-| 🟢 Groen | Conclusie / inzicht | `permanent` |
-| 🟣 Paars | Onbekend / onderzoek | `index` |
-| ⬜ Grijs | Neutraal / overig | — |
-
-Kleur wijzigen: selecteer kaart → klik een kleurkring in de toolbar (hover = beschrijving + betekenis).
-Nieuw toegevoegde kaarten krijgen automatisch de kleur die past bij het noottype.
-
-### Radiaal contextmenu
-
-Rechtsklikken (of lang indrukken) opent een SVG arc-menu:
-
-**Binnenring — kaartacties:**
-✎ Bewerken · ⤳ Verbinden · ⬡ Notitie openen · 🕸 Graaf · ⊞ Dupliceer · ✕ Verwijder
-
-**Buitenringen — buurtnetwerk (4 niveaus diep):**
-- **Ring 1**: directe verbonden notities van de kaart
-- **Ring 2–4**: hover op een node (160 ms) om een niveau dieper te gaan
-- Bij hover verschijnt een **preview-kaart** naast het menu: type, titel, inhoud (200 tekens), tags
-- Klikken voegt de notitie toe aan het canvas met verbindingslijn en correct gewicht
-
-**Navigatiegedrag:**
-- Preview verschijnt direct bij hover
-- Ring klapt uit na 160 ms (geen flikker bij snel langs bewegen)
-- Ring blijft open bij overgang naar de volgende ring (400 ms sluit-vertraging)
-
-**Kleurcodering in de ringen:**
-- Blauw streepje = wiki-link · Geel streepje = backlink
-- Kleine gekleurde dot = noottype (vluchtig / literatuur / permanent / index)
-
-### Verbindingen
-
-- **Tekenen**: ⤳ Verbinden in contextmenu → klik op twee kaarten
-- **Gewicht**: automatisch berekend (wiki-links +3, backlinks +2, gedeelde tags +1 per tag)
-  - Lijndikte schaalt met het gewicht (1–10)
-  - Gewichtsgetal in een pill op het midden van de lijn
-- **Label toevoegen**: klik op het ✏ icoon op het midden van een lijn → typ → Enter of klik buiten
-- **Ego Radial Layout**: contextmenu → plaatst alle verbonden notities in een cirkel rondom de kaart
-
----
-
-## 📝 Notities schrijven
-
-Titel is verplicht — opslaan zonder titel toont een oranje banner en zet focus op het titelveld.
-
-### Links
-
-```markdown
-[[Andere Notitie]]    ← bidirectionele notitie-link (pill-stijl)
-[[pdf:rapport.pdf]]   ← klikbare PDF-link
-![[img:foto.png]]     ← ingesloten afbeelding
-```
-
-### Links-zijbalk (rechts)
-
-| Tab | Inhoud |
-|-----|--------|
-| ← In | Backlinks — notities die naar deze linken |
-| → Uit | Outlinks — `[[links]]` in deze notitie |
-| + Link | Handmatig linken met zoekfunctie |
-
----
-
-## ⊞ Split-screen modus
-
-Activeer via **⊞ split** of `:vs` in de editor.
-
-| Toets | Actie |
-|-------|-------|
-| `Ctrl+W Ctrl+W` | Toggle focus links ↔ rechts |
-| `Ctrl+H` / `Ctrl+L` | Focus naar links / rechts |
-| `Ctrl+B` | Linker notitieslijst in/uitklappen |
-
----
-
-## 🕸️ Kennisgraaf
-
-| Actie | Werking |
-|-------|---------|
-| Scrollen | Zoom |
-| Alt+slepen | Pannen |
-| Shift+sleep | Lasso-selectie |
-| Dubbelklikken | Vastzetten (pin) |
-
-**Weergavemodi:** lokaal · orphans · hubs 🔥 · community · pad 🔍 · ≈ sem.
-
-**Pad-finder:** zet "pad 🔍" aan → klik startnode → klik eindnode.
-
----
-
-## 🧠 Notebook LLM
-
-- **🕸 GraphRAG** — vragen met semantisch relevante notities + graafburen als context
-- **🔍 Hiaten** — analyseert kennishiaten en ontbrekende verbindingen
-- Context selecteren: notities, PDFs en afbeeldingen combineerbaar
-
----
-
-## ⌨️ VIM Editor
-
-### Ex-commando's
-
-| Commando | Actie |
-|----------|-------|
-| `:w` / `:wq` | Opslaan / opslaan+sluiten |
-| `:vs` | Split-screen openen |
-| `:goyo` | Focusmodus |
-| `:spell` | Spellcheck: nl → en → uit |
-| `:tag+ naam` | Tag toevoegen |
-| `:template naam` | Template laden |
-| `:?` | Alle shortcuts tonen |
-
-Druk **`?`** in NORMAL mode voor een volledig overzicht van alle sneltoetsen.
-
----
-
-## 📁 Vault structuur
+## Architectuur
 
 ```
-~/Zettelkasten/
-├── notes/
-│   └── 20240315143022.md
-├── pdfs/
-├── annotations/
-├── images/
-└── config.json
+zettelkasten-vim/
+├── server.py              # Python HTTP-server (geen frameworks)
+├── static/
+│   ├── index.html         # App shell — laadt React + alle modules
+│   ├── app.js             # Hoofd-app: state, routing, navigatie
+│   ├── service-worker.js  # PWA offline caching (zk-sw-v22)
+│   └── modules/           # 35 React-componenten
+└── vault/                 # Alle gebruikersdata (Markdown-bestanden)
+    ├── notes/             # Zettelkasten-notities (*.md)
+    ├── pdfs/              # Geüploade PDF-bestanden
+    ├── annotations/       # PDF-annotaties (JSON)
+    ├── dagboek/           # Dagnotities (YYYY-MM-DD.md)
+    └── images/            # Afbeeldingen
 ```
+
+**Technische stack:**
+- **Backend:** Python 3.14, standaardbibliotheek only
+- **Frontend:** React 18 (UMD), vanilla JS modules
+- **AI:** Ollama (lokaal) + cloud-modellen (OpenAI, Anthropic, Mistral, Jan)
+- **PDF:** PDF.js 3.11
+- **Opslag:** Markdown-bestanden — direct bewerkbaar in elke editor
 
 ---
 
-## 💡 Tips
+## Functies per module
 
-- **Canvas touch** — werkt volledig met vingers en Apple Pencil op iPad
-- **Radial menu preview** — hover 160 ms op een buitenring-node voor de volledige preview-kaart
-- **Verbindingslabel** — klik op het ✏ icoon op een lijn om een label in te typen
-- **Kaartkleur** — hover over een kleurknopje voor de beschrijving; kleur blijft na opslaan
-- **Ego Radial** — contextmenu → plaatst alle verbonden notities als cirkel
-- **Live sync iPad** — start server met `--host 0.0.0.0` en open het IP in Safari
-- **PWA installeren** — Safari → Delen → Zet op beginscherm voor offline gebruik
-- **Dagnotitie** — klik 📅 naast "nieuw zettel" voor de notitie van vandaag
-- **Lasso** — Shift+sleep in de graaf om nodes te selecteren
-- **Meerdere vaults** — start meerdere servers op verschillende poorten
-- **Git backup** — vault is gewone Markdown, perfect voor git
-- **Shortcuts** — druk `?` in de editor voor alle toetscombinaties
+### ⚡ Vandaag — Dagelijks startscherm
+
+Het startscherm dat elke sessie richting geeft:
+
+- **Dagnotitie** — persistente journaalentry per datum (`dagboek/YYYY-MM-DD.md`)
+- **Datumnavigatie** — blader met ‹ › door eerdere dagen; klik op datum voor terug naar vandaag
+- **Auto-save** — dagnotitie wordt automatisch bewaard na 1,5 seconden stilte
+- **Markdown preview** — dagnotitie gerenderd als rijke tekst, klik om te bewerken
+- **Fragment → Zettelkasten** — selecteer tekst in de dagnotitie → popup → maak er een permanente notitie van; fragment wordt in de dagnotitie gemarkeerd als `~~tekst~~ ([[Notitietitel]])`
+- **SR-reviews** — overzicht notities die vandaag herhaald moeten worden (rechterkolom op brede schermen)
+- **Twee-kolom layout** — dagnotitie links, SR-reviews rechts op schermen ≥ 900px
+- **Statistieken** — notities totaal, reviews vandaag, in SR-systeem, openstaande taken
+- **⚡ Snel vastleggen** — maak direct een capture-notitie aan
+- **📋 Nieuwe ADR** — Architecture Decision Record met vooraf ingevuld sjabloon (context, beslissing, alternatieven, consequenties, betrokkenen, status-geschiedenis)
+- **Recente activiteit** — notities van de afgelopen 7 dagen met +SR knop
+
+---
+
+### 📝 Schrijven — Notitie-editor
+
+- **VIM-editor** — volledige VIM-keybindings (normaal/insert/visual mode, `:w` opslaan)
+- **Markdown-editor** — rijke teksteditor met syntaxmarkering
+- **Live preview** — split-view editor + gerenderde preview
+- **Outline-editor** — hiërarchische bullets voor notulen en plannen
+- **Bionic Reading** — vetgedrukte fixatiepunten per woord (toggle in toolbar, opgeslagen voorkeur)
+- **Spellcheck** — Nederlandse en Engelse spellingcontrole
+- **Slimme links** — automatische backlink-suggesties naar verwante notities
+- **Object Fields** — gestructureerde YAML-velden per notitie
+- **Tags** — vrije tagging met autocomplete
+- **Notitietypen** — fleeting, literature, permanent, structure, ADR, boek
+- **AI-samenvatting** — samenvatting via gekozen Ollama-model
+- **Leestijd** — geschatte leestijd in de toolbar
+
+---
+
+### 🎨 Canvas — Whiteboard
+
+- Vrij tekenen (pen, markeerstift, gum, vormen)
+- Notities als sticky notes op het canvas
+- Mermaid-diagrammen en mindmaps inbedden
+- Exporteren als PNG
+
+---
+
+### 📚 Bibliotheek
+
+#### 📄 PDF-bibliotheek (geïntegreerde hub)
+
+- **Gecombineerd overzicht** — alle PDFs op één plek (upload, lezen, annoteren, status)
+- **Filter-pills** — Alle / Ongelezen / Gelezen / Offline
+- **Annotaties** — markeer tekst, voeg notities toe per pagina, vijf annotatieklassen
+- **Annotatieteller** — gele badge (✦ n) per PDF in de lijstweergave
+- **Gelezen-status** — toggle per PDF, zichtbaar in de lijst
+- **Offline caching** — sla PDF op voor gebruik zonder server (⬇ Offline)
+- **AI-samenvatting** — automatische samenvatting van de PDF-inhoud
+
+#### 🖼 Plaatjes
+
+- Galerie van alle afbeeldingen in de vault
+- Annotaties op afbeeldingen
+
+#### 📖 Leeslijst
+
+- Geïmporteerde web-artikelen met leestijd, status en samenvatting
+- Filter ongelezen/gelezen/duplicaten
+
+#### 🔁 Review — Spaced Repetition (SM-2)
+
+- **SuperMemo-2 algoritme** — wiskundig optimale herhaalschema's
+- **4 beoordelingsniveaus** — 😕 Vergeten / 😐 Moeite / 🙂 Goed / 😄 Gemakkelijk
+- **Interval-preview** — volgende reviewdatum per knop zichtbaar vóór beoordeling
+- **Ease-factor** — individuele moeilijkheidsgraad per notitie
+- **AI recall-vraag** — Ollama genereert een contextgerichte vraag voor actief ophalen
+- **Integratie Vandaag** — geplande reviews verschijnen automatisch in het dagscherm
+
+#### ✓ Taken
+
+- `- [ ]` checkboxen over alle notities verzameld in één paneel
+- Afvinken zonder de notitie te openen
+
+#### ✦ Annotaties
+
+- Overzicht alle annotaties over alle PDFs en afbeeldingen
+- Filter per bestand, kleur of datum
+
+#### 📚 Boeken
+
+- Boekencatalogus met auteur, status, rating
+- Leesnotities per boek koppelen aan Zettelkasten
+
+---
+
+### 🔍 Ontdekken
+
+#### 🔍 Zoeken
+
+- Fuzzy full-text zoekopdrachten over alle notities
+- Regelnummers, context per treffer
+
+#### 🧠 Semantisch zoeken
+
+- **Lokale embeddings** via Ollama (`nomic-embed-text`, 84MB)
+- Vindt notities op *betekenis* — ook zonder exacte trefwoorden
+- **Index bouwen** — indexeer notities in batches; index opgeslagen in `.zettelkasten_embeddings.json`
+- **Score-weergave** — resultaten met % overeenkomst
+- Beschikbaar in het hoofd-scherm én in de split-balk
+
+#### 🕸 Graaf
+
+- Interactief kennisnetwerk van alle notities en verbindingen
+- Zoom, filter op tag of notitietype
+
+#### 🗺 Mindmap
+
+- Automatisch gegenereerde mindmap vanuit notitie-inhoud
+
+#### 🧠 Notebook — AI-assistent
+
+- Vrije chat met gekozen model over de kennisbase
+- **GraphRAG** — antwoorden op basis van de graafstructuur
+- Contextvenster: selecteer welke notities meegestuurd worden
+- **Modelselectie** — lokaal (Ollama) of cloud (OpenAI, Anthropic, Mistral, Jan)
+- Embedding-modellen automatisch gefilterd uit de selectie
+
+#### 🔎 Query
+
+- Geavanceerde filtervragen op tag, type, datum en inhoud
+
+#### 🏷 Tags
+
+- Tags samenvoegen, hernoemen, verwijderen
+- Statistieken per tag
+
+---
+
+### 🌐 Invoer
+
+#### 🌐 URL / Word
+
+- Web-artikelen importeren als Markdown-notitie
+- AI-samenvatting en automatische tagging bij import
+- Word-documenten (.docx) importeren
+
+#### 📊 Statistieken
+
+- Vault-statistieken: notities per dag, tag, type
+- Activiteitenkalender
+
+---
+
+### ⚙ Instellingen
+
+- **Vault** — pad instellen, structuuroverzicht
+- **Thema** — Dark, Gruvbox, Zomer, Neon en meer
+- **API-sleutels** — OpenAI, Anthropic, Mistral
+- **Modellen** — overzicht beschikbare Ollama-modellen
+- **PDF** — standaard annotatiekleur, pagina-weergave
+- **Weergave** — lettergrootte, regelafstand
+- **Offline** — opslaggebruik per categorie, PDF-limiet (50–500MB)
+- **Versienummer** — App build-hash en SW-versie, herladen-knop
+
+---
+
+## Navigatiestructuur
+
+```
+⚡ Vandaag
+📝 Schrijven
+🎨 Canvas
+📚 Bibliotheek
+  ├── 📄 PDF
+  ├── 🖼 Plaatjes
+  ├── 📖 Leeslijst
+  ├── 🔁 Review
+  ├── ✓ Taken
+  ├── ✦ Annotaties
+  └── 📚 Boeken
+🔍 Ontdekken
+  ├── 🔍 Zoeken
+  ├── 🧠 Semantisch
+  ├── 🕸 Graaf
+  ├── 🗺 Mindmap
+  ├── 🧠 Notebook
+  ├── 🔎 Query
+  └── 🏷 Tags
+🌐 Invoer
+  ├── 🌐 URL / Word
+  └── 📊 Statistieken
+```
+
+**Split-scherm** — elk scherm naast een notitie. Rechterbalk (scrollbaar met ‹ ›):
+`Notities · Semantisch · Taken · Annotaties · Query · PDF · Plaatjes · Zoeken · Graaf · Mindmap · Notebook · Canvas`
+
+---
+
+## Offline gebruik iPad
+
+1. Open de app op de iPad terwijl de laptop bereikbaar is (SW v22 installeert)
+2. Deel-icoon → **"Zet op beginscherm"** voor standalone PWA
+3. Per PDF: **⬇ Offline** in de PDF-bibliotheek voor offline caching
+4. **Werkt offline:**
+   - Notities lezen en bewerken (IndexedDB sync-queue)
+   - Gecachede PDFs lezen en annoteren
+   - SM-2 reviews doen
+   - Dagnotitie schrijven
+5. Wijzigingen worden automatisch gesynchroniseerd bij herverbinding
+
+> **Let op:** de standalone PWA (beginscherm-icoon) heeft een aparte opslagcontext van Safari. Cache wissen in Safari-instellingen heeft geen invloed op de PWA.
+
+---
+
+## Vereisten
+
+| Component | Versie | Doel |
+|-----------|--------|------|
+| Python | ≥ 3.10 | Server |
+| Ollama | latest | Lokale AI |
+| nomic-embed-text | via Ollama | Semantisch zoeken |
+| gemma3:12b | via Ollama | Aanbevolen generatief model |
+| Chrome / Safari / Firefox | modern | Frontend |
+
+**Optionele cloud-modellen:**
+- `OPENAI_API_KEY` — OpenAI GPT-modellen
+- `ANTHROPIC_API_KEY` — Anthropic Claude
+- Mistral API-sleutel
+
+---
+
+*Gebouwd in 30+ sessies als lokaal, privacy-first alternatief voor Obsidian / Logseq / Notion.*
+*Geen vendor lock-in. Geen abonnement. Alle data in plain Markdown.*

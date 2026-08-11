@@ -18,9 +18,24 @@ const ModelPicker = ({llmModel, setLlmModel, compact=false}) => {
   React.useEffect(() => {
     if (!open) return;
     fetch("/api/llm/models").then(r=>r.json()).then(d=>{
-      if (d.models) setLocal(d.models);
+      if (d.models) {
+        // Filter embedding-modellen — kunnen geen tekst genereren
+        const EMBED_PATTERNS = ["embed", "nomic", "mxbai", "bge", "e5-"];
+        const genModels = d.models.filter(m =>
+          !EMBED_PATTERNS.some(p => m.toLowerCase().includes(p))
+        );
+        setLocal(genModels);
+      }
     }).catch(()=>{});
   }, [open]);
+
+  // Reset als huidig model een embedding model is
+  React.useEffect(() => {
+    const EMBED = ["embed","nomic","mxbai","bge","e5-"];
+    if (EMBED.some(p => llmModel?.toLowerCase().includes(p))) {
+      setLlmModel("gemma3:12b"); // reset naar generatief model
+    }
+  }, [llmModel]);
 
   const select = (id) => { setLlmModel(id); setOpen(false); };
   const activeColor = MODEL_COLOR(llmModel);

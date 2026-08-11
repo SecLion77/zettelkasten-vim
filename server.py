@@ -289,6 +289,36 @@ class VaultManager:
             json.dumps(data, ensure_ascii=False), "utf-8")
 
 
+    # ── Dagboek (persistente dagnotities à la Parchment) ─────────────────
+    @property
+    def dagboek_dir(self):
+        d = self.vault / "dagboek"
+        d.mkdir(exist_ok=True)
+        return d
+
+    def get_daily_note(self, date_str: str) -> dict:
+        """Laad de dagnotitie voor een datum (YYYY-MM-DD). Maakt leeg als afwezig."""
+        p = self.dagboek_dir / f"{date_str}.md"
+        if p.exists():
+            return {"date": date_str, "content": p.read_text("utf-8"), "exists": True}
+        return {"date": date_str, "content": "", "exists": False}
+
+    def save_daily_note(self, date_str: str, content: str) -> dict:
+        """Sla dagnotitie op. Maakt dagboek-map aan indien nodig."""
+        import re as _re
+        if not _re.match(r"\d{4}-\d{2}-\d{2}$", date_str):
+            raise ValueError(f"Ongeldige datum: {date_str}")
+        p = self.dagboek_dir / f"{date_str}.md"
+        p.write_text(content, "utf-8")
+        return {"date": date_str, "saved": True, "length": len(content)}
+
+    def list_daily_notes(self) -> list:
+        """Geeft lijst van bestaande dagnotitie-datums (nieuwste eerst)."""
+        dates = []
+        for p in sorted(self.dagboek_dir.glob("????-??-??.md"), reverse=True):
+            dates.append(p.stem)
+        return dates
+
     def _pdf_meta_path(self):
         return self.vault / ".zettelkasten_pdf_meta.json"
 
@@ -2306,6 +2336,14 @@ class ZKHandler(BaseHTTPRequestHandler):
             "/api/custom-models":        lambda: self._set_custom_models(),
         }
 
+    def _ollama_models(self):
+        try:
+            d = self._ollama_post("/api/tags", {}, 5)
+            models = [m["name"] for m in d.get("models", [])]
+            return self._send(200, {"ok": True, "models": models})
+        except Exception:
+            return self._send(200, {"ok": True, "models": []})
+
     def do_POST(self):
         p=urlparse(self.path).path.rstrip("/")
 
@@ -2455,6 +2493,26 @@ class ZKHandler(BaseHTTPRequestHandler):
         if p=="/api/semantic/status":
             store = self.vault._load_embeddings()
             return self._send(200, {"ok": True, "indexed": len(store)})
+
+        if p=="/api/daily":
+            body = self._body()
+            date = body.get("date", "")
+            if not date: return self._send(400, {"error": "date vereist"})
+            return self._send(200, self.vault.get_daily_note(date))
+
+        if p=="/api/daily/save":
+            body    = self._body()
+            date    = body.get("date", "")
+            content = body.get("content", "")
+            if not date: return self._send(400, {"error": "date vereist"})
+            try:
+                result = self.vault.save_daily_note(date, content)
+                return self._send(200, {"ok": True, **result})
+            except ValueError as e:
+                return self._send(400, {"error": str(e)})
+
+        if p=="/api/daily/list":
+            return self._send(200, {"dates": self.vault.list_daily_notes()})
 
         if p=="/api/pdf-read-toggle":
             body = self._body()
@@ -2652,7 +2710,7 @@ class ZKHandler(BaseHTTPRequestHandler):
     # ── LLM ────────────────────────────────────────────────────────────────────
     def _ollama(self): return os.environ.get("OLLAMA_URL","http://localhost:11434")
 
-    def _ollama_post(self, endpoint, payload, timeout=180):
+    def _ollama_post(self, endpoint, payload, timeout=600):
         req=urllib.request.Request(self._ollama()+endpoint,
             data=json.dumps(payload).encode("utf-8"),
             headers={"Content-Type":"application/json"},method="POST")
@@ -2946,10 +3004,33 @@ class ZKHandler(BaseHTTPRequestHandler):
             return used < BUDGET
 
         if ctx_notes:
-            notes = [x for x in self.vault.load_notes() if x["id"] in ctx_notes]
-            # Sorteer op relevantie: notities met meer content eerst
-            notes.sort(key=lambda n: len(n.get("content","") or ""), reverse=True)
-            for n in notes[:20]:   # max 20 notities, budget bepaalt hoeveel er echt in passen
+            all_notes = [x for x in self.vault.load_notes() if x["id"] in ctx_notes]
+            # Gebruik de laatste user-message als query voor TF-IDF ranking
+            query = ""
+            for msg in reversed(body.get("messages", [])):
+                if msg.get("role") == "user":
+                    query = msg.get("content", "")
+                    break
+            if query and len(all_notes) > 20:
+                # Rank notities op TF-IDF cosine similarity met de vraag
+                try:
+                    texts = [query] + [(n.get("title","")+" "+n.get("content","")[:1500]) for n in all_notes]
+                    _, vecs = self._tfidf_vectors(texts)
+                    q_vec = vecs[0]
+                    q_norm = sum(v*v for v in q_vec.values())**0.5 or 1
+                    scored = []
+                    for i, n in enumerate(all_notes):
+                        nv = vecs[i+1]
+                        dot = sum(q_vec.get(k,0)*nv.get(k,0) for k in nv)
+                        nn  = sum(v*v for v in nv.values())**0.5 or 1
+                        scored.append((dot/(q_norm*nn), n))
+                    scored.sort(key=lambda x: x[0], reverse=True)
+                    notes = [n for _, n in scored[:40]]  # top 40 voor budget
+                except Exception:
+                    notes = all_notes
+            else:
+                notes = all_notes
+            for n in notes[:40]:   # budget bepaalt hoeveel er echt in passen
                 snippet = (n.get("content") or "")[:3000]
                 if not add(f"## Notitie: {n['title']}\n{snippet}"):
                     break
@@ -3637,7 +3718,7 @@ class ZKHandler(BaseHTTPRequestHandler):
             req=urllib.request.Request(self._ollama()+"/api/chat",
                 data=json.dumps(payload).encode("utf-8"),
                 headers={"Content-Type":"application/json"},method="POST")
-            with urllib.request.urlopen(req,timeout=180) as resp:
+            with urllib.request.urlopen(req,timeout=600) as resp:  # 10 min voor grote modellen
                 for line in resp:
                     line=line.strip()
                     if not line: continue
@@ -6705,6 +6786,12 @@ def main():
     ZKHandler.offline=args.offline
     class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
         daemon_threads = True
+
+        def get_request(self):
+            """Verhoog socket timeout voor lange LLM-streams (10 min)."""
+            req, addr = super().get_request()
+            req.settimeout(600)
+            return req, addr
         def handle_error(self, request, client_address):
             import sys
             exc = sys.exc_info()[1]

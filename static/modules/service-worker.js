@@ -1,6 +1,6 @@
 // ── Zettelkasten Service Worker ────────────────────────────────────────────
 // Versie: verhoog bij elke deploy om de cache te vernieuwen
-const SW_VERSION  = "zk-sw-v23";  // v3 → wist v2 cache inclusief modules
+const SW_VERSION  = "zk-sw-v22";  // v3 → wist v2 cache inclusief modules
 const SHELL_CACHE  = `${SW_VERSION}-shell`;   // statische bestanden
 const API_CACHE    = `${SW_VERSION}-api`;      // gecachede API-responses
 const IDB_NAME     = "zettelkasten-offline";
@@ -223,11 +223,6 @@ async function checkForUpdate() {
 // ── Fetch: centrale verkeersleider ──────────────────────────────────────────
 self.addEventListener("fetch", (event) => {
   const req = event.request;
-  // Negeer chrome-extension en andere niet-eigen origins
-  if (!event.request.url.startsWith(self.location.origin) &&
-      !event.request.url.startsWith("http://") &&
-      !event.request.url.startsWith("https://")) return;
-  if (event.request.url.startsWith("chrome-extension://")) return;
   const url = new URL(req.url);
 
   // Versie-check op de achtergrond (asynchroon, blokkeert fetch niet)
@@ -336,8 +331,6 @@ async function serveAppShell(req) {
 
 // ── Strategie 1: Cache First voor statische assets, Network First voor app-code ──
 async function cacheFirstWithNetwork(req) {
-  // Sla chrome-extension:// en andere niet-http URLs over — kunnen niet gecached worden
-  if (!req.url.startsWith("http://") && !req.url.startsWith("https://")) return fetch(req);
   const url  = new URL(req.url);
   const path = url.pathname;
 

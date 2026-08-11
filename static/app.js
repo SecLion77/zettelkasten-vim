@@ -50,7 +50,7 @@ const THEMES = {
     bg:"#1a1a1a", bg2:"#222222", bg3:"#2a2a2a",
     statusBg:"#222222", visualBg:"#444444", cursorBg:"#d4d4d4",
     splitBg:"#333333", lineNrBg:"#1a1a1a",
-    fg:"#d4d4d4", fgMuted:"#666666", fgDim:"#888888",
+    fg:"#d4d4d4", fgMuted:"#999999", fgDim:"#777777",
     statusFg:"#eeeeee",
     comment:"#909090", string:"#b8b8b8", keyword:"#d4d4d4",
     type:"#808080", special:"#a0a0a0",
@@ -1013,6 +1013,7 @@ const App = () => {
   const [goyoMode, setGoyoMode] = useState(false); // App-level: beïnvloedt topbar
   const [splitMode,  setSplitMode]  = useState(false);
   const [splitTab,   setSplitTab]   = useState("daily");
+  const splitBarRef = React.useRef(null); // tabbar scroll ref
   const [splitFocus, setSplitFocus] = useState("left");  // "left" | "right"
   const [splitLeft,  setSplitLeft]  = useState("notes"); // "notes" | "whiteboard"
   // Tellers om focus te triggeren bij split-wissel
@@ -1068,7 +1069,12 @@ const App = () => {
   const [serverPdfs,   setServerPdfs]  = useState([]);
   const [isOffline,    setIsOffline]   = useState(!navigator.onLine);
   const [serverImages, setServerImages]= useState([]);
-  const [llmModel,     setLlmModel]    = useState("gemma3:12b");
+  // Verwijder embedding-modellen uit opgeslagen model
+  const _savedModel = localStorage.getItem("zk_model") || "gemma3:12b";
+  const EMBED_PATS = ["embed","nomic","mxbai","bge","e5-"];
+  const _cleanModel = EMBED_PATS.some(p=>_savedModel.toLowerCase().includes(p))
+    ? "gemma3:12b" : _savedModel;
+  const [llmModel,     setLlmModel]    = useState(_cleanModel);
   const [aiMindmap,    setAiMindmap]   = useState(null);
   const [showSettings, setShowSettings]= useState(false);
   const [vaultPath,    setVaultPath]   = useState("…");
@@ -1932,7 +1938,7 @@ const App = () => {
           if(t==="pdf") return React.createElement("div",{style:{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",minHeight:0}},
             React.createElement(PDFViewer,{pdfNotes,setPdfNotes,allTags,serverPdfs,
               notes,isTablet,
-              llmModel: W.model || localStorage.getItem("zk_model") || "gemma3:12b",
+              llmModel,
               onRefreshPdfs:refreshPdfs,
               pdfAnnotations: pdfNotes,
               onTogglePdfRead: async name => {
@@ -2313,37 +2319,79 @@ const App = () => {
                 borderLeft:bR,minWidth:0,minHeight:0,transition:"border-color 0.15s",
                 position:"relative"}
             },
-              React.createElement("div",{style:{
-                background:W.bg2,borderBottom:`1px solid ${W.splitBg}`,
-                padding:"0",display:"flex",alignItems:"center",flexShrink:0,height:"36px"
-              }},
-                // Gefilterde subtabs voor split-balk — vaste volgorde
-                [{id:"search",     icon:"🔍", label:"Zoeken"},
-                 {id:"graph",      icon:"🕸",  label:"Graaf"},
-                 {id:"mindmap",    icon:"🗺",  label:"Mindmap"},
-                 {id:"llm",        icon:"🧠", label:"Notebook"},
-                 {id:"whiteboard", icon:"🎨", label:"Canvas"},
-                 {id:"notes",       icon:"📝", label:"Notities"},
-                 {id:"tasks",       icon:"✓",  label:"Taken"},
-                 {id:"annotations", icon:"✦",  label:"Annotaties"},
-                 {id:"query",       icon:"🔎", label:"Query"},
-                 {id:"semantic",    icon:"🧠", label:"Semantisch"},
-                 {id:"pdf",        icon:"📄", label:"PDF"},
-                 {id:"images",     icon:"🖼",  label:"Plaatjes"},
-                ].map(({id,icon,label})=>React.createElement("button",{
-                    key:id,
-                    onClick:e=>{e.stopPropagation();setSplitTab(id);setSplitSelId(null);},
-                    style:{background:splitTab===id?W.bg:"none",
-                      border:"none",borderBottom:splitTab===id?`2px solid ${W.yellow}`:"2px solid transparent",
-                      color:splitTab===id?W.statusFg:W.fgMuted,
-                      padding:"0 10px",height:"100%",fontSize:"13px",
-                      cursor:"pointer",flexShrink:0,
-                      display:"flex",alignItems:"center",gap:"4px"}
+              (() => {
+                const scrollBar = (dir) => {
+                  const el = splitBarRef.current;
+                  if (el) el.scrollBy({ left: dir * 120, behavior: "smooth" });
+                };
+                const SPLIT_TABS = [
+                  {id:"notes",       icon:"📝", label:"Notities"},
+                  {id:"semantic",    icon:"🧠", label:"Semantisch"},
+                  {id:"tasks",       icon:"✓",  label:"Taken"},
+                  {id:"annotations", icon:"✦",  label:"Annotaties"},
+                  {id:"query",       icon:"🔎", label:"Query"},
+                  {id:"pdf",         icon:"📄", label:"PDF"},
+                  {id:"images",      icon:"🖼",  label:"Plaatjes"},
+                  {id:"search",      icon:"🔍", label:"Zoeken"},
+                  {id:"graph",       icon:"🕸",  label:"Graaf"},
+                  {id:"mindmap",     icon:"🗺",  label:"Mindmap"},
+                  {id:"llm",         icon:"🧠", label:"Notebook"},
+                  {id:"whiteboard",  icon:"🎨", label:"Canvas"},
+                ];
+                const scrollBtn = (dir, label) => React.createElement("button", {
+                  onClick: e => { e.stopPropagation(); scrollBar(dir); },
+                  style: {
+                    background: W.bg2, border: "none",
+                    borderBottom: "2px solid transparent",
+                    color: W.fgMuted, cursor: "pointer",
+                    padding: "0 6px", height: "100%",
+                    fontSize: "12px", flexShrink: 0,
+                    display: "flex", alignItems: "center",
+                    borderRight: dir < 0 ? `1px solid ${W.splitBg}` : "none",
+                    borderLeft:  dir > 0 ? `1px solid ${W.splitBg}` : "none",
+                  }
+                }, label);
+                return React.createElement("div", {
+                  style: {
+                    background: W.bg2, borderBottom: `1px solid ${W.splitBg}`,
+                    display: "flex", alignItems: "center",
+                    flexShrink: 0, height: "36px",
+                  }
+                },
+                  scrollBtn(-1, "‹"),
+                  React.createElement("div", {
+                    ref: splitBarRef,
+                    style: {
+                      display: "flex", alignItems: "center",
+                      flex: 1, overflowX: "auto", overflowY: "hidden",
+                      scrollbarWidth: "none", height: "100%",
+                      WebkitOverflowScrolling: "touch",
+                    }
                   },
-                    React.createElement("span",{style:{fontSize:"14px"}},icon),
-                    label
-                  ))
-              ),
+                    SPLIT_TABS.map(({id,icon,label}) =>
+                      React.createElement("button", {
+                        key: id,
+                        onClick: e => { e.stopPropagation(); setSplitTab(id); setSplitSelId(null); },
+                        style: {
+                          background: splitTab===id ? W.bg : "none",
+                          border: "none",
+                          borderBottom: splitTab===id ? `2px solid ${W.yellow}` : "2px solid transparent",
+                          color: splitTab===id ? W.statusFg : W.fgMuted,
+                          padding: "0 10px", height: "100%", fontSize: "13px",
+                          cursor: "pointer", flexShrink: 0,
+                          display: "flex", alignItems: "center", gap: "4px",
+                          whiteSpace: "nowrap",
+                        }
+                      },
+                        React.createElement("span", {style:{fontSize:"14px"}}, icon),
+                        label
+                      )
+                    )
+                  ),
+                  scrollBtn(1, "›")
+                );
+              })()
+            ,
               renderTab(splitTab, true),
               // ── Preview overlay in rechter paneel ──────────────────────────
               // Toont gevonden notitie als preview zonder de linker notitie te verstoren
