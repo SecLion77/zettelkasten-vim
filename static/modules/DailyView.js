@@ -84,6 +84,286 @@ datum: ${new Date().toISOString().slice(0,10)}
 `;
 
 // ── DailyView component ───────────────────────────────────────────────────────
+// ── QuickEntryBar — Parchment-stijl inline capture ──────────────────────────
+// Alles landt direct in de dagnotitie. Geen aparte "capture" notitie.
+// Types: · notitie  ☐ taak  💡 idee
+const QuickEntryBar = ({ dayContent, onDayChange, W }) => {
+  const [qInput, setQInput] = React.useState("");
+  const [qType,  setQType]  = React.useState("note");
+  const inputRef = React.useRef(null);
+
+  const append = React.useCallback(() => {
+    if (!qInput.trim()) return;
+    const prefix = qType==="task" ? "- [ ] " : qType==="idea" ? "💡 " : "- ";
+    const line   = prefix + qInput.trim();
+    onDayChange(dayContent ? dayContent + "\n" + line : line);
+    setQInput("");
+    inputRef.current?.focus();
+  }, [qInput, qType, dayContent, onDayChange]);
+
+  const types = [
+    {id:"note", icon:"·", title:"Notitie / observatie"},
+    {id:"task", icon:"☐", title:"Taak (wordt - [ ] item)"},
+    {id:"idea", icon:"💡",title:"Idee"},
+  ];
+
+  return React.createElement("div",{
+    style:{display:"flex",gap:"6px",alignItems:"center",
+      marginBottom:"10px",padding:"6px 8px",
+      background:"rgba(255,255,255,0.03)",
+      borderRadius:"8px",border:`1px solid ${W.splitBg||"#333"}`}
+  },
+    // Type-toggle knoppen
+    ...types.map(t => React.createElement("button",{
+      key:t.id, onClick:()=>setQType(t.id), title:t.title,
+      style:{
+        background:qType===t.id?"rgba(138,198,242,0.18)":"none",
+        border:`1px solid ${qType===t.id?(W.blue||"#7aa8c8"):"transparent"}`,
+        borderRadius:"5px",padding:"3px 8px",cursor:"pointer",
+        fontSize:"13px",color:qType===t.id?(W.blue||"#7aa8c8"):(W.fgMuted||"#999"),
+        fontWeight:qType===t.id?"700":"400",
+      }
+    },t.icon)),
+    // Input veld
+    React.createElement("input",{
+      ref:inputRef,
+      value:qInput, onChange:e=>setQInput(e.target.value),
+      onKeyDown:e=>{if(e.key==="Enter")append(); if(e.key==="Escape")setQInput("");},
+      placeholder:qType==="task"?"Nieuwe taak…":qType==="idea"?"Idee vastleggen…":"Gedachte, observatie…",
+      style:{
+        flex:1, background:"none", border:"none",
+        color:W.fg||"#d4d4d4", fontSize:"13px", outline:"none",
+        padding:"2px 0",
+      }
+    }),
+    // Toevoegen knop
+    qInput.trim() && React.createElement("button",{
+      onClick:append,
+      style:{
+        background:`rgba(138,198,242,0.15)`,
+        border:`1px solid ${W.blue||"#7aa8c8"}`,
+        borderRadius:"5px",padding:"3px 10px",
+        cursor:"pointer",color:W.blue||"#7aa8c8",
+        fontSize:"12px",fontWeight:"600",flexShrink:0,
+      }
+    },"+ Voeg toe")
+  );
+};
+
+// ── InboxProcessor — toont dagnotitie bullets met expliciete → ZK knop ────────
+// Parseert onverwerkte regels uit de dagnotitie en biedt per regel een knop.
+const InboxProcessor = ({ dayContent, onDayChange, onAddNote, viewDate, today, W }) => {
+  const [promoting, setPromoting] = React.useState(null); // {line, index, title}
+
+  // Parseer onverwerkte regels (geen ~~doorstreping~~, geen lege regels)
+  const lines = React.useMemo(() => {
+    if (!dayContent) return [];
+    return dayContent.split("\n")
+      .map((line, i) => ({ raw: line, index: i }))
+      .filter(({ raw }) => {
+        const t = raw.trim();
+        if (!t) return false;
+        if (t.startsWith("~~") && t.includes("~~")) return false; // al verwerkt
+        if (t.startsWith("#")) return false; // kopteksten, geen bullets
+        if (t.startsWith(">")) return false; // citaten
+        return t.startsWith("- ") || t.startsWith("· ") || t.startsWith("💡");
+      })
+      .map(({ raw, index }) => {
+        const clean = raw.trim()
+          .replace(/^- \[[ x]\] /, "") // strip checkbox
+          .replace(/^- /, "")
+          .replace(/^· /, "")
+          .replace(/^💡 /, "")
+          .trim();
+        const isTask = raw.trim().startsWith("- [ ]") || raw.trim().startsWith("- [x]");
+        const isIdea = raw.trim().startsWith("💡");
+        return { raw, index, clean, isTask, isIdea };
+      });
+  }, [dayContent]);
+
+  if (!lines.length) return null;
+
+  const promoteToZK = () => {
+    if (!promoting || !promoting.title.trim()) return;
+    const content = [
+      `> [!bron]\n> 📓 Dagnotitie ${viewDate}`,
+      "",
+      promoting.clean,
+    ].join("\n");
+    // Tags: handmatig ingevoerd + automatisch type-tag
+    const autoTag  = promoting.isTask ? "taak" : promoting.isIdea ? "idee" : "dagnotitie";
+    const manTags  = (promoting.tagsInput||"").split(",").map(t=>t.trim().toLowerCase()).filter(Boolean);
+    const allTags  = [...new Set([autoTag, ...manTags])];
+    onAddNote?.({ title: promoting.title.trim(), content,
+      tags: allTags,
+      created: viewDate, modified: today });
+    // Markeer de originele regel als verwerkt
+    const newLines = dayContent.split("\n").map((line, i) => {
+      if (i !== promoting.index) return line;
+      return line.replace(promoting.clean, `~~${promoting.clean}~~ ([[${promoting.title.trim()}]])`);
+    });
+    onDayChange(newLines.join("\n"));
+    setPromoting(null);
+  };
+
+  return React.createElement("div", {
+    style: { marginTop: "12px", borderTop: `1px solid ${W.splitBg}`, paddingTop: "10px" }
+  },
+    React.createElement("div", {
+      style: { fontSize: "11px", color: W.fgDim, letterSpacing: "0.8px", marginBottom: "8px" }
+    }, `INBOX — ${lines.length} item${lines.length !== 1 ? "s" : ""} te verwerken`),
+
+    // Lijst met items + ZK knop
+    React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: "4px" } },
+      lines.map(({ raw, index, clean, isTask, isIdea }) =>
+        React.createElement("div", {
+          key: index,
+          style: {
+            display: "flex", alignItems: "center", gap: "8px",
+            padding: "5px 8px", borderRadius: "6px",
+            background: "rgba(255,255,255,0.03)",
+            border: `1px solid ${W.splitBg}`,
+          }
+        },
+          // Type-icoon
+          React.createElement("span", { style: { fontSize: "12px", flexShrink: 0, opacity: 0.7 } },
+            isTask ? "☐" : isIdea ? "💡" : "·"
+          ),
+          // Tekst
+          React.createElement("span", {
+            style: { flex: 1, fontSize: "13px", color: W.fg, overflow: "hidden",
+                     textOverflow: "ellipsis", whiteSpace: "nowrap" }
+          }, clean),
+          // → ZK knop
+          React.createElement("button", {
+            onClick: () => setPromoting({ raw, index, clean, isTask, isIdea, title: clean.slice(0, 60) }),
+            title: "Maak een permanente Zettelkasten-notitie van dit item",
+            style: {
+              background: "rgba(114,182,96,0.1)",
+              border: "1px solid rgba(114,182,96,0.5)",
+              borderRadius: "5px", padding: "3px 8px",
+              cursor: "pointer", fontSize: "11px",
+              color: "#72b660", fontWeight: "600", flexShrink: 0,
+              whiteSpace: "nowrap",
+            }
+          }, "→ ZK")
+        )
+      )
+    ),
+
+    // Promotie-dialog — overlay + modal
+    promoting && React.createElement(React.Fragment, null,
+      // Donkere overlay — klikt om te sluiten
+      React.createElement("div", {
+        onClick: () => setPromoting(null),
+        style: {
+          position: "fixed", inset: 0, zIndex: 1999,
+          background: "rgba(0,0,0,0.7)",
+          backdropFilter: "blur(2px)",
+        }
+      }),
+      // Modal
+      React.createElement("div", {
+        onClick: e => e.stopPropagation(),
+        style: {
+          position: "fixed", top: "50%", left: "50%",
+          transform: "translate(-50%,-50%)", zIndex: 2000,
+          width: "min(520px,92vw)",
+          background: W.bg2||"#222",
+          border: `2px solid ${W.blue||"#7aa8c8"}`,
+          borderRadius: "14px", padding: "24px 28px",
+          boxShadow: "0 24px 80px rgba(0,0,0,0.8)",
+        }
+      },
+      // Header
+      React.createElement("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"14px"}},
+        React.createElement("div",{style:{fontSize:"16px",fontWeight:"800",color:W.fg||"#d4d4d4"}},
+          "📝 Inbox → Zettelkasten"),
+        React.createElement("button",{onClick:()=>setPromoting(null),
+          style:{background:"none",border:"none",color:W.fgMuted||"#999",
+            cursor:"pointer",fontSize:"18px",lineHeight:1,padding:"0 4px"}},"×")
+      ),
+      // Preview fragment
+      React.createElement("div",{style:{
+        background:W.bg||"#1a1a1a", border:`1px solid ${W.splitBg||"#333"}`,
+        borderRadius:"6px", padding:"8px 12px",
+        fontSize:"13px", color:W.fg||"#d4d4d4",
+        marginBottom:"16px", fontStyle:"italic", lineHeight:"1.5",
+        maxHeight:"60px", overflow:"hidden",
+        borderLeft:`3px solid ${W.blue||"#7aa8c8"}`,
+      }},
+        `"${promoting.clean.slice(0,140)}${promoting.clean.length>140?"…":""}"`
+      ),
+      // Titel
+      React.createElement("div",{style:{fontSize:"11px",color:W.blue||"#7aa8c8",
+        fontWeight:"700",letterSpacing:"1px",marginBottom:"6px"}},"TITEL"),
+      React.createElement("input",{
+        autoFocus:true,
+        value:promoting.title,
+        onChange:e=>setPromoting(p=>({...p,title:e.target.value})),
+        onKeyDown:e=>{if(e.key==="Enter"&&!e.shiftKey)promoteToZK();if(e.key==="Escape")setPromoting(null);},
+        placeholder:"Geef de notitie een duidelijke titel…",
+        style:{
+          width:"100%",background:W.bg||"#1a1a1a",
+          border:`2px solid ${W.blue||"#7aa8c8"}`,
+          borderRadius:"7px",padding:"9px 13px",
+          color:W.fg||"#d4d4d4",fontSize:"15px",fontWeight:"500",
+          outline:"none",boxSizing:"border-box",marginBottom:"14px",
+        }
+      }),
+      // Tags invoer
+      React.createElement("div",{style:{fontSize:"11px",color:W.blue||"#7aa8c8",
+        fontWeight:"700",letterSpacing:"1px",marginBottom:"6px"}},"TAGS"),
+      React.createElement("div",{style:{position:"relative"}},
+        React.createElement("input",{
+          value:promoting.tagsInput||"",
+          onChange:e=>setPromoting(p=>({...p,tagsInput:e.target.value})),
+          onKeyDown:e=>{if(e.key==="Enter")e.preventDefault();},
+          placeholder:`${promoting.isTask?"taak":"dagnotitie"}, architectuur, ea …`,
+          style:{
+            width:"100%",background:W.bg||"#1a1a1a",
+            border:`1px solid ${W.splitBg||"#444"}`,
+            borderRadius:"7px",padding:"7px 13px",
+            color:W.fg||"#d4d4d4",fontSize:"13px",
+            outline:"none",boxSizing:"border-box",
+          }
+        }),
+        React.createElement("div",{style:{fontSize:"11px",color:W.fgDim||"#666",marginTop:"4px"}},
+          "Scheid tags met komma's. Automatisch toegevoegd: ",
+          React.createElement("span",{style:{color:W.fgMuted||"#999"}},
+            promoting.isTask?"taak":promoting.isIdea?"idee":"dagnotitie")
+        )
+      ),
+      // Actie-knoppen
+      React.createElement("div",{style:{display:"flex",gap:"10px",marginTop:"18px",justifyContent:"flex-end"}},
+        React.createElement("button",{
+          onClick:()=>setPromoting(null),
+          style:{
+            background:"rgba(255,255,255,0.05)",
+            border:`1px solid ${W.splitBg||"#444"}`,
+            color:W.fg||"#d4d4d4",
+            borderRadius:"7px",padding:"8px 18px",
+            cursor:"pointer",fontSize:"13px",fontWeight:"500",
+          }
+        },"Annuleren"),
+        React.createElement("button",{
+          onClick:promoteToZK,
+          disabled:!promoting.title.trim(),
+          style:{
+            background:promoting.title.trim()?"#72b660":"rgba(114,182,96,0.3)",
+            color:promoting.title.trim()?"#fff":"rgba(255,255,255,0.5)",
+            border:"none",borderRadius:"7px",padding:"8px 20px",
+            cursor:promoting.title.trim()?"pointer":"not-allowed",
+            fontSize:"14px",fontWeight:"700",
+            transition:"all .15s",
+          }
+        },"✓ Maak Zettelkasten-notitie")
+      )
+    ) // einde modal
+    ) // einde Fragment
+  );
+};
+
 const DailyView = ({ notes=[], onOpenNote, onAddNote, llmModel="" }) => {
   const { useState, useEffect, useCallback, useMemo } = React;
 
@@ -103,7 +383,7 @@ const DailyView = ({ notes=[], onOpenNote, onAddNote, llmModel="" }) => {
   const [dayLoading,  setDayLoading]  = useState(false);
   const [daySaved,    setDaySaved]    = useState(true);
   const [dayDates,    setDayDates]    = useState([]);
-  const [editingDay,  setEditingDay]  = useState(false);
+  const [editingDay,  setEditingDay]  = useState(true);  // Parchment: altijd direct schrijven
   const [fragment,    setFragment]    = useState(null);
   const [fragPos,     setFragPos]     = useState({x:0,y:0});
   const [fragTitle,   setFragTitle]   = useState("");
@@ -323,12 +603,6 @@ const DailyView = ({ notes=[], onOpenNote, onAddNote, llmModel="" }) => {
           `${notes.length} notities · ${totalSR} in SR · ${openTasks} taken`)
       ),
       React.createElement("div",{style:{display:"flex",gap:"8px",flexWrap:"wrap"}},
-        React.createElement("button",{onClick:()=>setQuickCapt(q=>!q),
-          style:{background:quickCapt?"rgba(138,198,242,0.15)":"rgba(255,255,255,0.05)",
-            border:`1px solid ${quickCapt?"rgba(138,198,242,0.6)":W.splitBg||"#444"}`,
-            borderRadius:"6px",padding:"6px 14px",fontSize:"13px",cursor:"pointer",
-            color:quickCapt?(W.blue||"#8ac6f2"):(W.fg||"#d4d4d4"),
-            fontWeight:"500"}},"⚡ Snel vastleggen"),
         React.createElement("button",{onClick:()=>setAdrOpen(a=>!a),
           style:{background:adrOpen?"rgba(114,182,96,0.15)":"rgba(255,255,255,0.05)",
             border:`1px solid ${adrOpen?"rgba(114,182,96,0.6)":W.splitBg||"#444"}`,
@@ -338,17 +612,6 @@ const DailyView = ({ notes=[], onOpenNote, onAddNote, llmModel="" }) => {
       )
     ),
 
-    // ── Quick capture ───────────────────────────────────────── volle breedte
-    quickCapt && React.createElement("div",{style:{...card,display:"flex",gap:"8px",gridColumn:"1 / -1"}},
-      React.createElement("input",{autoFocus:true,value:quickTitle,onChange:e=>setQuickTitle(e.target.value),
-        onKeyDown:e=>{if(e.key==="Enter")doQuickCapture();if(e.key==="Escape")setQuickCapt(false);},
-        placeholder:"Titel… (Enter om op te slaan)",
-        style:{flex:1,background:W.bg,border:`1px solid ${W.blue||"#8ac6f2"}`,borderRadius:"6px",
-          padding:"8px 12px",color:W.fg,fontSize:"14px",outline:"none"}}),
-      React.createElement("button",{onClick:doQuickCapture,
-        style:{background:W.blue||"#8ac6f2",color:W.bg,border:"none",borderRadius:"6px",
-          padding:"8px 16px",cursor:"pointer",fontSize:"13px",fontWeight:"600"}},"Opslaan")
-    ),
 
     // ── ADR aanmaken ─────────────────────────────────────────── volle breedte
     adrOpen && React.createElement("div",{style:{...card,borderLeft:"3px solid #72b660",gridColumn:"1 / -1"}},
@@ -369,29 +632,36 @@ const DailyView = ({ notes=[], onOpenNote, onAddNote, llmModel="" }) => {
     React.createElement("div",{style:{...card,
       borderLeft:`3px solid ${viewDate===today?"#72b660":W.blue||"#8ac6f2"}`,
       gridColumn:"1",gridRow:isWide?"3 / span 2":undefined}},
-      React.createElement("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px"}},
+      // ── Parchment-stijl header: compact + quick-entry bar ──────────────────
+      React.createElement("div",{style:{display:"flex",justifyContent:"space-between",
+        alignItems:"center",marginBottom:"8px"}},
         React.createElement("div",{style:{display:"flex",alignItems:"center",gap:"8px"}},
-          React.createElement("span",{style:{fontSize:"13px",fontWeight:"700",color:W.fg}},"📓 Dagnotitie"),
-          dayLoading&&React.createElement("span",{style:{fontSize:"11px",color:W.fgDim}},"laden…"),
-          !dayLoading&&!daySaved&&React.createElement("span",{style:{fontSize:"11px",color:W.fgDim,fontStyle:"italic"}},"bewaren…"),
-          !dayLoading&&daySaved&&dayContent&&React.createElement("span",{style:{fontSize:"11px",color:"#72b660"}},"✓")
+          React.createElement("span",{style:{fontSize:"13px",fontWeight:"700",color:W.fg}},
+            viewDate===today?"📓 Vandaag":
+              "📓 "+new Date(viewDate+"T12:00:00").toLocaleDateString("nl-NL",{weekday:"short",day:"numeric",month:"short"})),
+          (() => {
+            // Tel onverwerkte bullets (zonder doorstreping)
+            const bullets = (dayContent.match(/^- (?!\[[ x]\] )(?!~~).+/gm)||[]).length;
+            const tasks   = (dayContent.match(/^- \[ \] .+/gm)||[]).length;
+            return bullets+tasks > 0
+              ? React.createElement("span",{title:"Onverwerkte items in inbox",
+                  style:{fontSize:"10px",background:"rgba(212,185,124,0.2)",
+                    color:"#d4b97c",borderRadius:"8px",padding:"1px 6px"}},
+                  `${bullets+tasks} inbox`)
+              : (daySaved&&dayContent&&React.createElement("span",{style:{fontSize:"10px",color:"#72b660"}},"✓"))
+          })()
         ),
-        React.createElement("div",{style:{display:"flex",gap:"6px",alignItems:"center"}},
-          dayDates.slice(0,4).filter(d=>d!==viewDate).map(d=>
+        // Eerdere dagen als snelkoppeling
+        React.createElement("div",{style:{display:"flex",gap:"4px"}},
+          dayDates.slice(0,3).filter(d=>d!==viewDate).map(d=>
             React.createElement("button",{key:d,onClick:()=>setViewDate(d),
               style:{background:"none",border:`1px solid ${W.splitBg}`,color:W.fgDim,
-                borderRadius:"4px",padding:"1px 6px",fontSize:"10px",cursor:"pointer"}},d.slice(5))
-          ),
-          React.createElement("button",{onClick:()=>setEditingDay(e=>!e),
-            style:{
-              background:editingDay?"rgba(114,182,96,0.12)":"rgba(255,255,255,0.06)",
-              border:`1px solid ${editingDay?"rgba(114,182,96,0.5)":W.splitBg||"#444"}`,
-              color:editingDay?"#72b660":(W.fg||"#d4d4d4"),
-              borderRadius:"5px",padding:"3px 10px",fontSize:"12px",
-              cursor:"pointer",fontWeight:"500"}},
-            editingDay?"✓ Klaar":"✏ Bewerken")
+                borderRadius:"4px",padding:"1px 5px",fontSize:"10px",cursor:"pointer"}},d.slice(5))
+          )
         )
       ),
+      // ── Quick-entry bar (Parchment-kern: alles landt in dagnotitie) ──────────
+      React.createElement(QuickEntryBar, { dayContent, onDayChange, W }),
       editingDay
         ? React.createElement("div",{style:{position:"relative"}},
             React.createElement("textarea",{ref:dayRef,value:dayContent,
@@ -445,11 +715,24 @@ const DailyView = ({ notes=[], onOpenNote, onAddNote, llmModel="" }) => {
             )
           )
         : React.createElement("div",{onClick:()=>setEditingDay(true),
-            style:{minHeight:"80px",cursor:"text",fontSize:"14px",lineHeight:"1.7",color:W.fg,whiteSpace:"pre-wrap"}},
+            style:{minHeight:"80px",cursor:"text",fontSize:"14px",lineHeight:"1.7",color:W.fg}},
             dayContent
-              ? (renderMd?React.createElement("div",{dangerouslySetInnerHTML:{__html:renderMd(dayContent)}}):dayContent)
-              : React.createElement("span",{style:{color:W.fgDim,fontStyle:"italic",fontSize:"13px"}},"Klik om te beginnen schrijven…")
+              ? React.createElement("div",{
+                  dangerouslySetInnerHTML:{__html:
+                    renderMd ? renderMd(dayContent) : dayContent.replace(/&/g,"&amp;").replace(/</g,"&lt;")
+                  }
+                })
+              : React.createElement("div",{style:{color:W.fgDim,fontSize:"13px",lineHeight:"1.8"}},
+                  React.createElement("div",{style:{fontStyle:"italic",marginBottom:"8px"}},
+                    "Klik om te schrijven, of gebruik de balk hierboven…"),
+                  React.createElement("div",{style:{fontSize:"12px",opacity:0.7}},
+                    "💡 Tip: selecteer tekst → 📝 → Zettelkasten om een permanente notitie te maken")
+                )
           )
+    ),
+    // ── InboxProcessor: bullets → ZK knoppen ─────────────────────────────────
+    React.createElement("div",{style:{gridColumn:"1",gridRow:isWide?"5":undefined}},
+      React.createElement(InboxProcessor,{dayContent,onDayChange,onAddNote,viewDate,today,W})
     ),
 
     // ── SR Review wachtrij ─────────────── rechter kolom
@@ -492,17 +775,21 @@ const DailyView = ({ notes=[], onOpenNote, onAddNote, llmModel="" }) => {
       }),
       dueNotes.length===0&&doneToday===0&&React.createElement("div",{style:{fontSize:"12px",color:W.fgDim,fontStyle:"italic",textAlign:"center",padding:"12px 0"}},
         "Geen reviews vandaag"),
-      viewDate===today&&doneToday===0&&notes.length>0&&React.createElement("button",{
-        onClick:()=>addToSR(notes[0].id),
-        style:{
-          marginTop:"8px",width:"100%",
-          background:"rgba(114,182,96,0.1)",
-          border:"1px solid rgba(114,182,96,0.5)",
-          color:"#72b660",
-          borderRadius:"6px",padding:"7px",
-          cursor:"pointer",fontSize:"12px",fontWeight:"600",
-        }},
-        `+ Voeg "${notes[0]?.title?.slice(0,30)}" toe aan SR`)
+      viewDate===today&&doneToday===0&&(()=>{
+        const untracked=notes.filter(n=>!srData[n.id]&&n.title&&!n.title.startsWith("Afbeelding"));
+        if(!untracked.length) return null;
+        const pick=untracked[Math.floor(Math.random()*Math.min(5,untracked.length))];
+        return React.createElement("div",{style:{marginTop:"8px",display:"flex",flexDirection:"column",gap:"5px"}},
+          React.createElement("div",{style:{fontSize:"11px",color:W.fgDim}},
+            `${untracked.length} notities nog niet in SR:`),
+          React.createElement("button",{
+            onClick:()=>addToSR(pick.id),
+            style:{background:"rgba(114,182,96,0.1)",border:"1px solid rgba(114,182,96,0.5)",
+              color:"#72b660",borderRadius:"6px",padding:"7px 12px",
+              cursor:"pointer",fontSize:"12px",fontWeight:"600",textAlign:"left"}
+          },`+ "${pick.title?.slice(0,35)}" → SR`)
+        );
+      })()
     ),
 
     // ── Statistieken ──────────────────────────────────────────── volle breedte

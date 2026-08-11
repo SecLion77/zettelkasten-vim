@@ -2634,7 +2634,7 @@ class ZKHandler(BaseHTTPRequestHandler):
         if p=="/api/config":
             body=self._body()
             allowed={"pdf_personal_use","pdf_personal_email","review_data",
-                     "custom_models","pins"}
+                     "custom_models","pins","sr_data"}
             update = {}
             for k, v in body.items():
                 if k in allowed:
