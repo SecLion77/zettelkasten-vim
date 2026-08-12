@@ -185,10 +185,16 @@ const InboxProcessor = ({ dayContent, onDayChange, onAddNote, viewDate, today, W
 
   const promoteToZK = () => {
     if (!promoting || !promoting.title.trim()) return;
+    // Herstel de juiste opmaak per type
+    const contentLine = promoting.isTask
+      ? `- [ ] ${promoting.clean}`   // taak blijft een checkbox
+      : promoting.isIdea
+      ? `💡 ${promoting.clean}`      // idee blijft een idee
+      : `- ${promoting.clean}`;      // notitie blijft een bullet
     const content = [
       `> [!bron]\n> 📓 Dagnotitie ${viewDate}`,
       "",
-      promoting.clean,
+      contentLine,
     ].join("\n");
     // Tags: handmatig ingevoerd + automatisch type-tag
     const autoTag  = promoting.isTask ? "taak" : promoting.isIdea ? "idee" : "dagnotitie";
@@ -234,19 +240,41 @@ const InboxProcessor = ({ dayContent, onDayChange, onAddNote, viewDate, today, W
             style: { flex: 1, fontSize: "13px", color: W.fg, overflow: "hidden",
                      textOverflow: "ellipsis", whiteSpace: "nowrap" }
           }, clean),
-          // → ZK knop
-          React.createElement("button", {
-            onClick: () => setPromoting({ raw, index, clean, isTask, isIdea, title: clean.slice(0, 60) }),
-            title: "Maak een permanente Zettelkasten-notitie van dit item",
-            style: {
-              background: "rgba(114,182,96,0.1)",
-              border: "1px solid rgba(114,182,96,0.5)",
-              borderRadius: "5px", padding: "3px 8px",
-              cursor: "pointer", fontSize: "11px",
-              color: "#72b660", fontWeight: "600", flexShrink: 0,
-              whiteSpace: "nowrap",
-            }
-          }, "→ ZK")
+          // Acties: → ZK en × verwijder
+          React.createElement("div",{style:{display:"flex",gap:"4px",flexShrink:0}},
+            React.createElement("button", {
+              onClick: () => setPromoting({ raw, index, clean, isTask, isIdea, title: clean.slice(0, 60) }),
+              title: "Maak een permanente Zettelkasten-notitie van dit item",
+              style: {
+                background: "rgba(114,182,96,0.1)",
+                border: "1px solid rgba(114,182,96,0.5)",
+                borderRadius: "5px", padding: "3px 8px",
+                cursor: "pointer", fontSize: "11px",
+                color: "#72b660", fontWeight: "600",
+                whiteSpace: "nowrap",
+              }
+            }, "→ ZK"),
+            React.createElement("button", {
+              onClick: () => {
+                // Verwijder de regel direct uit de dagnotitie
+                const newLines = dayContent.split("\n")
+                  .filter((_, i) => i !== index);
+                onDayChange(newLines.join("\n"));
+              },
+              title: "Verwijder dit item uit de dagnotitie",
+              style: {
+                background: "none",
+                border: "1px solid transparent",
+                borderRadius: "5px", padding: "3px 6px",
+                cursor: "pointer", fontSize: "13px",
+                color: W.fgDim||"#666",
+                lineHeight: 1,
+                transition: "all .12s",
+              },
+              onMouseEnter: e => { e.currentTarget.style.color="#e5786d"; e.currentTarget.style.borderColor="rgba(229,120,109,0.4)"; e.currentTarget.style.background="rgba(229,120,109,0.08)"; },
+              onMouseLeave: e => { e.currentTarget.style.color=W.fgDim||"#666"; e.currentTarget.style.borderColor="transparent"; e.currentTarget.style.background="none"; },
+            }, "×")
+          )
         )
       )
     ),
@@ -361,6 +389,233 @@ const InboxProcessor = ({ dayContent, onDayChange, onAddNote, viewDate, today, W
       )
     ) // einde modal
     ) // einde Fragment
+  );
+};
+
+// ── OpenTasksPanel — overzicht openstaande taken met filter ─────────────────
+const OpenTasksPanel = ({ notes, onOpenNote, W }) => {
+  const [sortOrder,  setSortOrder]  = React.useState("new"); // "new"|"old"
+  const [filterTag,  setFilterTag]  = React.useState("");
+  const [collapsed,  setCollapsed]  = React.useState(false);
+  const [checkingId, setCheckingId] = React.useState(null);
+  const [doneIds,    setDoneIds]    = React.useState(new Set());
+
+  const checkTask = React.useCallback(async (task) => {
+    if (doneIds.has(task.id)) return;
+    setCheckingId(task.id);
+    try {
+      // Zoek de notitie op en vervang de taak-regel
+      const note = notes.find(n => n.id === task.noteId);
+      if (!note) return;
+      const lines = (note.content || "").split("\n");
+      lines[task.lineIdx] = lines[task.lineIdx].replace("- [ ] ", "- [x] ");
+      const updated = { ...note, content: lines.join("\n"),
+        modified: new Date().toISOString().slice(0,10) };
+      await fetch("/api/notes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(updated),
+      });
+      setDoneIds(d => new Set([...d, task.id]));
+    } catch(e) {
+      console.error("[Tasks] Afvinken mislukt:", e);
+    } finally {
+      setCheckingId(null);
+    }
+  }, [notes, doneIds]);
+
+  // Parseer alle open taken uit alle notities
+  const allTasks = React.useMemo(() => {
+    const tasks = [];
+    notes.forEach(note => {
+      const lines = (note.content || "").split("\n");
+      lines.forEach((line, li) => {
+        if (!line.match(/^- \[ \] .+/)) return;
+        const text = line.replace(/^- \[ \] /, "").trim();
+        if (!text) return;
+        // Detecteer datum-tag in tekst bijv. 📅 2026-08-10
+        const dateMatch = text.match(/📅\s*(\d{4}-\d{2}-\d{2})/);
+        tasks.push({
+          id:       `${note.id}::${li}`,
+          noteId:   note.id,
+          noteTitle:note.title || "(Naamloos)",
+          text,
+          date:     note.modified || note.created || "",
+          dueDate:  dateMatch ? dateMatch[1] : null,
+          tags:     note.tags || [],
+          lineIdx:  li,
+        });
+      });
+    });
+    return tasks;
+  }, [notes]);
+
+  // Filter + sortering
+  const filtered = React.useMemo(() => {
+    let list = allTasks;
+    if (filterTag) list = list.filter(t => t.tags.some(g => g.toLowerCase().includes(filterTag.toLowerCase())));
+    list = [...list].sort((a, b) => {
+      const da = a.dueDate || a.date;
+      const db = b.dueDate || b.date;
+      return sortOrder === "new" ? db.localeCompare(da) : da.localeCompare(db);
+    });
+    return list;
+  }, [allTasks, filterTag, sortOrder]);
+
+  if (!allTasks.length) return null;
+
+  const sortBtn = (id, label) => React.createElement("button", {
+    key: id, onClick: () => setSortOrder(id),
+    style: {
+      background: sortOrder===id ? "rgba(138,198,242,0.15)" : "none",
+      border: `1px solid ${sortOrder===id ? (W.blue||"#7aa8c8") : W.splitBg||"#444"}`,
+      color: sortOrder===id ? (W.blue||"#7aa8c8") : W.fgMuted||"#999",
+      borderRadius:"5px", padding:"3px 9px", cursor:"pointer",
+      fontSize:"11px", fontWeight: sortOrder===id ? "700" : "400",
+    }
+  }, label);
+
+  return React.createElement("div", {
+    style: {
+      marginTop:"12px",
+      border: `1px solid ${W.splitBg||"#444"}`,
+      borderRadius:"10px", overflow:"hidden",
+      gridColumn:"1 / -1",
+    }
+  },
+    // ── Header met filter controls ──────────────────────────────────────────
+    React.createElement("div", {
+      style: {
+        display:"flex", alignItems:"center", gap:"8px", flexWrap:"wrap",
+        padding:"10px 14px",
+        background:"rgba(255,255,255,0.03)",
+        borderBottom: collapsed ? "none" : `1px solid ${W.splitBg||"#444"}`,
+        cursor:"pointer",
+      },
+      onClick: () => setCollapsed(c => !c),
+    },
+      React.createElement("span",{style:{fontSize:"13px",fontWeight:"700",color:W.fg||"#d4d4d4"}},
+        `✓ Openstaande taken (${filtered.length}${filterTag?` · ${filterTag}`:""})`),
+      React.createElement("span",{style:{fontSize:"11px",color:W.fgDim||"#666",marginLeft:"auto"}},
+        collapsed ? "▾ toon" : "▴ verberg"),
+    ),
+
+    // ── Filter + sort bar ───────────────────────────────────────────────────
+    !collapsed && React.createElement("div",{
+      style:{display:"flex",alignItems:"center",gap:"8px",padding:"8px 14px",
+        borderBottom:`1px solid ${W.splitBg||"#444"}`,flexWrap:"wrap"}},
+      // Sortering
+      React.createElement("div",{style:{display:"flex",gap:"4px"}},
+        sortBtn("new","Nieuw → Oud"),
+        sortBtn("old","Oud → Nieuw"),
+      ),
+      // Tag filter
+      React.createElement("input",{
+        value:filterTag, onChange:e=>{e.stopPropagation();setFilterTag(e.target.value);},
+        onClick:e=>e.stopPropagation(),
+        placeholder:"Filter op tag…",
+        style:{
+          background:W.bg||"#1a1a1a", border:`1px solid ${W.splitBg||"#444"}`,
+          borderRadius:"5px", padding:"3px 10px", color:W.fg||"#d4d4d4",
+          fontSize:"11px", outline:"none", width:"140px",
+        }
+      }),
+      filterTag && React.createElement("button",{
+        onClick:e=>{e.stopPropagation();setFilterTag("");},
+        style:{background:"none",border:"none",color:W.fgMuted||"#999",
+          cursor:"pointer",fontSize:"13px",padding:"0 2px"}},"×"),
+      React.createElement("span",{style:{fontSize:"11px",color:W.fgDim||"#666",marginLeft:"auto"}},
+        `${filtered.length} van ${allTasks.length}`),
+    ),
+
+    // ── Takenlijst ──────────────────────────────────────────────────────────
+    !collapsed && React.createElement("div",{
+      style:{maxHeight:"280px",overflowY:"auto"}},
+      filtered.slice(0,50).map(task =>
+        React.createElement("div",{
+          key:task.id,
+          style:{
+            display:"flex", alignItems:"flex-start", gap:"10px",
+            padding:"8px 14px",
+            borderBottom:`1px solid ${W.splitBg||"#333"}22`,
+            transition:"all .3s",
+            opacity: doneIds.has(task.id) ? 0.35 : 1,
+            textDecoration: doneIds.has(task.id) ? "line-through" : "none",
+          },
+          onMouseEnter:e=>{ if(!doneIds.has(task.id)) e.currentTarget.style.background="rgba(255,255,255,0.03)"; },
+          onMouseLeave:e=>e.currentTarget.style.background="transparent",
+        },
+          // Klikbare checkbox
+          React.createElement("button",{
+            onClick:e=>{e.stopPropagation();checkTask(task);},
+            disabled:checkingId===task.id||doneIds.has(task.id),
+            title:"Taak afvinken",
+            style:{
+              background:"none",border:"none",padding:"0 2px",
+              cursor:doneIds.has(task.id)?"default":"pointer",
+              fontSize:"16px",flexShrink:0,marginTop:"1px",
+              color:doneIds.has(task.id)?"#72b660":(W.fgMuted||"#999"),
+              transition:"color .15s",
+            }
+          },
+            checkingId===task.id ? "⏳"
+              : doneIds.has(task.id) ? "☑"
+              : "☐"
+          ),
+          // Taak tekst
+          React.createElement("div",{style:{flex:1,minWidth:0}},
+            React.createElement("div",{
+              style:{fontSize:"13px",color:W.fg||"#d4d4d4",lineHeight:"1.4",
+                overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}
+            },task.text.replace(/📅\s*\d{4}-\d{2}-\d{2}/,"").trim()),
+            React.createElement("div",{
+              style:{display:"flex",gap:"6px",alignItems:"center",marginTop:"3px",flexWrap:"wrap"}},
+              // Notitie-bron
+              React.createElement("span",{
+                onClick:e=>{e.stopPropagation();onOpenNote?.(task.noteId);},
+                title:"Open notitie",
+                style:{
+                  fontSize:"10px",color:W.blue||"#7aa8c8",
+                  cursor:"pointer",overflow:"hidden",textOverflow:"ellipsis",
+                  whiteSpace:"nowrap",maxWidth:"160px",
+                  textDecoration:"underline",textDecorationColor:"rgba(138,198,242,0.4)",
+                }
+              },task.noteTitle),
+              // Datum
+              React.createElement("span",{
+                style:{fontSize:"10px",color:W.fgDim||"#666",flexShrink:0}
+              }, task.dueDate
+                ? `📅 ${task.dueDate}`
+                : task.date ? task.date.slice(0,10) : ""),
+              // Tags
+              task.tags.slice(0,2).map(t=>
+                React.createElement("span",{key:t,
+                  style:{fontSize:"9px",background:W.bg2||"#222",
+                    border:`1px solid ${W.splitBg||"#444"}`,
+                    borderRadius:"6px",padding:"1px 5px",
+                    color:W.fgMuted||"#999",cursor:"pointer",flexShrink:0},
+                  onClick:e=>{e.stopPropagation();setFilterTag(t);}
+                },t)
+              ),
+            )
+          ),
+          // Open notitie pijl
+          React.createElement("button",{
+            onClick:e=>{e.stopPropagation();onOpenNote?.(task.noteId);},
+            title:"Open notitie met deze taak",
+            style:{
+              background:"none",border:`1px solid ${W.splitBg||"#444"}`,
+              color:W.fgMuted||"#999",borderRadius:"5px",
+              padding:"2px 7px",cursor:"pointer",
+              fontSize:"11px",flexShrink:0,
+            }
+          },"→")
+        )
+      ),
+      filtered.length > 50 && React.createElement("div",{
+        style:{padding:"8px 14px",fontSize:"11px",color:W.fgDim||"#666",textAlign:"center"}},
+        `+ ${filtered.length-50} meer taken — gebruik filter om te verfijnen`)
+    )
   );
 };
 
@@ -584,20 +839,44 @@ const DailyView = ({ notes=[], onOpenNote, onAddNote, llmModel="" }) => {
       flexWrap:"wrap",gap:"12px",gridColumn:"1 / -1"}},
       React.createElement("div",null,
         React.createElement("div",{style:{display:"flex",alignItems:"center",gap:"8px",marginBottom:"6px"}},
-          React.createElement("button",{onClick:()=>goDay(-1),
-            style:{background:"none",border:`1px solid ${W.splitBg}`,color:W.fgMuted,
-              borderRadius:"5px",padding:"3px 10px",cursor:"pointer",fontSize:"16px"}},"‹"),
-          React.createElement("h2",{style:{margin:0,fontSize:"20px",color:W.fg,fontWeight:"700",
-            textTransform:"capitalize",cursor:"pointer"},onClick:()=>setViewDate(today),title:"Terug naar vandaag"},
+          // ‹ vorige dag
+          React.createElement("button",{onClick:()=>goDay(-1),title:"Vorige dag",
+            style:{
+              background:"rgba(255,255,255,0.06)",
+              border:`1px solid ${W.splitBg||"#444"}`,
+              color:W.fg||"#d4d4d4",
+              borderRadius:"7px",width:"30px",height:"30px",
+              cursor:"pointer",fontSize:"18px",lineHeight:1,
+              display:"flex",alignItems:"center",justifyContent:"center",
+              flexShrink:0,fontWeight:"300",
+            }},"‹"),
+          React.createElement("h2",{style:{margin:0,fontSize:"20px",color:W.fg||"#d4d4d4",fontWeight:"700",
+            textTransform:"capitalize",cursor:"pointer",userSelect:"none"},
+            onClick:()=>setViewDate(today),title:"Klik voor vandaag"},
             viewDate===today ? dayLabel
               : new Date(viewDate+"T12:00:00").toLocaleDateString("nl-NL",{weekday:"long",day:"numeric",month:"long"})
           ),
-          viewDate<today && React.createElement("button",{onClick:()=>goDay(1),
-            style:{background:"none",border:`1px solid ${W.splitBg}`,color:W.fgMuted,
-              borderRadius:"5px",padding:"3px 10px",cursor:"pointer",fontSize:"16px"}},"›"),
+          // › volgende dag (alleen tonen als niet vandaag)
+          React.createElement("button",{onClick:()=>goDay(1),title:"Volgende dag",
+            disabled:viewDate>=today,
+            style:{
+              background: viewDate>=today ? "none" : "rgba(255,255,255,0.06)",
+              border:`1px solid ${viewDate>=today ? "transparent" : W.splitBg||"#444"}`,
+              color: viewDate>=today ? "transparent" : W.fg||"#d4d4d4",
+              borderRadius:"7px",width:"30px",height:"30px",
+              cursor: viewDate>=today ? "default" : "pointer",
+              fontSize:"18px",lineHeight:1,
+              display:"flex",alignItems:"center",justifyContent:"center",
+              flexShrink:0,fontWeight:"300",
+            }},"›"),
           viewDate<today && React.createElement("button",{onClick:()=>setViewDate(today),
-            style:{background:"rgba(138,198,242,0.1)",border:"1px solid rgba(138,198,242,0.3)",
-              color:W.blue||"#8ac6f2",borderRadius:"5px",padding:"2px 8px",cursor:"pointer",fontSize:"11px"}},"vandaag")
+            style:{
+              background:"rgba(138,198,242,0.12)",
+              border:"1px solid rgba(138,198,242,0.4)",
+              color:W.blue||"#8ac6f2",
+              borderRadius:"10px",padding:"3px 10px",
+              cursor:"pointer",fontSize:"11px",fontWeight:"600",
+            }},"vandaag")
         ),
         React.createElement("div",{style:{fontSize:"13px",color:W.fgMuted}},
           `${notes.length} notities · ${totalSR} in SR · ${openTasks} taken`)
@@ -813,6 +1092,11 @@ const DailyView = ({ notes=[], onOpenNote, onAddNote, llmModel="" }) => {
           }},label)
         )
       )
+    ),
+
+    // ── Openstaande taken ─────────────────────────────────────── volle breedte
+    React.createElement("div",{style:{gridColumn:"1 / -1"}},
+      React.createElement(OpenTasksPanel,{notes,onOpenNote,W})
     ),
 
     // ── Recente notities ──────────────────────────────────────── volle breedte

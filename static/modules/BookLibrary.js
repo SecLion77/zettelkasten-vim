@@ -3,7 +3,108 @@
 // Boeken worden opgeslagen als notities met tag "boek" en noteType "literature".
 // Props: notes, onNotesChange, onOpenNote
 
-const BookLibrary = ({ notes = [], onNotesChange, onOpenNote }) => {
+// ── Smart Book Cover Crop ──────────────────────────────────────────────────
+// Detecteert de boekomslag in een foto via Canvas edge-analyse.
+// Strategie: analyseer randen van de afbeelding → vind het rechthoekige gebied
+// met de meeste kleurcontrast (de omslag) → crop naar 2:3 verhouding.
+const smartCropBookCover = (file) => new Promise((resolve, reject) => {
+  const img = new Image();
+  const url = URL.createObjectURL(file);
+  img.onload = () => {
+    URL.revokeObjectURL(url);
+    const W = img.naturalWidth, H = img.naturalHeight;
+
+    // ── Stap 1: Analyseer kleurcontrast langs randen ─────────────────────────
+    const canvas = document.createElement("canvas");
+    const SAMPLE = 400; // werkt op verkleind canvas voor snelheid
+    const scale  = Math.min(1, SAMPLE / Math.max(W, H));
+    canvas.width  = Math.round(W * scale);
+    canvas.height = Math.round(H * scale);
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+    const sw = canvas.width, sh = canvas.height;
+
+    const luma = (x, y) => {
+      const i = (y * sw + x) * 4;
+      return 0.299*data[i] + 0.587*data[i+1] + 0.114*data[i+2];
+    };
+
+    // Zoek de meeste contrastrijke horizontale band (bovenkant omslag)
+    const rowContrast = [];
+    for (let y = 1; y < sh-1; y++) {
+      let c = 0;
+      for (let x = 1; x < sw-1; x++) c += Math.abs(luma(x,y) - luma(x,y-1));
+      rowContrast.push(c / sw);
+    }
+
+    const colContrast = [];
+    for (let x = 1; x < sw-1; x++) {
+      let c = 0;
+      for (let y = 1; y < sh-1; y++) c += Math.abs(luma(x,y) - luma(x-1,y));
+      colContrast.push(c / sh);
+    }
+
+    // Vind de meest waarschijnlijke omslag-grenzen (piek-contrast)
+    const smooth = (arr, w=3) => arr.map((_,i) =>
+      arr.slice(Math.max(0,i-w), i+w+1).reduce((a,b)=>a+b,0) / Math.min(arr.length, 2*w+1)
+    );
+    const sr = smooth(rowContrast), sc = smooth(colContrast);
+    const maxR = Math.max(...sr), maxC = Math.max(...sc);
+    const threshold = 0.25;
+
+    let top=0, bottom=sh, left=0, right=sw;
+
+    // Zoek eerste significante rij-overgang (boven → omslag)
+    for (let y=0; y<sh/2; y++) { if(sr[y] > maxR*threshold) { top=y; break; } }
+    // Zoek laatste significante rij-overgang (omslag → onder)
+    for (let y=sh-1; y>sh/2; y--) { if(sr[y-1] > maxR*threshold) { bottom=y; break; } }
+    // Links en rechts
+    for (let x=0; x<sw/2; x++) { if(sc[x] > maxC*threshold) { left=x; break; } }
+    for (let x=sw-1; x>sw/2; x--) { if(sc[x-1] > maxC*threshold) { right=x; break; } }
+
+    // Als detectie mislukt of te klein: gebruik center-crop
+    const detected = (bottom-top)/sh > 0.25 && (right-left)/sw > 0.25;
+    if (!detected) {
+      // Fallback: center-crop naar 2:3 verhouding
+      const ratio = 2/3;
+      const cH = H, cW = Math.round(H * ratio);
+      const cx = Math.max(0, Math.round((W-cW)/2));
+      top=0; bottom=sh; left=Math.round(cx*scale); right=Math.round((cx+cW)*scale);
+    }
+
+    // ── Stap 2: Crop naar gevonden rechthoek, output als 2:3 JPEG ───────────
+    const cropX = Math.round(left / scale);
+    const cropY = Math.round(top  / scale);
+    const cropW = Math.round((right-left) / scale);
+    const cropH = Math.round((bottom-top) / scale);
+
+    // Pas aan naar exacte 2:3 verhouding (boekstandaard)
+    const TARGET_RATIO = 2/3;
+    let finalX=cropX, finalY=cropY, finalW=cropW, finalH=cropH;
+    if (cropW/cropH > TARGET_RATIO) {
+      finalW = Math.round(cropH * TARGET_RATIO);
+      finalX = cropX + Math.round((cropW-finalW)/2);
+    } else {
+      finalH = Math.round(cropW / TARGET_RATIO);
+      finalY = cropY + Math.round((cropH-finalH)/2);
+    }
+    finalX = Math.max(0, Math.min(W-finalW, finalX));
+    finalY = Math.max(0, Math.min(H-finalH, finalY));
+
+    const out = document.createElement("canvas");
+    out.width  = 300; // standaard cover output
+    out.height = 450;
+    const octx = out.getContext("2d");
+    octx.drawImage(img, finalX, finalY, finalW, finalH, 0, 0, 300, 450);
+    resolve({ dataUrl: out.toDataURL("image/jpeg", 0.9), cropBox: {finalX,finalY,finalW,finalH} });
+  };
+  img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("Afbeelding laden mislukt")); };
+  img.src = url;
+});
+
+const BookLibrary = (
+{ notes = [], onNotesChange, onOpenNote }) => {
   const { useState, useMemo, useCallback } = React;
 
   // ── State ──────────────────────────────────────────────────────────────────
@@ -18,7 +119,7 @@ const BookLibrary = ({ notes = [], onNotesChange, onOpenNote }) => {
   const EMPTY_FORM = {
     bolUrl: "", titel: "", auteur: "", kenIkPersoonlijk: false,
     type: "fysiek", taal: "nl", status: "nog-lezen",
-    bitlyUrl: "", coverUrl: "", coverLoading: false, coverError: "",
+    bitlyUrl: "", coverUrl: "", coverLoading: false, coverError: "", cropLoading: false,
   };
   const [form, setForm] = useState(EMPTY_FORM);
 
@@ -74,6 +175,20 @@ const BookLibrary = ({ notes = [], onNotesChange, onOpenNote }) => {
   }), [books]);
 
   // ── Bol.com cover ophalen ──────────────────────────────────────────────────
+  const handleCoverUpload = async (file) => {
+    if (!file || !file.type.startsWith("image/")) return;
+    setForm(f => ({ ...f, cropLoading: true, coverError: "" }));
+    try {
+      const { dataUrl } = await smartCropBookCover(file);
+      setForm(f => ({ ...f, coverUrl: dataUrl, cropLoading: false }));
+    } catch {
+      const reader = new FileReader();
+      reader.onload = ev => setForm(f => ({ ...f, coverUrl: ev.target.result, cropLoading: false }));
+      reader.onerror = () => setForm(f => ({ ...f, cropLoading: false, coverError: "Laden mislukt" }));
+      reader.readAsDataURL(file);
+    }
+  };
+
   const fetchBolCover = useCallback(async () => {
     if (!form.bolUrl.includes("bol.com")) {
       setForm(f => ({ ...f, coverError: "Geen geldige Bol.com URL" }));
@@ -157,8 +272,11 @@ const BookLibrary = ({ notes = [], onNotesChange, onOpenNote }) => {
       coverUrl:         book.coverUrl || "",
       coverLoading:     false,
       coverError:       "",
+      cropLoading:      false,
     });
     setShowModal(true);
+    // Scroll naar boven van modal
+    setTimeout(() => document.querySelector(".book-modal-body")?.scrollTo(0,0), 50);
   }, []);
 
   // ── Status snel wisselen ──────────────────────────────────────────────────
@@ -333,8 +451,10 @@ const BookLibrary = ({ notes = [], onNotesChange, onOpenNote }) => {
                         statusBadge(book.status, ()=>cycleStatus(book)),
                         React.createElement("button",{
                           onClick:e=>{e.stopPropagation();openEdit(book);},
-                          style:{background:"none",border:"none",color:W.fgDim,cursor:"pointer",fontSize:"11px",padding:"0"}
-                        },"✏")
+                          style:{background:"rgba(138,198,242,0.12)",border:`1px solid ${W.blue||"#7aa8c8"}`,
+                            color:W.blue||"#7aa8c8",cursor:"pointer",fontSize:"12px",
+                            borderRadius:"5px",padding:"2px 8px",fontWeight:"600"}
+                        },"✏ Bewerken")
                       )
                     )
                   )
@@ -373,7 +493,7 @@ const BookLibrary = ({ notes = [], onNotesChange, onOpenNote }) => {
                     React.createElement("button",{
                       onClick:e=>{e.stopPropagation();openEdit(book);},
                       style:{background:"none",border:"none",color:W.fgDim,cursor:"pointer",fontSize:"13px",padding:"0 4px"}
-                    },"✏")
+                    },"✏ Bewerken")
                   )
                 )
               )
@@ -461,7 +581,7 @@ const BookLibrary = ({ notes = [], onNotesChange, onOpenNote }) => {
                 onClick:e=>{e.stopPropagation();openEdit(book);},
                 style:{background:"none",border:"none",color:W.fgDim,
                        cursor:"pointer",fontSize:"13px",padding:"0 4px"}
-              },"✏")
+              },"✏ Bewerken")
             )
           ))
         )
@@ -505,8 +625,43 @@ const BookLibrary = ({ notes = [], onNotesChange, onOpenNote }) => {
                    cursor:"pointer",background:"#f0f0f0",border:"1px solid #ccc",color:"#333"}
           }, form.coverLoading ? "⟳ Ophalen…" : "Cover ophalen"),
           form.coverError && React.createElement("div",{style:{fontSize:"11px",color:"#e5786d",marginTop:"4px"}},form.coverError),
+          // Preview huidig cover
           form.coverUrl && React.createElement("img",{src:form.coverUrl,alt:"cover",
-            style:{marginTop:"8px",height:"80px",borderRadius:"4px",border:"1px solid #eee"}})
+            style:{marginTop:"8px",height:"90px",borderRadius:"4px",border:"1px solid #ccc",
+              boxShadow:"0 2px 8px rgba(0,0,0,0.15)"}})
+        ),
+
+        // ── Handmatige cover upload ─────────────────────────────────────────
+        React.createElement("div",{style:{marginBottom:"14px"}},
+          React.createElement("label",{style:{fontSize:"13px",fontWeight:"600",display:"block",marginBottom:"6px"}},
+            "📷 Foto van cover uploaden"),
+          React.createElement("div",{
+            style:{
+              border:"2px dashed #ccc",borderRadius:"8px",
+              padding:"14px",textAlign:"center",cursor:"pointer",
+              background:"#fafafa",transition:"border-color .15s",
+            },
+            onClick:()=>document.getElementById("cover-file-input").click(),
+            onDragOver:e=>{ e.preventDefault(); e.currentTarget.style.borderColor="#7aa8c8"; },
+            onDragLeave:e=>{ e.currentTarget.style.borderColor="#ccc"; },
+            onDrop:e=>{ e.preventDefault(); e.currentTarget.style.borderColor="#ccc";
+              handleCoverUpload(e.dataTransfer.files[0]); },
+          },
+            form.cropLoading
+              ? React.createElement("span",{style:{fontSize:"13px",color:"#666"}},"⏳ Cover detecteren…")
+              : React.createElement("div",null,
+                  React.createElement("div",{style:{fontSize:"22px",marginBottom:"4px"}},"🖼"),
+                  React.createElement("div",{style:{fontSize:"12px",color:"#666"}},
+                    "Sleep een foto hierheen of klik om te kiezen"),
+                  React.createElement("div",{style:{fontSize:"11px",color:"#999",marginTop:"3px"}},
+                    "De boekomslag wordt automatisch herkend en bijgesneden")
+                )
+          ),
+          React.createElement("input",{
+            id:"cover-file-input", type:"file",
+            accept:"image/*", style:{display:"none"},
+            onChange:e=>handleCoverUpload(e.target.files[0]),
+          })
         ),
 
         // ── Titel ────────────────────────────────────────────────────────────
