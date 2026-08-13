@@ -239,6 +239,65 @@ class VaultManager:
         if p.exists(): p.unlink(); return True
         return False
 
+    # ── Getypeerde links ───────────────────────────────────────────────────
+    # Backwards-compatible met de bestaande [[ID]] / [[Titel]] syntax:
+    # een optioneel |type-suffix voegt betekenis toe zonder oude links te breken.
+    # [[20240101000002]]              -> target=20240101000002, type=""
+    # [[20240101000002|ondersteunt]]  -> target=20240101000002, type="ondersteunt"
+    _LINK_RE = re.compile(r'\[\[([^\]|]+)(?:\|([^\]]+))?\]\]')
+
+    def _resolve_link_target(self, token: str, note_map: dict):
+        """Resolveer een linktarget (note-ID of titel) naar een note-ID."""
+        token = (token or "").strip()
+        if not token:
+            return None
+        if token in note_map:
+            return token
+        tl = token.lower()
+        for nid, n in note_map.items():
+            if (n.get("title") or "").strip().lower() == tl:
+                return nid
+        return None
+
+    def extract_typed_links(self, content: str) -> list:
+        """Haal alle [[...]]-links uit content, met optioneel linktype.
+        Geeft [{target, type}] terug — target is de rauwe tekst tussen de
+        haakjes (ID of titel), nog niet geresolved naar een note-ID."""
+        out = []
+        for m in self._LINK_RE.finditer(content or ""):
+            target = m.group(1).strip()
+            ltype  = (m.group(2) or "").strip()
+            if target:
+                out.append({"target": target, "type": ltype})
+        return out
+
+    # Vaste, voorgestelde linktypes — moet in sync blijven met LINK_TYPES in
+    # app.js (client-side kleuren/labels). Elk niet-leeg woord na | is
+    # technisch een geldig type; dit is de canonieke set die de UI toont.
+    LINK_TYPES = ["inspireert", "weerlegt", "bouwt-voort-op", "zie-ook", "verwijst-naar"]
+
+    def get_typed_graph(self) -> dict:
+        """Bouwt graafdata (nodes + getypeerde edges) voor de graafweergave.
+        Retourneert {nodes:[{id,title,tags,noteType}], edges:[{source,target,type}]}."""
+        notes = self.load_notes()
+        note_map = {n["id"]: n for n in notes}
+        nodes = [{"id": n["id"], "title": n.get("title") or n["id"],
+                   "tags": n.get("tags", []), "noteType": n.get("noteType", "")}
+                  for n in notes]
+        edges = []
+        seen = set()
+        for n in notes:
+            for link in self.extract_typed_links(n.get("content", "")):
+                target_id = self._resolve_link_target(link["target"], note_map)
+                if not target_id or target_id == n["id"]:
+                    continue
+                key = (n["id"], target_id, link["type"])
+                if key in seen:
+                    continue
+                seen.add(key)
+                edges.append({"source": n["id"], "target": target_id, "type": link["type"]})
+        return {"nodes": nodes, "edges": edges, "linkTypes": self.LINK_TYPES}
+
     # Annotations
     def _annot_path(self, pdf_name):
         safe = "".join(c if c.isalnum() or c in "-_." else "_" for c in pdf_name)
@@ -2028,6 +2087,7 @@ class ZKHandler(BaseHTTPRequestHandler):
         v = self.vault
         return {
             "/api/notes":           lambda: self._send(200, v.load_notes()),
+            "/api/graph-data":      lambda: self._send(200, v.get_typed_graph()),
             "/api/annotations":     lambda: self._send(200, v.load_annotations()),
             "/api/img-annotations": lambda: self._send(200, v.load_img_annotations()),
             "/api/pdfs":            lambda: self._send(200, v.list_pdfs()),
@@ -2467,25 +2527,66 @@ class ZKHandler(BaseHTTPRequestHandler):
                 return self._send(400, {"error": "query vereist"})
             try:
                 import math
-                # Embed de zoekvraag
-                q_result = self._ollama_post("/api/embeddings",
-                    {"model": model, "prompt": query}, 15)
-                q_emb = q_result.get("embedding", [])
-                if not q_emb:
-                    return self._send(200, {"ok": False, "error": "Geen embedding ontvangen",
-                        "hint": "ollama pull nomic-embed-text"})
-                # Cosine similarity met alle notities
-                store   = self.vault._load_embeddings()
+                # ── Signaal 1: embedding cosine similarity ──────────────────────
+                # Faalt de Ollama-aanroep (model niet geïnstalleerd, service down),
+                # dan valt de zoekopdracht terug op BM25-only i.p.v. helemaal te
+                # falen — hybride zoeken is zo ook bruikbaar zonder embeddings.
+                cosine_scores = {}
+                q_emb = []
+                try:
+                    q_result = self._ollama_post("/api/embeddings", {"model": model, "prompt": query}, 15)
+                    q_emb = q_result.get("embedding", [])
+                except Exception:
+                    q_emb = []
+                store = self.vault._load_embeddings()
+                if q_emb:
+                    q_norm = math.sqrt(sum(x*x for x in q_emb)) or 1
+                    for nid, entry in store.items():
+                        emb = entry.get("embedding", [])
+                        if len(emb) != len(q_emb): continue
+                        dot  = sum(a*b for a,b in zip(q_emb, emb))
+                        norm = math.sqrt(sum(x*x for x in emb)) or 1
+                        cosine_scores[nid] = dot / (q_norm * norm)
+
+                # ── Signaal 2: BM25 op titel + content van alle notities ────────
+                notes = self.vault.load_notes()
+                docs  = {n["id"]: f'{n.get("title","")}\n{n.get("content","")}' for n in notes}
+                bm25_scores = self._bm25_scores(query, docs)
+
+                if not cosine_scores and not bm25_scores:
+                    if not q_emb:
+                        # Embeddings faalden én BM25 vond niets zinvols (bv. de
+                        # index is nog leeg) — dit is de situatie waar de hint
+                        # daadwerkelijk actie vereist, dus als fout melden zodat
+                        # SemanticSearch.js 'm ook toont (het checkt d.ok).
+                        return self._send(200, {"ok": False,
+                            "error": "Geen embedding ontvangen en geen trefwoord-treffers",
+                            "hint": "ollama pull nomic-embed-text (of controleer of Ollama draait)"})
+                    return self._send(200, {"ok": True, "results": []})
+
+                # ── Hybride fusie: Reciprocal Rank Fusion over beide rankings ───
+                # RRF i.p.v. losse gewichten optellen: de twee signalen leven op
+                # totaal verschillende schalen (cosine ~0-1, BM25 ongebonden), dus
+                # fuseren op RANG i.p.v. op ruwe score voorkomt dat het ene signaal
+                # het andere per ongeluk overstemt.
+                cos_ranking  = [nid for nid,_ in sorted(cosine_scores.items(), key=lambda x:-x[1])[:50]]
+                bm25_ranking = [nid for nid,_ in sorted(bm25_scores.items(), key=lambda x:-x[1])[:50]]
+                fused = self._rrf_fuse([r for r in (cos_ranking, bm25_ranking) if r])
+
+                max_bm25 = max(bm25_scores.values()) if bm25_scores else 1
                 results = []
-                q_norm  = math.sqrt(sum(x*x for x in q_emb)) or 1
-                for nid, entry in store.items():
-                    emb = entry.get("embedding", [])
-                    if len(emb) != len(q_emb): continue
-                    dot  = sum(a*b for a,b in zip(q_emb, emb))
-                    norm = math.sqrt(sum(x*x for x in emb)) or 1
-                    sim  = dot / (q_norm * norm)
-                    results.append({"id": nid, "score": round(sim, 4)})
-                results.sort(key=lambda x: x["score"], reverse=True)
+                for nid, _ in sorted(fused.items(), key=lambda x: -x[1]):
+                    cos = cosine_scores.get(nid, 0.0)
+                    bm25_norm = (bm25_scores.get(nid, 0.0) / max_bm25) if max_bm25 else 0.0
+                    # `score` blijft de waarde die de client al gebruikt voor de
+                    # 0.3-drempel en de %-weergave (SemanticSearch.js) — dus
+                    # primair de cosine-similarity, ongewijzigd voor pure
+                    # embedding-hits. Een sterke BM25-match (exacte term) die
+                    # embeddings zouden missen krijgt een vloerwaarde zodat hij
+                    # niet alsnog wordt weggefilterd.
+                    score = max(cos, 0.3 + 0.4 * bm25_norm) if bm25_norm > 0.15 else cos
+                    results.append({"id": nid, "score": round(score, 4),
+                                     "cosine": round(cos, 4), "bm25": round(bm25_norm, 4)})
                 return self._send(200, {"ok": True, "results": results[:limit]})
             except Exception as e:
                 return self._send(200, {"ok": False, "error": str(e)})
@@ -2710,7 +2811,22 @@ class ZKHandler(BaseHTTPRequestHandler):
     # ── LLM ────────────────────────────────────────────────────────────────────
     def _ollama(self): return os.environ.get("OLLAMA_URL","http://localhost:11434")
 
+    def _num_ctx(self):
+        """Context-window-grootte voor lokale Ollama-aanroepen. Ollama's eigen
+        default is 2048 tokens — ook voor modellen die veel meer aankunnen
+        (bv. nomic-embed-text tot 8192) — waardoor grote prompts/chunks stil
+        worden afgekapt zonder foutmelding. 8192 is een ruimere, veiligere
+        default; overschrijfbaar via de OLLAMA_NUM_CTX env-variabele voor wie
+        een kleiner/groter model of minder geheugen heeft."""
+        try: return int(os.environ.get("OLLAMA_NUM_CTX", "8192"))
+        except ValueError: return 8192
+
     def _ollama_post(self, endpoint, payload, timeout=600):
+        # num_ctx niet overschrijven als de aanroeper er zelf al een heeft
+        # meegegeven; /api/tags heeft geen "options" en wordt overgeslagen.
+        if endpoint in ("/api/generate", "/api/embeddings", "/api/chat") and isinstance(payload, dict):
+            opts = payload.setdefault("options", {})
+            opts.setdefault("num_ctx", self._num_ctx())
         req=urllib.request.Request(self._ollama()+endpoint,
             data=json.dumps(payload).encode("utf-8"),
             headers={"Content-Type":"application/json"},method="POST")
@@ -2812,7 +2928,7 @@ class ZKHandler(BaseHTTPRequestHandler):
                 "model": model,
                 "messages": [{"role": "user", "content": prompt}],
                 "stream": False,
-                "options": {"temperature": 0.3, "num_predict": 800}
+                "options": {"temperature": 0.3, "num_predict": 800, "num_ctx": self._num_ctx()}
             }).encode()
             req = _req.Request(
                 "http://localhost:11434/api/chat",
@@ -2958,7 +3074,7 @@ class ZKHandler(BaseHTTPRequestHandler):
                     "model": self._best_local_model(model),
                     "messages": [{"role": "user", "content": prompt}],
                     "stream": False,
-                    "options": {"temperature": 0.2, "num_predict": 200}
+                    "options": {"temperature": 0.2, "num_predict": 200, "num_ctx": self._num_ctx()}
                 }).encode()
                 req = urllib.request.Request(
                     self._ollama() + "/api/chat", data=payload,
@@ -3137,6 +3253,53 @@ class ZKHandler(BaseHTTPRequestHandler):
     def _cosine(self, a, b):
         return sum(a.get(k,0)*v for k,v in b.items())
 
+    # ── BM25 (voor hybride zoeken: exacte termen die embeddings missen) ────────
+    def _bm25_scores(self, query, docs_by_id):
+        """docs_by_id: {id: tekst}. Geeft {id: bm25_score} terug voor de query.
+        Standaard Okapi BM25 (k1=1.5, b=0.75) — geen externe deps."""
+        import math, re
+        def tokenize(t):
+            return re.findall(r"[a-z\u00c0-\u024f]{2,}", (t or "").lower())
+        q_terms = tokenize(query)
+        if not q_terms or not docs_by_id:
+            return {}
+        ids = list(docs_by_id.keys())
+        doc_tokens = {i: tokenize(docs_by_id[i]) for i in ids}
+        doc_len = {i: (len(doc_tokens[i]) or 1) for i in ids}
+        avgdl = sum(doc_len.values()) / len(ids) or 1
+        N = len(ids)
+        df = {}
+        for i in ids:
+            for w in set(doc_tokens[i]):
+                df[w] = df.get(w, 0) + 1
+        k1, b = 1.5, 0.75
+        scores = {}
+        for i in ids:
+            tf = {}
+            for w in doc_tokens[i]:
+                tf[w] = tf.get(w, 0) + 1
+            s = 0.0
+            for t in q_terms:
+                n_t = df.get(t, 0)
+                if n_t == 0 or t not in tf:
+                    continue
+                idf = math.log((N - n_t + 0.5) / (n_t + 0.5) + 1)
+                f = tf[t]
+                denom = f + k1 * (1 - b + b * doc_len[i] / avgdl)
+                s += idf * (f * (k1 + 1)) / denom
+            if s > 0:
+                scores[i] = s
+        return scores
+
+    def _rrf_fuse(self, rankings, k=60):
+        """rankings: lijst van geordende id-lijsten (beste eerst, elk uniek).
+        Geeft {id: rrf_score} terug — Reciprocal Rank Fusion, k=60 (standaard)."""
+        fused = {}
+        for ranking in rankings:
+            for rank, doc_id in enumerate(ranking):
+                fused[doc_id] = fused.get(doc_id, 0.0) + 1.0 / (k + rank + 1)
+        return fused
+
     def _llm_similar(self):
         """Geeft top-N semantisch vergelijkbare notities terug via TF-IDF cosine."""
         body   = self._body()
@@ -3187,7 +3350,10 @@ class ZKHandler(BaseHTTPRequestHandler):
         # 2. Bouw graaf-context: voor elke top-notitie, voeg ook directe buren toe
         import re as re2
         def extract_links(content):
-            return [m.group(1) for m in re2.finditer(r'\[\[([^\]]+)\]\]', content or "")]
+            # Strip een eventueel |type-suffix zodat getypeerde links
+            # ([[ID|type]]) ook hier gewoon als gewone link tellen.
+            return [m.group(1).split("|", 1)[0].strip()
+                    for m in re2.finditer(r'\[\[([^\]]+)\]\]', content or "")]
 
         note_map = {n["id"]: n for n in notes}
         context_ids = set(n["id"] for n in top_notes)
@@ -3713,7 +3879,8 @@ class ZKHandler(BaseHTTPRequestHandler):
 
     def _stream_ollama(self, model, system, messages):
         """Streaming via lokale Ollama."""
-        payload={"model":model,"messages":[{"role":"system","content":system}]+messages,"stream":True}
+        payload={"model":model,"messages":[{"role":"system","content":system}]+messages,"stream":True,
+                 "options":{"num_ctx": self._num_ctx()}}
         try:
             req=urllib.request.Request(self._ollama()+"/api/chat",
                 data=json.dumps(payload).encode("utf-8"),

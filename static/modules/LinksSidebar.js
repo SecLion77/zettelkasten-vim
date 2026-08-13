@@ -54,17 +54,29 @@ const LinksSidebar = ({
   const outlinks = useMemo(() => {
     if (!note?.content) return [];
     const matches = [...note.content.matchAll(/\[\[([^\]]+)\]\]/g)];
-    const titles  = [...new Set(matches.map(m => m[1]
-      .replace(/^pdf:/,"").replace(/^img:/,"")))];
-    return titles.map(t => {
+    // Getypeerde link [[target|type]]: het |type-deel hoort niet bij de
+    // titel/ID en moet er dus vóór de pdf:/img:-check al af.
+    const raw = matches.map(m => {
+      const [target, type] = m[1].split("|").map(s => s.trim());
+      return { target, type: type && LINK_TYPES[type.toLowerCase()] ? type.toLowerCase() : "" };
+    });
+    const seen = new Map();
+    raw.forEach(({target, type}) => {
+      const t = target.replace(/^pdf:/,"").replace(/^img:/,"");
+      if (!seen.has(t)) seen.set(t, type); // eerste voorkomen bepaalt getoond type
+    });
+    return [...seen.entries()].map(([t, type]) => {
       const found = allNotes.find(n =>
         n.title === t || n.id === t ||
         n.title?.toLowerCase() === t.toLowerCase()
       );
-      const isPdf = note.content.includes(`[[pdf:${t}]]`);
-      const isImg = note.content.includes(`![[img:${t}]]`) ||
-                    note.content.includes(`[[img:${t}]]`);
-      return { title: t, note: found || null, isPdf, isImg };
+      // Zoek pdf:/img:-referenties met een reguliere expressie i.p.v. een
+      // letterlijke substring-match — die zou breken zodra de link getypeerd
+      // is ([[pdf:naam|type]] bevat de substring "[[pdf:naam]]" niet meer).
+      const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const isPdf = new RegExp(`\\[\\[pdf:${esc(t)}(?:\\|[^\\]]+)?\\]\\]`).test(note.content);
+      const isImg = new RegExp(`!?\\[\\[img:${esc(t)}(?:\\|[^\\]]+)?\\]\\]`).test(note.content);
+      return { title: t, note: found || null, isPdf, isImg, type };
     });
   }, [note, allNotes]);
 
@@ -73,11 +85,10 @@ const LinksSidebar = ({
     if (!note) return [];
     const id    = note.id;
     const title = note.title || "";
-    return allNotes.filter(n =>
-      n.id !== id && n.content &&
-      (n.content.includes(`[[${title}]]`) ||
-       n.content.includes(`[[${id}]]`))
-    );
+    // Match zowel gewone links ([[id]]) als getypeerde ([[id|type]]).
+    const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const re  = new RegExp(`\\[\\[(?:${esc(id)}${title ? "|"+esc(title) : ""})(?:\\|[^\\]]+)?\\]\\]`, "i");
+    return allNotes.filter(n => n.id !== id && n.content && re.test(n.content));
   }, [note, allNotes]);
 
   // ── Slimme zoekfunctie ───────────────────────────────────────────────────────
@@ -291,6 +302,12 @@ const LinksSidebar = ({
                     textDecoration: o.note ? "none" : "line-through",
                   }
                 }, o.title),
+                o.type && LINK_TYPES[o.type] && React.createElement("span", {
+                  style: {
+                    fontSize: "9px", color: LINK_TYPES[o.type].color, marginTop: "2px",
+                    display: "inline-block",
+                  }
+                }, `${LINK_TYPES[o.type].dash ? "╌" : "─"} ${LINK_TYPES[o.type].label}`),
                 !o.note && !o.isPdf && !o.isImg && React.createElement("div", {
                   style: { fontSize: "10px", color: W.orange, marginTop: "2px" }
                 }, "Notitie niet gevonden")

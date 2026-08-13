@@ -1,35 +1,28 @@
 // ── ReviewPanel ───────────────────────────────────────────────────────────────
 // Lichte spaced repetition: markeer notities voor review, zie ze terug op tijd.
-// Geen flashcard-systeem — gewoon "revisit" vlaggen op notities.
-// Opslag in vault/config.json via /api/config
+// Gebruikt de gedeelde FSRS-engine (modules/SRS.js) en dezelfde sr_data-store
+// als DailyView.js — beide tonen/beheren nu precies dezelfde reviewkaarten.
+// Opslag in vault/config.json via /api/config (sr_data-sleutel)
+// Deps: SRS (laadt vóór deze module, zie index.html)
 
 const ReviewPanel = ({ notes = [], onOpenNote, onUpdateNote }) => {
   const { useState, useEffect, useMemo } = React;
-  const [reviewData, setReviewData] = useState({}); // { noteId: { lastReview, interval, due } }
+  const [reviewData, setReviewData] = useState({}); // { noteId: FSRS-kaart, zie SRS.js }
   const [loading, setLoading]       = useState(true);
   const [current, setCurrent]       = useState(null); // huidige notitie in review
   const [done, setDone]             = useState({});   // { id: bool } — al behandeld in sessie
 
-  // Laad review-data uit config
+  // Laad review-data (SRS.load migreert automatisch oude sm2-kaarten en
+  // neemt eenmalig eventuele nog niet overgenomen review_data-items over)
   useEffect(() => {
-    fetch("/api/config")
-      .then(r => r.json())
-      .then(d => {
-        setReviewData(d.config?.review_data || {});
-        setLoading(false);
-      })
+    SRS.load().then(d => { setReviewData(d); setLoading(false); })
       .catch(() => setLoading(false));
   }, []);
 
   const saveReviewData = async (updated) => {
     setReviewData(updated);
-    try {
-      await fetch("/api/config", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ review_data: updated }),
-      });
-    } catch(e) { console.error("Review opslaan mislukt", e); }
+    try { await SRS.save(updated); }
+    catch(e) { console.error("Review opslaan mislukt", e); }
   };
 
   const today = new Date().toISOString().slice(0, 10);
@@ -50,14 +43,8 @@ const ReviewPanel = ({ notes = [], onOpenNote, onUpdateNote }) => {
   );
 
   const handleMark = async (noteId) => {
-    const updated = {
-      ...reviewData,
-      [noteId]: {
-        lastReview: today,
-        interval: 1,
-        due: tomorrow(),
-      }
-    };
+    // Nieuwe kaart toevoegen: grade 3 ("Goed") als neutraal startpunt.
+    const updated = { ...reviewData, [noteId]: SRS.next({}, 3) };
     await saveReviewData(updated);
   };
 
@@ -67,52 +54,15 @@ const ReviewPanel = ({ notes = [], onOpenNote, onUpdateNote }) => {
     await saveReviewData(updated);
   };
 
-  // ── SM-2 Spaced Repetition (SuperMemo-2 algoritme) ─────────────────────────
-  // rating: 1=Vergeten, 2=Moeite, 3=Oké, 4=Goed, 5=Gemakkelijk
-  const sm2Next = (current, rating) => {
-    const r = Math.max(1, Math.min(5, rating));
-    let { interval = 0, repetitions = 0, ease = 2.5 } = current || {};
-    if (r < 3) {
-      interval = 1; repetitions = 0;
-    } else {
-      if (repetitions === 0)      interval = 1;
-      else if (repetitions === 1) interval = 6;
-      else interval = Math.round(interval * ease);
-      repetitions++;
-    }
-    ease = ease + (0.1 - (5-r)*(0.08 + (5-r)*0.02));
-    if (ease < 1.3) ease = 1.3;
-    const due = new Date();
-    due.setDate(due.getDate() + interval);
-    return {
-      interval, repetitions,
-      ease: Math.round(ease*1000)/1000,
-      due: due.toISOString().slice(0,10),
-      lastReview: today, lastRating: r,
-    };
-  };
-
-  const sm2Label = (days) => {
-    if (!days) return "";
-    if (days === 1) return "morgen";
-    if (days < 7)  return `${days}d`;
-    if (days < 30) return `${Math.round(days/7)}w`;
-    return `${Math.round(days/30)}m`;
-  };
+  // ── FSRS-cijfers: 1=Vergeten, 2=Moeite, 3=Goed, 4=Makkelijk ────────────────
 
   const handleReviewed = async (noteId, rating) => {
-    const next    = sm2Next(reviewData[noteId] || {}, rating);
+    const next    = SRS.next(reviewData[noteId] || {}, rating);
     const updated = { ...reviewData, [noteId]: next };
     await saveReviewData(updated);
     setDone(d => ({ ...d, [noteId]: true }));
     setCurrent(null);
   };
-
-  function tomorrow() {
-    const d = new Date();
-    d.setDate(d.getDate() + 1);
-    return d.toISOString().slice(0, 10);
-  }
 
   function daysUntil(dateStr) {
     if (!dateStr) return 0;
@@ -188,10 +138,10 @@ const ReviewPanel = ({ notes = [], onOpenNote, onUpdateNote }) => {
         ...[
           {label:"😕 Vergeten",  r:1, bg:"rgba(229,120,109,0.12)", col:"#e5786d", border:"rgba(229,120,109,0.3)"},
           {label:"😐 Moeite",    r:2, bg:"rgba(212,185,124,0.12)", col:"#d4b97c", border:"rgba(212,185,124,0.3)"},
-          {label:"🙂 Goed",      r:4, bg:"rgba(138,198,242,0.12)", col:W.blue,    border:"rgba(138,198,242,0.3)"},
-          {label:"😄 Makkelijk", r:5, bg:"rgba(114,182,96,0.12)",  col:"#72b660", border:"rgba(114,182,96,0.3)"},
+          {label:"🙂 Goed",      r:3, bg:"rgba(138,198,242,0.12)", col:W.blue,    border:"rgba(138,198,242,0.3)"},
+          {label:"😄 Makkelijk", r:4, bg:"rgba(114,182,96,0.12)",  col:"#72b660", border:"rgba(114,182,96,0.3)"},
         ].map(({label,r,bg,col,border}) => {
-          const preview = sm2Next(reviewData[note.id]||{}, r);
+          const previewLabel = SRS.previewLabel(reviewData[note.id]||{}, r);
           return React.createElement("button", {
             key: r,
             onClick: () => handleReviewed(note.id, r),
@@ -203,7 +153,7 @@ const ReviewPanel = ({ notes = [], onOpenNote, onUpdateNote }) => {
           },
             label,
             React.createElement("span",{style:{fontSize:"10px",opacity:0.75}},
-              `→ ${sm2Label(preview.interval)}`)
+              `→ ${previewLabel}`)
           );
         }),
       )
@@ -299,7 +249,7 @@ const ReviewPanel = ({ notes = [], onOpenNote, onUpdateNote }) => {
                   }, n.title || n.id),
                   React.createElement("div", {
                     style: { fontSize: "10px", color: W.fgMuted, marginTop: "2px" }
-                  }, rd?.lastReview ? `Laatste review: ${rd.lastReview} · interval: ${rd.interval}d` : "Nieuw")
+                  }, rd?.lastReview ? `Laatste review: ${rd.lastReview} · stabiliteit: ${Math.round(rd.stability||0)}d` : "Nieuw")
                 ),
                 React.createElement("span", {
                   style: { fontSize: "10px", flexShrink: 0, borderRadius: "10px",

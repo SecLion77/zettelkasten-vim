@@ -474,7 +474,7 @@ const genId = () => {
     String(n.getMinutes()).padStart(2,"0"),String(n.getSeconds()).padStart(2,"0"),
     String(Math.floor(Math.random()*99)).padStart(2,"0")].join("");
 };
-const extractLinks = (c="")=>[...new Set([...c.matchAll(/\[\[([^\]]+)\]\]/g)].map(m=>m[1]))];
+const extractLinks = (c="")=>[...new Set([...c.matchAll(/\[\[([^\]]+)\]\]/g)].map(m=>m[1].split("|")[0].trim()))];
 const extractTags  = (c="")=>[...new Set([...c.matchAll(/#(\w+)/g)].map(m=>m[1]))];
 // Extracts typed links: [[target|type]] → {target, type}
 // Types: inspireert, weerlegt, bouwt-voort-op, zie-ook, verwijst-naar

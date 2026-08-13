@@ -1,44 +1,13 @@
 // ── DailyView ─────────────────────────────────────────────────────────────────
 // Dagelijks startscherm: dagnotitie, SR-reviews, quick capture, ADR-aanmaken.
+// Deps: SRS (gedeelde FSRS-engine, zie modules/SRS.js — laadt vóór deze module)
 
-// ── SM-2 Spaced Repetition Engine ────────────────────────────────────────────
-const SM2 = {
-  DEFAULT_EASE: 2.5, MIN_EASE: 1.3,
-  next(cur, rating) {
-    const r = Math.max(0, Math.min(5, rating));
-    let { interval=0, repetitions=0, ease=2.5 } = cur || {};
-    if (r < 3) { interval=1; repetitions=0; }
-    else {
-      if (repetitions===0) interval=1;
-      else if (repetitions===1) interval=6;
-      else interval=Math.round(interval*ease);
-      repetitions++;
-    }
-    ease = ease + (0.1-(5-r)*(0.08+(5-r)*0.02));
-    if (ease < 1.3) ease=1.3;
-    const due=new Date(); due.setDate(due.getDate()+interval);
-    return { interval, repetitions, ease:Math.round(ease*1000)/1000,
-             due:due.toISOString().slice(0,10),
-             lastReview:new Date().toISOString().slice(0,10), lastRating:r };
-  },
-  async load() {
-    try { const d=await fetch("/api/config").then(r=>r.json()); return d.config?.sr_data||{}; }
-    catch { return {}; }
-  },
-  async save(srData) {
-    try { await fetch("/api/config",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({sr_data:srData})}); } catch {}
-  },
-  dueToday(notes, srData) {
-    const t=new Date().toISOString().slice(0,10);
-    return notes.filter(n=>{ const d=srData[n.id]; return d?.due&&d.due<=t; })
-      .sort((a,b)=>(srData[a.id]?.due||"").localeCompare(srData[b.id]?.due||""));
-  },
-  intervalLabel(days) {
-    if (!days) return "";
-    if (days===1) return "morgen"; if (days<7) return `${days}d`;
-    if (days<30) return `${Math.round(days/7)}w`; return `${Math.round(days/30)}m`;
-  },
-};
+// SM2 blijft als naam bestaan (in plaats van elke aanroep in dit bestand te
+// hernoemen) maar wijst nu naar de gedeelde FSRS-engine. Dezelfde store
+// (sr_data in vault/config.json) wordt nu ook door ReviewPanel.js gebruikt —
+// zie SRS.js voor de eenmalige migratie van het oude, losstaande review_data.
+const SM2 = SRS;
+
 
 // ── ADR Template ──────────────────────────────────────────────────────────────
 const ADR_TEMPLATE = (titel="") => `---
@@ -113,15 +82,19 @@ const QuickEntryBar = ({ dayContent, onDayChange, W }) => {
       background:"rgba(255,255,255,0.03)",
       borderRadius:"8px",border:`1px solid ${W.splitBg||"#333"}`}
   },
-    // Type-toggle knoppen
+    // Type-toggle knoppen — altijd een zichtbare rand/achtergrond (ook
+    // inactief), zelfde stijlpatroon als filterBtn in TasksPanel.js, zodat
+    // alle drie er als knoppen van dezelfde familie uitzien i.p.v. de
+    // inactieve twee die eerst als kale tekens zonder vorm oogden.
     ...types.map(t => React.createElement("button",{
       key:t.id, onClick:()=>setQType(t.id), title:t.title,
       style:{
-        background:qType===t.id?"rgba(138,198,242,0.18)":"none",
-        border:`1px solid ${qType===t.id?(W.blue||"#7aa8c8"):"transparent"}`,
+        background:qType===t.id?"rgba(138,198,242,0.18)":"rgba(255,255,255,0.03)",
+        border:`1px solid ${qType===t.id?(W.blue||"#7aa8c8"):(W.splitBg||"#444")}`,
         borderRadius:"5px",padding:"3px 8px",cursor:"pointer",
         fontSize:"13px",color:qType===t.id?(W.blue||"#7aa8c8"):(W.fgMuted||"#999"),
         fontWeight:qType===t.id?"700":"400",
+        transition:"all .12s",
       }
     },t.icon)),
     // Input veld
@@ -152,8 +125,49 @@ const QuickEntryBar = ({ dayContent, onDayChange, W }) => {
 
 // ── InboxProcessor — toont dagnotitie bullets met expliciete → ZK knop ────────
 // Parseert onverwerkte regels uit de dagnotitie en biedt per regel een knop.
-const InboxProcessor = ({ dayContent, onDayChange, onAddNote, viewDate, today, W }) => {
+const InboxProcessor = ({ dayContent, onDayChange, onAddNote, viewDate, today, W, notes=[] }) => {
   const [promoting, setPromoting] = React.useState(null); // {line, index, title}
+
+  // Stopwoorden voor de instant tag-suggesties (zelfde aanpak als
+  // SmartLinkSuggester's instant-laag: woordoverlap + letterlijke match).
+  const STOPWORDS = React.useMemo(() => new Set([
+    "de","het","een","van","voor","met","dat","die","zijn","the","and","for","that","with",
+    "aan","als","bij","dan","dit","door","hun","kan","maar","naar","niet","nog","ook","tot","wel","wordt"
+  ]), []);
+
+  // ── Tag-suggesties: hergebruikt de al geladen notities+tags als index ────
+  // Geen server-call — scoort bestaande tags op woordoverlap met de tekst
+  // van het item, plus een bonus als de tag letterlijk voorkomt.
+  const tagSuggestions = React.useMemo(() => {
+    if (!promoting) return [];
+    const text = `${promoting.title} ${promoting.clean}`.toLowerCase();
+    const words = new Set((text.match(/[a-z\u00c0-\u024f]{3,}/g) || [])
+      .filter(w => !STOPWORDS.has(w)));
+    const already = new Set((promoting.tagsInput || "").split(",")
+      .map(t => t.trim().toLowerCase()).filter(Boolean));
+    const scores = {};
+    notes.forEach(n => {
+      if (!n.tags?.length) return;
+      const titleWords = (n.title || "").toLowerCase().match(/[a-z\u00c0-\u024f]{3,}/g) || [];
+      const overlap = titleWords.filter(w => words.has(w)).length;
+      n.tags.forEach(t => {
+        const tl = t.toLowerCase();
+        if (already.has(tl)) return;
+        let score = overlap;
+        if (text.includes(tl)) score += 5; // tag letterlijk in de tekst = sterk signaal
+        if (score > 0) scores[t] = (scores[t] || 0) + score;
+      });
+    });
+    return Object.entries(scores).sort((a, b) => b[1] - a[1]).slice(0, 6).map(([t]) => t);
+  }, [promoting, notes, STOPWORDS]);
+
+  const addSuggestedTag = (tag) => {
+    setPromoting(p => {
+      const cur = (p.tagsInput || "").split(",").map(t => t.trim()).filter(Boolean);
+      if (cur.some(t => t.toLowerCase() === tag.toLowerCase())) return p;
+      return { ...p, tagsInput: [...cur, tag].join(", ") };
+    });
+  };
 
   // Parseer onverwerkte regels (geen ~~doorstreping~~, geen lege regels)
   const lines = React.useMemo(() => {
@@ -360,6 +374,23 @@ const InboxProcessor = ({ dayContent, onDayChange, onAddNote, viewDate, today, W
           "Scheid tags met komma's. Automatisch toegevoegd: ",
           React.createElement("span",{style:{color:W.fgMuted||"#999"}},
             promoting.isTask?"taak":promoting.isIdea?"idee":"dagnotitie")
+        ),
+        tagSuggestions.length > 0 && React.createElement("div",{
+          style:{display:"flex",gap:"5px",flexWrap:"wrap",marginTop:"8px"}
+        },
+          tagSuggestions.map(tag =>
+            React.createElement("span",{
+              key: tag,
+              onClick: () => addSuggestedTag(tag),
+              title: "Klik om toe te voegen",
+              style:{
+                fontSize:"11px", padding:"2px 10px", borderRadius:"10px",
+                background:"rgba(138,198,242,0.08)",
+                border:`1px solid rgba(138,198,242,0.3)`,
+                color:W.blue||"#7aa8c8", cursor:"pointer",
+              }
+            }, `+ ${tag}`)
+          )
         )
       ),
       // Actie-knoppen
@@ -804,10 +835,10 @@ const DailyView = ({ notes=[], onOpenNote, onAddNote, llmModel="" }) => {
       revealed && React.createElement("div",{style:card},
         React.createElement("div",{style:{fontSize:"12px",color:W.fgMuted,marginBottom:"12px"}},"Hoe goed kon je de inhoud terugbrengen?"),
         React.createElement("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:"8px"}},
-          [{label:"😕 Vergeten",r:1,col:"#e5786d",next:"morgen"},
-           {label:"😐 Moeite",r:2,col:W.orange||"#d4b97c",next:"1d"},
-           {label:"🙂 Goed",r:4,col:W.blue||"#8ac6f2",next:SM2.intervalLabel(SM2.next(srData[note.id]||{},4).interval)},
-           {label:"😄 Makkelijk",r:5,col:"#72b660",next:SM2.intervalLabel(SM2.next(srData[note.id]||{},5).interval)},
+          [{label:"😕 Vergeten",r:1,col:"#e5786d",next:SM2.previewLabel(srData[note.id]||{},1)},
+           {label:"😐 Moeite",r:2,col:W.orange||"#d4b97c",next:SM2.previewLabel(srData[note.id]||{},2)},
+           {label:"🙂 Goed",r:3,col:W.blue||"#8ac6f2",next:SM2.previewLabel(srData[note.id]||{},3)},
+           {label:"😄 Makkelijk",r:4,col:"#72b660",next:SM2.previewLabel(srData[note.id]||{},4)},
           ].map(({label,r,col,next})=>
             React.createElement("button",{key:r,onClick:()=>rateNote(note,r),
               style:{background:`rgba(128,128,128,0.1)`,border:`1px solid ${col}`,
@@ -1011,7 +1042,7 @@ const DailyView = ({ notes=[], onOpenNote, onAddNote, llmModel="" }) => {
     ),
     // ── InboxProcessor: bullets → ZK knoppen ─────────────────────────────────
     React.createElement("div",{style:{gridColumn:"1",gridRow:isWide?"5":undefined}},
-      React.createElement(InboxProcessor,{dayContent,onDayChange,onAddNote,viewDate,today,W})
+      React.createElement(InboxProcessor,{dayContent,onDayChange,onAddNote,viewDate,today,W,notes})
     ),
 
     // ── SR Review wachtrij ─────────────── rechter kolom
@@ -1043,7 +1074,7 @@ const DailyView = ({ notes=[], onOpenNote, onAddNote, llmModel="" }) => {
           React.createElement("div",{style:{flex:1,minWidth:0}},
             React.createElement("div",{style:{fontSize:"13px",color:W.fg,fontWeight:"500",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},n.title),
             React.createElement("div",{style:{fontSize:"11px",color:W.fgMuted,marginTop:"1px"}},
-              d.repetitions?`${d.repetitions}× herhaald`:"Eerste review")
+              d.reps?`${d.reps}× herhaald`:"Eerste review")
           ),
           days>0&&React.createElement("span",{style:{fontSize:"10px",background:"rgba(229,120,109,0.15)",
             color:"#e5786d",borderRadius:"8px",padding:"2px 6px",flexShrink:0}},`${days}d`),

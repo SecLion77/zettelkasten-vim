@@ -1,5 +1,5 @@
 // ── Graph ───────────────────────────────────────────────────────────────────
-// Deps: W, genId, extractLinks, extractTags, TagFilterBar
+// Deps: W, genId, extractLinks, extractTypedLinks, LINK_TYPES, extractTags, TagFilterBar
 
 const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDeleteNote, llmModel=""}) => {
   const { useState, useRef, useCallback, useMemo, useEffect } = React;
@@ -61,6 +61,16 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
   const [emptyMsg,     setEmptyMsg]    = useState("");
   const [orphanMsg,    setOrphanMsg]   = useState("");
   const [cssCleanMsg,  setCssCleanMsg] = useState("");
+
+  // Welke linktypes komen daadwerkelijk voor in de huidige notities?
+  // Alleen tonen in de legenda wat relevant is.
+  const usedLinkTypes = useMemo(() => {
+    const s = new Set();
+    notes.forEach(n => extractTypedLinks(n.content||"").forEach(({type}) => {
+      if (LINK_TYPES[type]) s.add(type);
+    }));
+    return [...s];
+  }, [notes]);
 
   const cleanupBrokenLinks = useCallback(async () => {
     if (!onUpdateNote) return;
@@ -595,6 +605,18 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
       n.linkCount = n.links.length;
     });
 
+    // Resolveer getypeerde links ([[target|type]]) naar dezelfde node-IDs
+    // (ID of titel, net als hierboven), zodat drawEdge() ze kan kleuren
+    // volgens LINK_TYPES (gedefinieerd in app.js).
+    all.forEach(n=>{
+      const map = {};
+      (n.typedLinks||[]).forEach(({target, type}) => {
+        const rid = validIds.has(target) ? target : titleToId[(target||"").toLowerCase().trim()];
+        if (rid && LINK_TYPES[type]) map[rid] = type;
+      });
+      n.typedLinkMap = map;
+    });
+
     // Bouw snelle lookup: welke note-IDs worden gelinkt vanuit andere notes
     const linkedByOthers = new Set();
     all.forEach(n => n.links.forEach(lid => linkedByOthers.add(lid)));
@@ -941,12 +963,17 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
             ctx.fill();
           }
         };
+        // Getypeerde link? Gebruik LINK_TYPES-kleur/stijl i.p.v. standaard blauw.
+        const edgeStyleFor = (l) => {
+          const t = n.typedLinkMap && n.typedLinkMap[l];
+          return t && LINK_TYPES[t] ? [LINK_TYPES[t].color, !!LINK_TYPES[t].dash] : [W.blue, false];
+        };
         // pathOnly: alleen pad-edges tekenen
         if(pathOnly && pathSet) {
-          n.links.forEach(l=>{ if(pathSet.has(n.id)&&pathSet.has(l)) drawEdge(l,W.blue,false); });
+          n.links.forEach(l=>{ if(pathSet.has(n.id)&&pathSet.has(l)){ const [c,d]=edgeStyleFor(l); drawEdge(l,c,d); } });
           (n.tagLinks||[]).forEach(l=>{ if(pathSet.has(n.id)&&pathSet.has(l)) drawEdge(l,n.color||W.comment,true); });
         } else {
-          n.links.forEach(l=>drawEdge(l,W.blue,false));
+          n.links.forEach(l=>{ const [c,d]=edgeStyleFor(l); drawEdge(l,c,d); });
           (n.tagLinks||[]).forEach(l=>drawEdge(l,n.color||W.comment,true));
         }
       });
@@ -2178,6 +2205,10 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
       React.createElement("span",null,React.createElement("span",{style:{color:W.keyword}},"● "),"notitie"),
       React.createElement("span",null,React.createElement("span",{style:{color:W.orange}},"● "),"pdf"),
       React.createElement("span",null,React.createElement("span",{style:{color:W.comment}},"● "),"tag"),
+      usedLinkTypes.length>0 && usedLinkTypes.map(t =>
+        React.createElement("span",{key:t,style:{color:LINK_TYPES[t].color}},
+          (LINK_TYPES[t].dash?"╌ ":"─ ")+LINK_TYPES[t].label)
+      ),
       filterTag&&React.createElement("span",{style:{color:"#a8d8f0"}},`filter: #${filterTag}`),
       depthLimit>0&&React.createElement("span",{style:{color:"#8ac6f2"}},`diepte: ≤${depthLimit}`),
       pinnedIds.size>0&&React.createElement("span",null,`📌 ${pinnedIds.size} vastgezet`)
