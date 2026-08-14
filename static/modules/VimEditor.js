@@ -2449,8 +2449,13 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
         }
       },
       onKeyDown: (e) => {
-        // ? opent help ook zonder editor-focus
-        if (e.key === "?" && !e.ctrlKey && !e.metaKey) {
+        // ? opent help — maar alleen buiten INSERT-mode (of zonder focus op de
+        // editor zelf), anders kun je nooit een letterlijk vraagteken typen
+        // terwijl je aan het schrijven bent. Check S.current.mode (niet de
+        // React-state 'mode'): dat is de daadwerkelijk-actieve mode die ook
+        // elke toetsaanslag routeert, en klopt al vóór de eerste interactie
+        // (React-state start op "INSERT", de ref start correct op "NORMAL").
+        if (e.key === "?" && !e.ctrlKey && !e.metaKey && S.current.mode !== "INSERT") {
           e.preventDefault();
           setHelpOpen(true);
           return;
