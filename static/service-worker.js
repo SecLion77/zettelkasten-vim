@@ -1,6 +1,6 @@
 // ── Zettelkasten Service Worker ────────────────────────────────────────────
 // Versie: verhoog bij elke deploy om de cache te vernieuwen
-const SW_VERSION  = "zk-sw-v23";  // v3 → wist v2 cache inclusief modules
+const SW_VERSION  = "zk-sw-v24";  // v24 → echte network-first voor app.js/modules i.p.v. stale-cache-first
 const SHELL_CACHE  = `${SW_VERSION}-shell`;   // statische bestanden
 const API_CACHE    = `${SW_VERSION}-api`;      // gecachede API-responses
 const IDB_NAME     = "zettelkasten-offline";
@@ -49,7 +49,6 @@ const SHELL_ASSETS = [
   "/modules/ObjectFields.js",
   "/modules/offlineStore.js",
   "/modules/SemanticSearch.js",
-  "/modules/DailyView.js",
   "/modules/DailyView.js",
   // Vendor-bestanden: React/PDF.js lokaal cachen zodat de app ook werkt
   // zonder internetverbinding (niet alleen zonder de eigen server)
@@ -341,19 +340,11 @@ async function cacheFirstWithNetwork(req) {
   const url  = new URL(req.url);
   const path = url.pathname;
 
-  // app.js en modules: cache-first met snelle achtergrond-update
+  // app.js en modules: ECHTE network-first — anders zie je een wijziging pas
+  // na twéé herladingen (eerst de stale cache, dan pas de ververste cache).
   // KRITIEK: korte timeout — anders hangt de app offline (zwart scherm)
   const isAppCode = NETWORK_FIRST_PATHS.some(p => path.startsWith(p));
   if (isAppCode) {
-    const cachedAppCode = await caches.match(req);
-    if (cachedAppCode) {
-      // Direct teruggeven, update op de achtergrond (niet wachten)
-      fetch(req, { cache: "no-store", signal: AbortSignal.timeout(2500) })
-        .then(res => { if (res.ok) caches.open(SHELL_CACHE).then(c => c.put(req, res)); })
-        .catch(() => {});
-      return cachedAppCode;
-    }
-    // Niets gecached: probeer netwerk met timeout
     try {
       const res = await fetch(req, { cache: "no-store", signal: AbortSignal.timeout(2500) });
       if (res.ok) {
@@ -362,6 +353,9 @@ async function cacheFirstWithNetwork(req) {
       }
       return res;
     } catch {
+      // Netwerk faalde/timede uit: val terug op de laatst gecachede versie
+      const cachedAppCode = await caches.match(req);
+      if (cachedAppCode) return cachedAppCode;
       return new Response(
         "// Module niet beschikbaar offline: " + path,
         { status: 503, headers: { "Content-Type": "application/javascript" } }

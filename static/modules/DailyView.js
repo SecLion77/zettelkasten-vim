@@ -965,8 +965,10 @@ const DailyView = ({ notes=[], onOpenNote, onAddNote, llmModel="" }) => {
         React.createElement("div",{style:{display:"flex",gap:"4px"}},
           dayDates.slice(0,3).filter(d=>d!==viewDate).map(d=>
             React.createElement("button",{key:d,onClick:()=>setViewDate(d),
-              style:{background:"none",border:`1px solid ${W.splitBg}`,color:W.fgDim,
-                borderRadius:"4px",padding:"1px 5px",fontSize:"10px",cursor:"pointer"}},d.slice(5))
+              style:{background:"rgba(255,255,255,0.06)",border:`1px solid ${W.splitBg}`,color:W.fgMuted,
+                borderRadius:"4px",padding:"1px 6px",fontSize:"10px",cursor:"pointer",fontWeight:"400",
+                fontFamily:"inherit",outline:"none",boxShadow:"none",
+                WebkitAppearance:"none",appearance:"none"}},d.slice(5))
           )
         )
       ),
