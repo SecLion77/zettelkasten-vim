@@ -1524,6 +1524,41 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
         "scroll = zoom · alt+drag = pan · Shift+sleep = lasso · 2× klik = pin · rechtsklik = menu"
       ),
 
+      React.createElement("div",{style:{height:"1px",background:W.splitBg||"rgba(255,255,255,0.06)",margin:"4px 0"}}),
+
+      // ── Opschonen ────────────────────────────────────────────────────────
+      // Was eerder volledig losgekoppeld van de UI: de functies bestonden en
+      // werkten, maar er was geen knop om ze aan te roepen en geen plek waar
+      // hun statusbericht verscheen.
+      React.createElement("div",{style:{fontSize:"11px",fontWeight:"600",
+        color:"rgba(229,120,109,0.7)",letterSpacing:"1px",marginBottom:"3px"}},"OPSCHONEN"),
+      React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:"4px"}},
+        [
+          {label:"gebroken links", onClick:cleanupBrokenLinks, msg:cleanupMsg,
+           title:"Verwijder [[links]] die naar niet-bestaande notities wijzen"},
+          {label:"lege notities",  onClick:cleanupEmptyNotes,  msg:emptyMsg,
+           title:"Verwijder notities zonder titel én zonder inhoud (klik 2×)"},
+          {label:"wees-notities",  onClick:deleteOrphans,      msg:orphanMsg,
+           title:"Verwijder notities zonder enige inkomende of uitgaande link (klik 2×)"},
+          {label:"vault-opschoning", onClick:cleanupCssGarbage, msg:cssCleanMsg,
+           title:"Server-side opschoning van de vault (/api/cleanup-vault)"},
+        ].map(({label,onClick,msg,title})=>React.createElement("div",{
+          key:label, style:{display:"flex",alignItems:"center",gap:"6px"}
+        },
+          React.createElement("button",{
+            onClick, title,
+            style:{background:"rgba(229,120,109,0.08)",border:"1px solid rgba(229,120,109,0.25)",
+                   color:W.orange||"#e5786d",borderRadius:"4px",padding:"3px 9px",
+                   fontSize:"12px",cursor:"pointer",flexShrink:0}
+          }, label),
+          msg && React.createElement("span",{
+            style:{fontSize:"11px",color: msg.startsWith("⚠") ? W.yellow
+                    : msg.startsWith("✓") ? "#9fca56" : W.orange,
+                   overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}
+          }, msg)
+        ))
+      ),
+
       // Pad-finder
       pathMode&&React.createElement("div",{style:{marginTop:"6px",borderTop:"1px solid rgba(255,255,255,0.08)",paddingTop:"8px"}},
         React.createElement("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"6px"}},
