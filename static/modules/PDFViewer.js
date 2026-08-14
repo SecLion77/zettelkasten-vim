@@ -387,6 +387,47 @@ const PDFUploadPanel = ({ serverPdfs=[], onRefreshPdfs, onOpenPdf, onTogglePdfRe
   );
 };
 
+// ── Toolbar-iconen ────────────────────────────────────────────────────────
+// Losse, ingebouwde SVG's i.p.v. emoji (renderen consistent op elk platform,
+// geen externe icon-font nodig — de app blijft volledig lokaal werkbaar) en
+// i.p.v. een CDN-icon-library (zou een internetafhankelijkheid toevoegen).
+// Elke path is 24×24 viewBox, stroke-based, "currentColor" — schaalt en kleurt
+// vanzelf mee met de knop.
+const PDF_ICON_PATHS = {
+  chevronLeft:  "M15 6l-6 6l6 6",
+  chevronRight: "M9 6l6 6l-6 6",
+  minus:        "M5 12l14 0",
+  plus:         "M12 5l0 14M5 12l14 0",
+  search:       "M10 3a7 7 0 1 0 0 14a7 7 0 0 0 0-14zM21 21l-6-6",
+  highlighter:  "M7 21h10M11.5 15.5l-6.5 -6.5l4-4l6.5 6.5M13 6l3-3l4 4l-3 3M9.5 4.5l6.5 6.5",
+  note:         "M14 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2V9zM14 4v5h5M9 13h6M9 17h4",
+  listDetails:  "M4 6h4M4 12h4M4 18h4M12 6h8M12 12h8M12 18h8",
+  link:         "M9 15l6-6M8 8l1.5-1.5a4 4 0 0 1 5.5 5.5L14 13M16 16l-1.5 1.5a4 4 0 0 1-5.5-5.5L10 11",
+  edit:         "M11 4H5a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h13a2 2 0 0 0 2-2v-6M18.5 2.5a2.1 2.1 0 0 1 3 3L12 15l-4 1 1-4z",
+  fitWidth:     "M4 12h16M4 12l3-3M4 12l3 3M20 12l-3-3M20 12l-3 3",
+  layoutSingle: "M4 4h16v16H4z",
+  layoutScroll: "M4 4h16v7H4zM4 13h16v7H4z",
+  rotate:       "M4 12a8 8 0 1 0 3-6.2M4 4v4h4",
+  dots:         "M6 12a1 1 0 1 0 2 0a1 1 0 0 0-2 0M11 12a1 1 0 1 0 2 0a1 1 0 0 0-2 0M16 12a1 1 0 1 0 2 0a1 1 0 0 0-2 0",
+  sparkles:     "M12 3l1.5 4.5L18 9l-4.5 1.5L12 15l-1.5-4.5L6 9l4.5-1.5zM19 15l.7 2.3L22 18l-2.3.7-.7 2.3-.7-2.3L16 18l2.3-.7z",
+  trash:        "M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v3",
+  upload:       "M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2M7 9l5-5l5 5M12 4v12",
+  circle:       "M12 12m-8 0a8 8 0 1 0 16 0a8 8 0 1 0-16 0",
+  circleCheck:  "M12 12m-8 0a8 8 0 1 0 16 0a8 8 0 1 0-16 0M9 12l2 2l4-4",
+  skipBack:     "M20 5v14L9 12zM5 5v14",
+  hand:         "M8 13V6.5a1.5 1.5 0 0 1 3 0V12M11 11.5v-2a1.5 1.5 0 0 1 3 0V12M14 10.5a1.5 1.5 0 0 1 3 0V12M17 11.5a1.5 1.5 0 0 1 3 0V13a6 6 0 0 1-6 6h-2c-2 0-3.5-1-4.5-2.5L4.5 12.5a1.5 1.5 0 0 1 2.5-1.7",
+};
+const PdfIcon = ({ name, size = 15 }) => React.createElement("svg", {
+  width: size, height: size, viewBox: "0 0 24 24", fill: "none",
+  stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round",
+  style: { display: "block", flexShrink: 0 },
+}, React.createElement("path", { d: PDF_ICON_PATHS[name] || "" }));
+
+// Verticale scheidingslijn tussen toolbar-groepen
+const PdfToolbarDivider = ({ W }) => React.createElement("span", {
+  style: { width: "1px", alignSelf: "stretch", background: W.splitBg, flexShrink: 0, margin: "0 2px" }
+});
+
 const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, onAutoSummarize, onDeletePdf, onPasteToNote=null, onAddNote=null, onSaveNote=null, onOpenNote=null, notes=[], isTablet=false, onTogglePdfRead=null, pdfAnnotations=[], openPdfName=null, onOpenPdfConsumed=null}) => {
   const [pdfDoc,     setPdfDoc]     = useState(null);
   const [pdfFile,    setPdfFile]    = useState(null);
@@ -907,6 +948,7 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
   // de laatst geselecteerde/gehighlighte tekst, zodat "onderzoeken" ook
   // tijdens het lezen werkt, niet alleen tijdens het schrijven.
   const [showRelated,      setShowRelated]      = useState(false);
+  const [toolbarMoreOpen,  setToolbarMoreOpen]   = useState(false); // "meer"-menu op tablet
   const [relatedFor,       setRelatedFor]        = useState("");   // tekst waarop laatst gezocht is
   const [relatedSuggestions, setRelatedSuggestions] = useState([]);
   const [relatedLoading,   setRelatedLoading]    = useState(false);
@@ -1518,37 +1560,22 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
     // Main PDF column
     React.createElement("div",{style:{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",minWidth:0,minHeight:0}},
       // Toolbar
-      React.createElement("div",{style:{background:W.bg2,borderBottom:`1px solid ${W.splitBg}`,padding:"5px 10px",display:"flex",alignItems:"center",gap:"8px",fontSize:"14px",flexShrink:0,flexWrap:"wrap"}},
-        // Importeer-knop alleen zichtbaar als PDF open is (bibliotheek heeft eigen knop)
-        pdfDoc && React.createElement("button",{onClick:()=>fileRef.current.click(),style:{background:W.blue,color:W.bg,border:"none",borderRadius:"4px",padding:"4px 10px",fontSize:"14px",cursor:"pointer",fontWeight:"bold"}},"⬆ Importeer PDF"),
+      React.createElement("div",{style:{background:W.bg2,borderBottom:`1px solid ${W.splitBg}`,padding:"6px 10px",display:"flex",alignItems:"center",gap:"6px",fontSize:"14px",flexShrink:0,flexWrap:"wrap"}},
+
+        // ── Bestand ──────────────────────────────────────────────────────
+        pdfDoc && React.createElement("button",{onClick:()=>fileRef.current.click(),
+          title:"Importeer PDF",
+          style:{display:"flex",alignItems:"center",gap:"5px",background:W.blue,color:W.bg,border:"none",borderRadius:"4px",padding:"5px 10px",fontSize:"13px",cursor:"pointer",fontWeight:"bold"}
+        }, React.createElement(PdfIcon,{name:"upload"}), "Importeer"),
         !pdfDoc && React.createElement("button",{
           onClick:()=>{ setShowLibrary(!showLibrary); },
-          style:{background:showLibrary?W.comment:"none",color:showLibrary?W.bg:W.fgMuted,
+          style:{display:"flex",alignItems:"center",gap:"6px",background:showLibrary?W.comment:"none",color:showLibrary?W.bg:W.fgMuted,
                  border:`1px solid ${showLibrary?W.comment:W.splitBg}`,
-                 borderRadius:"4px",padding:"4px 10px",fontSize:"14px",cursor:"pointer"}
-        },`📚 Bibliotheek (${serverPdfs?.length||0})`),
+                 borderRadius:"4px",padding:"5px 10px",fontSize:"14px",cursor:"pointer"}
+        }, `📚 Bibliotheek (${serverPdfs?.length||0})`),
         React.createElement("input",{ref:fileRef,type:"file",accept:".pdf",style:{display:"none"},onChange:onFileInput}),
         !pdfjsReady&&React.createElement("span",{style:{color:W.orange,fontSize:"14px"}},"pdf.js laden…"),
-        // ── Gelezen-status banner ─────────────────────────────────────────
-        pdfDoc && (() => {
-          const curPdf = (serverPdfs||[]).find(p=>(p.name||p)===pdfFile?.name);
-          if (!curPdf?.isRead) return null;
-          return React.createElement("div",{
-            style:{
-              display:"flex",alignItems:"center",gap:"6px",
-              background:"rgba(114,182,96,0.12)",
-              border:"1px solid rgba(114,182,96,0.35)",
-              borderRadius:"5px",padding:"3px 10px",
-              fontSize:"12px",color:"#72b660",
-            }
-          },
-            "✓ gelezen",
-            curPdf.readAt && React.createElement("span",{
-              style:{color:"rgba(114,182,96,0.7)",fontSize:"11px"}
-            }, curPdf.readAt.slice(0,10))
-          );
-        })()
-        ,
+
         // AI samenvatten indicator
         summarizing && React.createElement("div",{
           style:{display:"flex",alignItems:"center",gap:"5px",
@@ -1570,195 +1597,250 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
           onClick:()=>setSummarizeErr(null)
         },"⚠ samenvatten mislukt ×"),
 
-        // ── Gelezen-knop ─────────────────────────────────────────────────
-        pdfDoc && onTogglePdfRead && (() => {
-          const curPdf = (serverPdfs||[]).find(p=>(p.name||p)===pdfFile?.name);
-          const isRead = curPdf?.isRead || false;
-          const mins   = curPdf?.estimatedMinutes || 0;
-          return React.createElement("button", {
-            onClick: () => onTogglePdfRead(pdfFile?.name),
-            title: isRead
-              ? `Gelezen op ${curPdf?.readAt?.slice(0,10)||"?"} — klik om te resetten`
-              : `Markeer als gelezen${mins ? ` (±${mins} min)` : ""}`,
-            style: {
-              display:"flex", alignItems:"center", gap:"5px",
-              background: isRead ? "rgba(114,182,96,0.15)" : "none",
-              border: `1px solid ${isRead ? "rgba(114,182,96,0.5)" : W.splitBg}`,
-              borderRadius:"5px", padding:"3px 10px",
-              color: isRead ? "#72b660" : W.fgMuted,
-              cursor:"pointer", fontSize:"13px", fontWeight: isRead ? "600" : "400",
-              marginLeft:"auto",  // duwt naar rechts
-            }
-          },
-            React.createElement("span",{style:{
-              width:"14px", height:"14px", borderRadius:"50%",
-              border:`2px solid ${isRead ? "#72b660" : W.fgMuted}`,
-              background: isRead ? "#72b660" : "transparent",
-              display:"flex", alignItems:"center", justifyContent:"center",
-              flexShrink:0, fontSize:"9px", color:W.bg,
-            }}, isRead ? "✓" : ""),
-            isRead ? "gelezen" : "ongelezen"
-          );
-        })()
-        ,pdfDoc&&React.createElement(React.Fragment,null,
-          React.createElement("span",{style:{color:W.fgMuted}},"│"),
-          React.createElement("button",{onClick:()=>{ const p=Math.max(1,pageNum-1); setPageNum(p); scrollToPage(p); if(pdfDoc) renderNearby(pdfDoc,scale,rotation,p); },style:{background:"none",border:"none",color:W.fg,cursor:"pointer",fontSize:"16px",padding:"0 3px"}},"◀"),
-          React.createElement("span",{style:{color:W.statusFg,minWidth:"60px",textAlign:"center"}},pageNum," / ",numPages),
-          React.createElement("button",{onClick:()=>{ const p=Math.min(numPages,pageNum+1); setPageNum(p); scrollToPage(p); if(pdfDoc) renderNearby(pdfDoc,scale,rotation,p); },style:{background:"none",border:"none",color:W.fg,cursor:"pointer",fontSize:"16px",padding:"0 3px"}},"▶"),
-          React.createElement("span",{style:{color:W.fgMuted}},"│"),
-          React.createElement("button",{onClick:()=>{ setFitWidth(false); userScaleRef.current=Math.max(0.5,+(scale-0.2).toFixed(1)); setScale(userScaleRef.current); },style:{background:"none",border:"none",color:W.fg,cursor:"pointer",padding:"0 4px",fontSize:"16px"}},"−"),
-          React.createElement("span",{style:{color:W.fgMuted,minWidth:"40px",textAlign:"center"}},Math.round(scale*100),"%"),
-          React.createElement("button",{onClick:()=>{ setFitWidth(false); userScaleRef.current=Math.min(3,+(scale+0.2).toFixed(1)); setScale(userScaleRef.current); },style:{background:"none",border:"none",color:W.fg,cursor:"pointer",padding:"0 4px",fontSize:"16px"}},"+"),
-          React.createElement("span",{style:{color:W.fgMuted}},"│"),
-          // ── Terug naar begin ────────────────────────────────────────────
-          pdfFile && pageNum > 1 && React.createElement("button",{
-            onClick:()=>{ savePdfPage(pdfFile.name, 0); setPageNum(1); scrollToPage(1); },
-            title:"Terug naar begin (vergeet opgeslagen positie)",
-            style:{background:"none",border:"none",color:W.fgMuted,
-                   cursor:"pointer",padding:"2px 6px",fontSize:"13px",lineHeight:1},
-          }, "⏮"),
-          // ── A: Selectiemodus knop (iPad/vinger) ─────────────────────────────
-          isTablet && React.createElement("button",{
-            onClick:()=>setSelectMode(m=>!m),
-            title: selectMode ? "Selectiemodus aan — klik om scrollen te herstellen" : isTablet ? "Selectiemodus: schakel in om met vinger/pencil tekst te selecteren" : "Selectiemodus (iPad) — op desktop: klik en sleep direct over de tekst",
-            style:{
-              background: selectMode ? (W.yellow+"22"||"rgba(234,231,136,.2)") : "none",
-              border: selectMode ? `1px solid ${W.yellow}` : "1px solid transparent",
-              borderRadius:"6px",
-              color: selectMode ? W.yellow : W.fgMuted,
-              cursor:"pointer", padding:"3px 8px", fontSize:"14px", lineHeight:1,
-              fontWeight: selectMode ? "600" : "400",
-              position:"relative",
-            }
-          },
-            selectMode ? "🖐 Selecteer" : "🖐",
-            // Puls-indicator als selectMode aan is
-            selectMode && React.createElement("span",{style:{
-              position:"absolute", top:"-3px", right:"-3px",
-              width:"8px", height:"8px", borderRadius:"50%",
-              background:W.yellow, display:"block",
-            }})
+        pdfDoc && React.createElement(React.Fragment,null,
+          React.createElement(PdfToolbarDivider,{W}),
+
+          // ── Groep: navigatie ───────────────────────────────────────────
+          React.createElement("div",{style:{display:"flex",alignItems:"center",gap:"2px"}},
+            React.createElement("button",{onClick:()=>{ const p=Math.max(1,pageNum-1); setPageNum(p); scrollToPage(p); if(pdfDoc) renderNearby(pdfDoc,scale,rotation,p); },
+              title:"Vorige pagina",
+              style:{display:"flex",background:"none",border:"none",color:W.fg,cursor:"pointer",padding: isTablet?"7px":"4px"}
+            }, React.createElement(PdfIcon,{name:"chevronLeft",size:isTablet?18:15})),
+            React.createElement("span",{style:{color:W.statusFg,minWidth:"55px",textAlign:"center",fontSize:"13px"}},pageNum," / ",numPages),
+            React.createElement("button",{onClick:()=>{ const p=Math.min(numPages,pageNum+1); setPageNum(p); scrollToPage(p); if(pdfDoc) renderNearby(pdfDoc,scale,rotation,p); },
+              title:"Volgende pagina",
+              style:{display:"flex",background:"none",border:"none",color:W.fg,cursor:"pointer",padding: isTablet?"7px":"4px"}
+            }, React.createElement(PdfIcon,{name:"chevronRight",size:isTablet?18:15})),
           ),
-          React.createElement("span",{style:{color:W.splitBg}},"|"),
-          // ── Highlight modus ─────────────────────────────────────────────
-          React.createElement("span",{style:{color:W.fgMuted,fontSize:"11px",marginRight:"2px",flexShrink:0}},"✎:"),
-          ...[
-            {id:"hl",      icon:"🖍",  title:"Alleen markeren — geen popup"},
-            {id:"hl+annot",icon:"🖍✎", title:"Markeren + annotatie"},
-            {id:"annot",   icon:"✎",   title:"Alleen annotatie (huidige modus)"},
-          ].map(m => React.createElement("button",{
-            key:m.id,
-            onClick:()=>setHlMode(m.id),
-            title:m.title,
-            style:{
-              background: hlMode===m.id ? W.blueBg2  : "none",
-              border:     hlMode===m.id ? `1px solid ${W.blueBorder}` : "1px solid transparent",
-              borderRadius:"4px", color: hlMode===m.id ? W.blue : W.fgMuted,
-              cursor:"pointer", padding:"2px 6px", fontSize:"13px", lineHeight:1,
-            }
-          }, m.icon)),
-          React.createElement("span",{style:{color:W.splitBg}},"|"),
-          // Highlights-overzicht knop
-          pdfFile && React.createElement("button",{
-            onClick:()=>setShowHlPanel(p=>!p),
-            title:"Highlights overzicht",
-            style:{
-              background: showHlPanel ? W.yellowBg||"rgba(234,231,136,.1)" : "none",
-              border: showHlPanel ? `1px solid ${W.yellow}` : "1px solid transparent",
-              borderRadius:"4px", color: showHlPanel ? W.yellow : W.fgMuted,
-              cursor:"pointer", padding:"2px 6px", fontSize:"13px", lineHeight:1,
-            }
-          }, "📋"),
-          // Verwante-notities-paneel knop (voorstel 4: onderzoeken tijdens lezen)
-          pdfFile && React.createElement("button",{
-            onClick:()=>setShowRelated(p=>!p),
-            title:"Verwante notities (op basis van geselecteerde/gehighlighte tekst)",
-            style:{
-              background: showRelated ? W.blueBg2 : "none",
-              border: showRelated ? `1px solid ${W.blueBorder||"rgba(138,198,242,.3)"}` : "1px solid transparent",
-              borderRadius:"4px", color: showRelated ? W.blue : W.fgMuted,
-              cursor:"pointer", padding:"2px 6px", fontSize:"13px", lineHeight:1,
-            }
-          }, "🔗"),
-          // Leesnotitie-paneel knop
-          pdfFile && React.createElement("button",{
-            onClick:()=>{
-              setShowNotePanel(p=>!p);
-              if(!showNotePanel) setShowAnnotPanel(false);
-            },
-            title:"Leesnotitie (per-pagina aantekeningen)",
-            style:{
-              background: showNotePanel ? W.commentBg||"rgba(159,202,86,.1)" : "none",
-              border: showNotePanel ? `1px solid ${W.commentBorder||"rgba(159,202,86,.3)"}` : "1px solid transparent",
-              borderRadius:"4px", color: showNotePanel ? W.comment : W.fgMuted,
-              cursor:"pointer", padding:"2px 6px", fontSize:"13px", lineHeight:1,
-            }
-          }, "✏"),
-          // ── Fit-width ─────────────────────────────────────────────────
-          React.createElement("button",{
-            onClick: async () => {
-              if (fitWidth) {
-                // Uitzetten: terug naar opgeslagen handmatige scale
-                setFitWidth(false);
-                setScale(userScaleRef.current);
-              } else {
-                // Aanzetten: onthoud huidige scale en bereken fit-width
-                userScaleRef.current = scale;
-                // Bereken de scale DIRECT (niet via state) zodat setScale meteen de juiste waarde krijgt
-                if (pdfDoc && scrollRef.current) {
-                  const targetPg = Math.min(pageNum, pdfDoc.numPages);
-                  const page = await pdfDoc.getPage(targetPg);
-                  const naturalVp = page.getViewport({ scale: 1 });
-                  const totalRot  = (rotation + (page.rotate || 0)) % 360;
-                  const pageW = (totalRot === 90 || totalRot === 270) ? naturalVp.height : naturalVp.width;
-                  let cw = scrollRef.current.clientWidth;
-                  if (cw < 50) { await new Promise(r => requestAnimationFrame(r)); cw = scrollRef.current.clientWidth; }
-                  const sc = Math.max(0.3, Math.min(4, (cw - 32) / pageW));
-                  setFitWidth(true);
-                  setScale(sc);
-                } else {
-                  setFitWidth(true);
-                }
+
+          React.createElement(PdfToolbarDivider,{W}),
+
+          // ── Groep: zoom + zoeken ───────────────────────────────────────
+          React.createElement("div",{style:{display:"flex",alignItems:"center",gap:"2px"}},
+            React.createElement("button",{onClick:()=>{ setFitWidth(false); userScaleRef.current=Math.max(0.5,+(scale-0.2).toFixed(1)); setScale(userScaleRef.current); },
+              title:"Uitzoomen",
+              style:{display:"flex",background:"none",border:"none",color:W.fg,cursor:"pointer",padding: isTablet?"7px":"4px"}
+            }, React.createElement(PdfIcon,{name:"minus",size:isTablet?18:15})),
+            React.createElement("span",{style:{color:W.fgMuted,minWidth:"36px",textAlign:"center",fontSize:"13px"}},Math.round(scale*100),"%"),
+            React.createElement("button",{onClick:()=>{ setFitWidth(false); userScaleRef.current=Math.min(3,+(scale+0.2).toFixed(1)); setScale(userScaleRef.current); },
+              title:"Inzoomen",
+              style:{display:"flex",background:"none",border:"none",color:W.fg,cursor:"pointer",padding: isTablet?"7px":"4px"}
+            }, React.createElement(PdfIcon,{name:"plus",size:isTablet?18:15})),
+            React.createElement("button",{
+              onClick:()=>{ setPdfSearchOpen(o=>!o); if(pdfSearchOpen){ setPdfSearch(""); setSearchHits([]); searchIdRef.current++; scrollRef.current?.querySelectorAll(".zk-search-hl").forEach(el=>{el.style.background="";el.style.outline="";el.classList.remove("zk-search-hl");}); } },
+              title:"Zoeken in PDF",
+              style:{display:"flex",background:pdfSearchOpen?`${W.yellow}18`:"none",
+                     border:pdfSearchOpen?`1px solid ${W.yellow}44`:"1px solid transparent",
+                     borderRadius:"4px",color:pdfSearchOpen?W.yellow:W.fgMuted,
+                     cursor:"pointer",padding: isTablet?"7px":"4px", marginLeft:"2px"},
+            }, React.createElement(PdfIcon,{name:"search",size:isTablet?18:15})),
+          ),
+
+          // ── Groep: selectiemodus (alleen tablet/iPad) ───────────────────
+          isTablet && React.createElement(React.Fragment,null,
+            React.createElement(PdfToolbarDivider,{W}),
+            React.createElement("button",{
+              onClick:()=>setSelectMode(m=>!m),
+              title: selectMode ? "Selectiemodus aan — tik om scrollen te herstellen" : "Selectiemodus: schakel in om met vinger/pencil tekst te selecteren",
+              style:{
+                display:"flex", alignItems:"center", gap:"5px",
+                background: selectMode ? (W.yellow+"22"||"rgba(234,231,136,.2)") : "none",
+                border: selectMode ? `1px solid ${W.yellow}` : "1px solid transparent",
+                borderRadius:"6px",
+                color: selectMode ? W.yellow : W.fgMuted,
+                cursor:"pointer", padding:"7px 9px", lineHeight:1,
+                fontWeight: selectMode ? "600" : "400",
+                position:"relative",
               }
             },
-            title: fitWidth ? "Fit-breedte uit — terug naar handmatige zoom" : "Pas breedte aan op scherm",
-            style:{
-              background: fitWidth ? `${W.blue}22` : "none",
-              border: fitWidth ? `1px solid ${W.blue}55` : "1px solid transparent",
-              borderRadius:"4px",
-              color: fitWidth ? W.blue : W.fgMuted,
-              cursor:"pointer", padding:"2px 7px", fontSize:"15px", lineHeight:1,
-              transition:"all 0.12s",
-            },
-          }, "⟺"),
-          // ── Paginalay-out toggle ──────────────────────────────────────
-          React.createElement("button",{
-            onClick:()=>setPageLayout(l=>l==="scroll"?"single":"scroll"),
-            title: pageLayout==="scroll" ? "Schakel naar één-paginamodus" : "Schakel naar scrollmodus",
-            style:{background:pageLayout==="single"?`${W.blue}18`:"none",
-                   border:pageLayout==="single"?`1px solid ${W.blue}44`:"1px solid transparent",
-                   borderRadius:"4px",color:pageLayout==="single"?W.blue:W.fgMuted,
-                   cursor:"pointer",padding:"2px 6px",fontSize:"15px",lineHeight:1},
-          }, pageLayout==="single" ? "⧉" : "⬚"),
-          // ── Roteren ──────────────────────────────────────────────────
-          React.createElement("button",{
-            onClick:()=>setRotation(r=>(r+90)%360),
-            title:"Roteer 90° rechtsom",
-            style:{background:"none",border:"none",color:W.fgMuted,
-                   cursor:"pointer",padding:"2px 6px",fontSize:"15px",lineHeight:1},
-          }, "↻"),
-          // ── Zoeken in PDF ─────────────────────────────────────────────
-          React.createElement("button",{
-            onClick:()=>{ setPdfSearchOpen(o=>!o); if(pdfSearchOpen){ setPdfSearch(""); setSearchHits([]); searchIdRef.current++; scrollRef.current?.querySelectorAll(".zk-search-hl").forEach(el=>{el.style.background="";el.style.outline="";el.classList.remove("zk-search-hl");}); } },
-            title:"Zoeken in PDF",
-            style:{background:pdfSearchOpen?`${W.yellow}18`:"none",
-                   border:pdfSearchOpen?`1px solid ${W.yellow}44`:"1px solid transparent",
-                   borderRadius:"4px",color:pdfSearchOpen?W.yellow:W.fgMuted,
-                   cursor:"pointer",padding:"2px 6px",fontSize:"15px",lineHeight:1},
-          }, "🔍"),
-          React.createElement("span",{style:{color:W.fgMuted}},"│"),
-          ...HCOLORS.map(c=>React.createElement("button",{key:c.id,onClick:()=>setActiveColor(c),title:c.label,style:{width:"18px",height:"18px",borderRadius:"4px",background:c.bg,border:`2px solid ${activeColor.id===c.id?c.border:"transparent"}`,cursor:"pointer",padding:0,boxShadow:activeColor.id===c.id?`0 0 6px ${c.border}`:"none"}})),
-          React.createElement("span",{style:{color:W.fgMuted,fontSize:"14px",marginLeft:"4px",maxWidth:"160px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},pdfFile?.name),
+              React.createElement(PdfIcon,{name:"hand",size:18}),
+              selectMode && "Selecteer",
+              selectMode && React.createElement("span",{style:{
+                position:"absolute", top:"-3px", right:"-3px",
+                width:"8px", height:"8px", borderRadius:"50%",
+                background:W.yellow, display:"block",
+              }})
+            )
+          ),
+
+          React.createElement(PdfToolbarDivider,{W}),
+
+          // ── Groep: markeren ──────────────────────────────────────────────
+          // Eén samenhangende segmented control i.p.v. drie losse, bijna
+          // identieke potlood-emoji — de tekstlabels maken op desktop meteen
+          // duidelijk wat elke modus doet; op tablet blijft alleen het icoon
+          // over (ruimtegebrek), maar de tooltip legt het nog steeds uit.
+          React.createElement("div",{style:{display:"flex",alignItems:"center",gap:"7px"}},
+            React.createElement("div",{style:{display:"flex",border:`1px solid ${W.splitBg}`,borderRadius:"6px",overflow:"hidden"}},
+              ...[
+                {id:"hl",      icon:"highlighter", label:"Markeer",         title:"Alleen markeren — geen popup"},
+                {id:"hl+annot",icon:"highlighter", label:"Markeer+notitie", title:"Markeren + annotatie"},
+                {id:"annot",   icon:"note",         label:"Notitie",        title:"Alleen annotatie"},
+              ].map((m,i) => React.createElement("button",{
+                key:m.id,
+                onClick:()=>setHlMode(m.id),
+                title:m.title,
+                style:{
+                  display:"flex",alignItems:"center",gap:"5px",
+                  background: hlMode===m.id ? (W.blueBg2||"rgba(138,198,242,.15)")  : "none",
+                  border:"none", borderLeft: i>0?`1px solid ${W.splitBg}`:"none",
+                  borderRadius:0, color: hlMode===m.id ? W.blue : W.fgMuted,
+                  cursor:"pointer", padding: isTablet?"7px 9px":"5px 9px", fontSize:"12px",
+                  fontWeight: hlMode===m.id?"600":"400",
+                }
+              },
+                React.createElement(PdfIcon,{name:m.icon,size:14}),
+                !isTablet && m.label
+              ))
+            ),
+            React.createElement("div",{style:{display:"flex",gap:"4px"}},
+              ...HCOLORS.map(c=>React.createElement("button",{key:c.id,onClick:()=>setActiveColor(c),title:c.label,
+                style:{width: isTablet?"22px":"18px",height: isTablet?"22px":"18px",borderRadius:"4px",background:c.bg,
+                       border:`2px solid ${activeColor.id===c.id?c.border:"transparent"}`,cursor:"pointer",padding:0,
+                       boxShadow:activeColor.id===c.id?`0 0 6px ${c.border}`:"none"}})),
+            ),
+          ),
+
+          React.createElement(PdfToolbarDivider,{W}),
+
+          // ── Groep: panelen ───────────────────────────────────────────────
+          React.createElement("div",{style:{display:"flex",alignItems:"center",gap:"2px"}},
+            pdfFile && React.createElement("button",{
+              onClick:()=>setShowHlPanel(p=>!p),
+              title:"Highlights overzicht",
+              style:{display:"flex",
+                background: showHlPanel ? W.yellowBg||"rgba(234,231,136,.1)" : "none",
+                border: showHlPanel ? `1px solid ${W.yellow}` : "1px solid transparent",
+                borderRadius:"4px", color: showHlPanel ? W.yellow : W.fgMuted,
+                cursor:"pointer", padding: isTablet?"7px":"4px",
+              }
+            }, React.createElement(PdfIcon,{name:"listDetails",size:isTablet?18:15})),
+            pdfFile && React.createElement("button",{
+              onClick:()=>setShowRelated(p=>!p),
+              title:"Verwante notities (op basis van geselecteerde/gehighlighte tekst)",
+              style:{display:"flex",
+                background: showRelated ? W.blueBg2 : "none",
+                border: showRelated ? `1px solid ${W.blueBorder||"rgba(138,198,242,.3)"}` : "1px solid transparent",
+                borderRadius:"4px", color: showRelated ? W.blue : W.fgMuted,
+                cursor:"pointer", padding: isTablet?"7px":"4px",
+              }
+            }, React.createElement(PdfIcon,{name:"link",size:isTablet?18:15})),
+            pdfFile && React.createElement("button",{
+              onClick:()=>{
+                setShowNotePanel(p=>!p);
+                if(!showNotePanel) setShowAnnotPanel(false);
+              },
+              title:"Leesnotitie (per-pagina aantekeningen)",
+              style:{display:"flex",
+                background: showNotePanel ? W.commentBg||"rgba(159,202,86,.1)" : "none",
+                border: showNotePanel ? `1px solid ${W.commentBorder||"rgba(159,202,86,.3)"}` : "1px solid transparent",
+                borderRadius:"4px", color: showNotePanel ? W.comment : W.fgMuted,
+                cursor:"pointer", padding: isTablet?"7px":"4px",
+              }
+            }, React.createElement(PdfIcon,{name:"edit",size:isTablet?18:15})),
+          ),
+
+          React.createElement(PdfToolbarDivider,{W}),
+
+          // ── Groep: overig ────────────────────────────────────────────────
+          // Op tablet/smal scherm achter een "meer"-knop, want dit zijn
+          // incidentele acties, niet iets dat je continu tijdens lezen nodig
+          // hebt — op desktop is er ruimte genoeg om ze gewoon te tonen.
+          (() => {
+            const items = [
+              { key:"fit", icon:"fitWidth", label: fitWidth ? "Fit-breedte uit" : "Pas breedte aan op scherm", active: fitWidth,
+                onClick: async () => {
+                  if (fitWidth) { setFitWidth(false); setScale(userScaleRef.current); }
+                  else {
+                    userScaleRef.current = scale;
+                    if (pdfDoc && scrollRef.current) {
+                      const targetPg = Math.min(pageNum, pdfDoc.numPages);
+                      const page = await pdfDoc.getPage(targetPg);
+                      const naturalVp = page.getViewport({ scale: 1 });
+                      const totalRot  = (rotation + (page.rotate || 0)) % 360;
+                      const pageW = (totalRot === 90 || totalRot === 270) ? naturalVp.height : naturalVp.width;
+                      let cw = scrollRef.current.clientWidth;
+                      if (cw < 50) { await new Promise(r => requestAnimationFrame(r)); cw = scrollRef.current.clientWidth; }
+                      const sc = Math.max(0.3, Math.min(4, (cw - 32) / pageW));
+                      setFitWidth(true); setScale(sc);
+                    } else setFitWidth(true);
+                  }
+                } },
+              { key:"layout", icon: pageLayout==="single" ? "layoutSingle" : "layoutScroll",
+                label: pageLayout==="scroll" ? "Schakel naar één-paginamodus" : "Schakel naar scrollmodus", active: pageLayout==="single",
+                onClick: () => setPageLayout(l=>l==="scroll"?"single":"scroll") },
+              { key:"rotate", icon:"rotate", label:"Roteer 90° rechtsom", active:false,
+                onClick: () => setRotation(r=>(r+90)%360) },
+              onTogglePdfRead && { key:"read", icon: "circleCheck",
+                label: (() => { const c=(serverPdfs||[]).find(p=>(p.name||p)===pdfFile?.name); return c?.isRead ? "Markeer als ongelezen" : "Markeer als gelezen"; })(),
+                active: (serverPdfs||[]).find(p=>(p.name||p)===pdfFile?.name)?.isRead || false,
+                onClick: () => onTogglePdfRead(pdfFile?.name) },
+              pageNum > 1 && { key:"tobegin", icon:"skipBack", label:"Terug naar begin (vergeet opgeslagen positie)", active:false,
+                onClick: () => { savePdfPage(pdfFile.name, 0); setPageNum(1); scrollToPage(1); } },
+            ].filter(Boolean);
+
+            if (!isTablet) {
+              return React.createElement("div",{style:{display:"flex",alignItems:"center",gap:"2px"}},
+                ...items.map(it => React.createElement("button",{
+                  key:it.key, onClick:it.onClick, title:it.label,
+                  style:{display:"flex",
+                    background: it.active ? `${W.blue}22` : "none",
+                    border: it.active ? `1px solid ${W.blue}55` : "1px solid transparent",
+                    borderRadius:"4px", color: it.active ? W.blue : W.fgMuted,
+                    cursor:"pointer", padding:"4px",
+                  }
+                }, React.createElement(PdfIcon,{name:it.icon,size:15})))
+              );
+            }
+            // Tablet: achter een "meer"-knop met een uitklapmenu van tekstregels
+            return React.createElement("div",{style:{position:"relative"}},
+              React.createElement("button",{
+                onClick:()=>setToolbarMoreOpen(o=>!o),
+                title:"Meer opties",
+                style:{display:"flex",
+                  background: toolbarMoreOpen ? `${W.blue}18` : "none",
+                  border: toolbarMoreOpen ? `1px solid ${W.blue}44` : "1px solid transparent",
+                  borderRadius:"4px", color: toolbarMoreOpen ? W.blue : W.fgMuted,
+                  cursor:"pointer", padding:"7px",
+                }
+              }, React.createElement(PdfIcon,{name:"dots",size:18})),
+              toolbarMoreOpen && React.createElement("div",{
+                style:{position:"absolute",top:"100%",right:0,marginTop:"4px",
+                  background:W.bg2,border:`1px solid ${W.splitBg}`,borderRadius:"8px",
+                  boxShadow:"0 4px 16px rgba(0,0,0,0.3)",padding:"4px",zIndex:50,minWidth:"220px"}
+              },
+                ...items.map(it => React.createElement("button",{
+                  key:it.key,
+                  onClick:()=>{ it.onClick(); setToolbarMoreOpen(false); },
+                  style:{display:"flex",alignItems:"center",gap:"10px",width:"100%",
+                    background: it.active ? `${W.blue}15` : "none", border:"none",
+                    borderRadius:"5px", color: it.active ? W.blue : W.fg,
+                    cursor:"pointer", padding:"9px 10px", fontSize:"13px", textAlign:"left",
+                  }
+                }, React.createElement(PdfIcon,{name:it.icon,size:16}), it.label)),
+                pdfFile && React.createElement("button",{
+                  onClick:async()=>{
+                    setToolbarMoreOpen(false);
+                    if(!confirm(`Verwijder "${pdfFile.name}" en alle annotaties?`)) return;
+                    const name=pdfFile.name;
+                    await PDFService.deletePdf(name);
+                    setPdfDoc(null); setPdfFile(null);
+                    onRefreshPdfs?.(); onDeletePdf?.(name);
+                  },
+                  style:{display:"flex",alignItems:"center",gap:"10px",width:"100%",
+                    background:"none", border:"none", borderTop:`1px solid ${W.splitBg}`,
+                    borderRadius:"5px", color: W.orange,
+                    cursor:"pointer", padding:"9px 10px", fontSize:"13px", textAlign:"left", marginTop:"2px",
+                  }
+                }, React.createElement(PdfIcon,{name:"trash",size:16}), "Verwijder PDF + annotaties")
+              )
+            );
+          })(),
+
+          React.createElement(PdfToolbarDivider,{W}),
+
+          // ── Bestandsnaam + samenvatten (+ verwijderen op desktop) ────────
+          React.createElement("span",{style:{color:W.fgMuted,fontSize:"13px",maxWidth: isTablet?"90px":"160px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},pdfFile?.name),
           pdfFile && onAutoSummarize && React.createElement("button",{
             title:"Maak nu een samenvatting van deze PDF",
             disabled:summarizing,
@@ -1769,15 +1851,14 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
               catch(err){ setSummarizeErr(err?.message||"Samenvatten mislukt"); }
               finally{ setSummarizing(false); }
             },
-            style:{background:"rgba(138,198,242,0.08)",
+            style:{display:"flex",alignItems:"center",gap:"5px",background:"rgba(138,198,242,0.08)",
                    border:"1px solid rgba(138,198,242,0.25)",
                    color:summarizing?"#666":"#a8d8f0",
-                   borderRadius:"4px",padding:"3px 9px",
-                   fontSize:"14px",cursor:summarizing?"not-allowed":"pointer",
-                   marginLeft:"6px",flexShrink:0,opacity:summarizing?0.5:1}
-          }, summarizing ? "⏳…" : "🧠 samenvatten"),
-          pdfFile&&React.createElement("button",{
-            title:"Verwijder deze PDF + annotaties",
+                   borderRadius:"4px",padding: isTablet?"7px 9px":"4px 9px",
+                   fontSize:"13px",cursor:summarizing?"not-allowed":"pointer",
+                   marginLeft:"2px",flexShrink:0,opacity:summarizing?0.5:1}
+          }, React.createElement(PdfIcon,{name:"sparkles",size:14}), !isTablet && (summarizing ? "…" : "Samenvatten")),
+          pdfFile && !isTablet && React.createElement("button",{
             onClick:async()=>{
               if(!confirm(`Verwijder "${pdfFile.name}" en alle annotaties?`)) return;
               const name=pdfFile.name;
@@ -1786,13 +1867,13 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
               onRefreshPdfs?.();
               onDeletePdf?.(name);
             },
-            style:{background:"rgba(229,120,109,0.1)",border:"1px solid rgba(229,120,109,0.25)",
-                   color:W.orange,borderRadius:"4px",padding:"3px 9px",
-                   fontSize:"14px",cursor:"pointer",marginLeft:"6px",flexShrink:0}
-          },"🗑 verwijder")
+            style:{display:"flex",alignItems:"center",gap:"5px",background:"rgba(229,120,109,0.1)",border:"1px solid rgba(229,120,109,0.25)",
+                   color:W.orange,borderRadius:"4px",padding:"4px 9px",
+                   fontSize:"13px",cursor:"pointer",marginLeft:"4px",flexShrink:0}
+          }, React.createElement(PdfIcon,{name:"trash",size:14}), "Verwijder"),
         ),
         React.createElement("div",{style:{flex:1}}),
-        pdfDoc&&React.createElement("span",{style:{color:W.comment,fontSize:"14px"}},"① selecteer tekst  ② popup  ③ opslaan")
+        pdfDoc && !isTablet && React.createElement("span",{style:{color:W.comment,fontSize:"13px"}},"① selecteer tekst  ② popup  ③ opslaan")
       ),
 
       // ── Bibliotheek — volledig scherm als geen PDF open is ─────────────────
