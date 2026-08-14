@@ -71,6 +71,8 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
     lines:     value.split("\n"),
     cur:       {row:0, col:0},  // cursor positie
     scroll:    0,               // eerste zichtbare regel
+    scrollX:   0,               // horizontale scroll (px) — houdt cursor zichtbaar bij lange regels
+    canvasW:   800,             // laatst gemeten canvas-breedte, voor scrollX-berekening
     mode:      "NORMAL",   // start in NORMAL — klik of druk i om te typen
     cmdBuf:    "",
     undo:      [value.split("\n")],
@@ -218,6 +220,7 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
       const s = S.current;
       s.numCols  = String(s.lines.length).length + 1;
       s.visRows  = Math.floor((ph - LINE_H) / LINE_H); // -1 voor statusbalk
+      s.canvasW  = pw;
       draw();
     };
 
@@ -246,7 +249,7 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
       const row = Math.min(s.lines.length - 1,
                   Math.max(0, Math.floor((e.clientY - r.top) / LINE_H) + s.scroll));
       const col = Math.min(s.lines[row].length,
-                  Math.max(0, Math.round((e.clientX - r.left - nw) / cw)));
+                  Math.max(0, Math.round((e.clientX - r.left - nw + s.scrollX) / cw)));
       s.cur = {row, col};
       scrollToCursor(s);
       inp.focus();
@@ -271,7 +274,7 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
       const row = Math.min(s.lines.length-1,
                   Math.max(0, Math.floor((t.clientY-r.top)/LINE_H)+s.scroll));
       const col = Math.min(s.lines[row].length,
-                  Math.max(0, Math.round((t.clientX-r.left-nw)/cw)));
+                  Math.max(0, Math.round((t.clientX-r.left-nw+s.scrollX)/cw)));
       s.cur = {row,col};
       setMode("INSERT");
       scrollToCursor(s);
@@ -304,6 +307,19 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
     if (s.cur.row < s.scroll) s.scroll = s.cur.row;
     if (s.cur.row >= s.scroll + s.visRows) s.scroll = s.cur.row - s.visRows + 1;
     s.scroll = Math.max(0, s.scroll);
+
+    // Horizontaal: schuif zodat de cursor-kolom altijd binnen het zichtbare
+    // veld blijft — vervangt echte regel-wrap (te riskant om in deze
+    // canvas-editor te herbouwen) door de weergave gewoon mee te laten lopen.
+    const nw    = numColsWidth(s);
+    const cxAbs = s.cur.col * s.charW;              // x-positie t.o.v. begin van de regel
+    const viewW = Math.max(100, s.canvasW - nw - PAD_LEFT);
+    if (cxAbs < s.scrollX) {
+      s.scrollX = cxAbs;
+    } else if (cxAbs > s.scrollX + viewW - s.charW) {
+      s.scrollX = cxAbs - viewW + s.charW;
+    }
+    s.scrollX = Math.max(0, s.scrollX);
   };
 
   const emit = (s) => {
@@ -1037,7 +1053,7 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
     if (cv) {
       const rect = cv.getBoundingClientRect();
       const nw   = numColsWidth(s);
-      const x = rect.left + nw + s.cur.col * s.charW;
+      const x = rect.left + nw + s.cur.col * s.charW - s.scrollX;
       const y = rect.top  + (s.cur.row - s.scroll + 1) * LINE_H + 4;
       setCompPos({x: Math.min(x, window.innerWidth - 260), y});
     }
@@ -1505,7 +1521,7 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
           if (cv3) {
             const rect3 = cv3.getBoundingClientRect();
             const nw3   = numColsWidth(s);
-            const x3 = rect3.left + nw3 + hit2.col * s.charW;
+            const x3 = rect3.left + nw3 + hit2.col * s.charW - s.scrollX;
             const y3 = rect3.top  + (s.cur.row - s.scroll + 1) * LINE_H + 4;
             setCompPos({x: Math.min(x3, window.innerWidth - 260), y: y3});
           }
@@ -1946,7 +1962,7 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
     }
     // Cursorcolumn (vertikaal) — hele hoogte
     ctx.fillStyle = "rgba(255,255,255,0.035)";
-    ctx.fillRect(cxPos, 0, cw, CH - LINE_H);
+    ctx.fillRect(cxPos - s.scrollX, 0, cw, CH - LINE_H);
 
     // ── Regelnummer-kolom ─────────────────────────────────────────────────
     ctx.fillStyle = W.lineNrBg;
@@ -1954,6 +1970,14 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
     // scheidingslijn
     ctx.fillStyle = W.splitBg;
     ctx.fillRect(nw - 2, 0, 1, CH - LINE_H);
+
+    // Vanaf hier: alle content rechts van de gutter kan horizontaal
+    // wegscrollen (lange regels) — clip zodat niets over de regelnummers
+    // heen tekent, en verschuif met -scrollX voor het pan-effect.
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(nw, 0, Math.max(0, CW - nw), CH - LINE_H);
+    ctx.clip();
 
     // ── Visual selectie achtergrond ─────────────────────────────────────────
     if (s.visual) {
@@ -1965,15 +1989,15 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
           if (vi < s.scroll || vi > s.scroll + s.visRows) continue;
           const vline = s.lines[vi] || "";
           if (vr.line) {
-            ctx.fillRect(nw, vy, CW - nw, LINE_H);
+            ctx.fillRect(nw - s.scrollX, vy, CW - nw, LINE_H);
           } else if (vi === vr.startRow && vi === vr.endRow) {
-            ctx.fillRect(nw + vr.startCol * cw, vy, (vr.endCol - vr.startCol + 1) * cw, LINE_H);
+            ctx.fillRect(nw + vr.startCol * cw - s.scrollX, vy, (vr.endCol - vr.startCol + 1) * cw, LINE_H);
           } else if (vi === vr.startRow) {
-            ctx.fillRect(nw + vr.startCol * cw, vy, (vline.length - vr.startCol + 1) * cw, LINE_H);
+            ctx.fillRect(nw + vr.startCol * cw - s.scrollX, vy, (vline.length - vr.startCol + 1) * cw, LINE_H);
           } else if (vi === vr.endRow) {
-            ctx.fillRect(nw, vy, (vr.endCol + 1) * cw, LINE_H);
+            ctx.fillRect(nw - s.scrollX, vy, (vr.endCol + 1) * cw, LINE_H);
           } else {
-            ctx.fillRect(nw, vy, Math.max(1, vline.length) * cw, LINE_H);
+            ctx.fillRect(nw - s.scrollX, vy, Math.max(1, vline.length) * cw, LINE_H);
           }
         }
       }
@@ -2013,12 +2037,12 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
         s.matches.filter(m => m.row === li).forEach((m, mi) => {
           const isActive = mi === s.matchIdx && s.matches[s.matchIdx].row === li;
           ctx.fillStyle = isActive ? "rgba(234,231,136,0.5)" : "rgba(138,198,242,0.2)";
-          ctx.fillRect(nw + m.col * cw, y, s.search.length * cw, LINE_H);
+          ctx.fillRect(nw + m.col * cw - s.scrollX, y, s.search.length * cw, LINE_H);
         });
       }
 
       // Tekst — met basis syntaxiskleuring
-      drawLine(ctx, line, nw, y, cw, isCur);
+      drawLine(ctx, line, nw - s.scrollX, y, cw, isCur);
 
       // Fold header: teken een compacte balk na de header-tekst
       if (isFolded) {
@@ -2031,7 +2055,7 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
         const headerW = ctx.measureText(line).width;
         ctx.font = `${FONT_SIZE}px 'Hack','Courier New',monospace`;
 
-        const pillX = nw + headerW + 10;
+        const pillX = nw + headerW + 10 - s.scrollX;
         const pillY = y + 3;
         const pillH = LINE_H - 6;
 
@@ -2095,7 +2119,7 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
         if (spellErrors.current.has(li)) {
           for (const err of spellErrors.current.get(li)) {
             squiggly(
-              nw + err.col * cw,
+              nw + err.col * cw - s.scrollX,
               y + LINE_H - 3,
               err.len * cw,
               "rgba(239,68,68,0.90)"   // rood
@@ -2108,17 +2132,18 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
             const color = err.type === "style"
               ? "rgba(156,163,175,0.75)"   // grijs voor stijltips
               : "rgba(245,158,11,0.90)";   // oranje voor grammaticafouten
-            squiggly(nw + err.col * cw, y + LINE_H - 3, err.len * cw, color);
-            squiggly(nw + err.col * cw, y + LINE_H - 1, err.len * cw, color);
+            squiggly(nw + err.col * cw - s.scrollX, y + LINE_H - 3, err.len * cw, color);
+            squiggly(nw + err.col * cw - s.scrollX, y + LINE_H - 1, err.len * cw, color);
           }
         }
         ctx.restore();
       }
     }
+    ctx.restore(); // sluit de clip die vóór de regel-lus geopend werd
 
     // ── Cursor ────────────────────────────────────────────────────────────
     if (visibleCurRow >= s.scroll && visibleCurRow < s.scroll + s.visRows + 1) {
-      const cx = nw + curCol * cw;
+      const cx = nw + curCol * cw - s.scrollX;
       const cy = cyPos;
       const m  = s.mode;
 
@@ -2279,7 +2304,7 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
     if (!cv) return {x:0,y:0};
     const rect = cv.getBoundingClientRect();
     const nw   = numColsWidth(s);
-    const x    = rect.left + nw + s.cur.col * s.charW;
+    const x    = rect.left + nw + s.cur.col * s.charW - s.scrollX;
     const y    = rect.top  + (s.cur.row - s.scroll + 1) * LINE_H;
     return {x, y};
   };

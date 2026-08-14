@@ -387,7 +387,7 @@ const PDFUploadPanel = ({ serverPdfs=[], onRefreshPdfs, onOpenPdf, onTogglePdfRe
   );
 };
 
-const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, onAutoSummarize, onDeletePdf, onPasteToNote=null, onAddNote=null, notes=[], isTablet=false, onTogglePdfRead=null, pdfAnnotations=[]}) => {
+const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, onAutoSummarize, onDeletePdf, onPasteToNote=null, onAddNote=null, onSaveNote=null, onOpenNote=null, notes=[], isTablet=false, onTogglePdfRead=null, pdfAnnotations=[], openPdfName=null, onOpenPdfConsumed=null}) => {
   const [pdfDoc,     setPdfDoc]     = useState(null);
   const [pdfFile,    setPdfFile]    = useState(null);
   const [pageNum,    setPageNum]    = useState(1);   // huidige zichtbare pagina (voor annotaties)
@@ -413,6 +413,18 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
   // highlights gespiegeld vanuit AnnotationStore
   const [highlights, setHighlights] = useState(AnnotationStore.getAll());
   const [pendingSel, setPendingSel] = useState(null);
+
+  // Extern verzoek om een specifiek PDF te openen (bv. "Lees dit boek" vanuit
+  // BookLibrary). Eenmalig verwerken via dezelfde openFromServer-functie die
+  // ook de PDF-lijst gebruikt (fetch + laden + renderen), en daarna via
+  // onOpenPdfConsumed laten wissen door de ouder, zodat later terugkeren naar
+  // dit tabblad niet steeds hetzelfde bestand heropent.
+  useEffect(() => {
+    if (!openPdfName) return;
+    openFromServer(openPdfName);
+    onOpenPdfConsumed?.();
+  }, [openPdfName]);
+
   const [floatBar,   setFloatBar]   = useState(null);  // {x,y,text,above} zwevende toolbar
   const [floatNote,  setFloatNote]  = useState("");    // inline notitie in toolbar
   const [floatOpen,  setFloatOpen]  = useState(false); // notitie-veld zichtbaar
@@ -421,6 +433,16 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
   const [isLoading,  setIsLoading]  = useState(false);
   const [pdfjsReady, setPdfjsReady] = useState(false);
   const [activeColor,setActiveColor]= useState(HCOLORS[0]);
+
+  // Wrap highlight-tekst in [tekst]{.laag}-markup als de highlight-kleur een
+  // laag draagt (bron/kritisch/eigen — zie HCOLORS in app.js). Zo herkent
+  // AnnotationsPanel.js notities die uit een gekleurde highlight ontstaan,
+  // i.p.v. dat de laag-informatie verloren gaat bij het exporteren.
+  const layerWrap = (text, colorId) => {
+    const hc = HCOLORS.find(c => c.id === colorId);
+    return (hc && hc.layer) ? `[${text}]{.${hc.layer}}` : text;
+  };
+
   const [filterTag,  setFilterTag]  = useState(null);
   const [quickNote,  setQuickNote]  = useState("");
   const [quickTags,  setQuickTags]  = useState([]);
@@ -878,6 +900,44 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
   const [iosAnnotBtn,  setIosAnnotBtn]  = useState(null);
   const [hlMode,       setHlMode]       = useState("annot");
   const [showHlPanel,  setShowHlPanel]  = useState(false);     // highlights-overzicht
+
+  // ── Verwante notities tijdens het lezen (voorstel 4) ────────────────────
+  // Hergebruikt /api/suggest-links (dezelfde TF-IDF/tag-scoring die
+  // SmartLinkSuggester ook gebruikt tijdens het schrijven) — nu toegepast op
+  // de laatst geselecteerde/gehighlighte tekst, zodat "onderzoeken" ook
+  // tijdens het lezen werkt, niet alleen tijdens het schrijven.
+  const [showRelated,      setShowRelated]      = useState(false);
+  const [relatedFor,       setRelatedFor]        = useState("");   // tekst waarop laatst gezocht is
+  const [relatedSuggestions, setRelatedSuggestions] = useState([]);
+  const [relatedLoading,   setRelatedLoading]    = useState(false);
+  const relatedDebRef = useRef(null);
+
+  const fetchRelated = useCallback((text) => {
+    clearTimeout(relatedDebRef.current);
+    const q = (text || "").trim();
+    if (q.length < 12) { setRelatedSuggestions([]); setRelatedFor(""); return; }
+    relatedDebRef.current = setTimeout(async () => {
+      setRelatedLoading(true);
+      try {
+        const res = await fetch("/api/suggest-links", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ content: q.slice(0, 2000), note_id: "", top_n: 6 }),
+        });
+        const d = await res.json();
+        setRelatedSuggestions(d.suggestions || []);
+        setRelatedFor(q);
+      } catch { setRelatedSuggestions([]); }
+      setRelatedLoading(false);
+    }, 500);
+  }, []);
+
+  // Zodra het paneel open staat: zoek op de tekst van de actieve selectie/
+  // highlight-popup (floatBar) zo gauw die verandert.
+  useEffect(() => {
+    if (!showRelated) return;
+    fetchRelated(floatBar?.text || "");
+  }, [showRelated, floatBar?.text, fetchRelated]);
+
 
   // ── tryOpenAnnotPopup ──────────────────────────────────────────────────────
   // Wordt aangeroepen na mouseup (desktop) of via iOS-knop.
@@ -1609,6 +1669,17 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
               cursor:"pointer", padding:"2px 6px", fontSize:"13px", lineHeight:1,
             }
           }, "📋"),
+          // Verwante-notities-paneel knop (voorstel 4: onderzoeken tijdens lezen)
+          pdfFile && React.createElement("button",{
+            onClick:()=>setShowRelated(p=>!p),
+            title:"Verwante notities (op basis van geselecteerde/gehighlighte tekst)",
+            style:{
+              background: showRelated ? W.blueBg2 : "none",
+              border: showRelated ? `1px solid ${W.blueBorder||"rgba(138,198,242,.3)"}` : "1px solid transparent",
+              borderRadius:"4px", color: showRelated ? W.blue : W.fgMuted,
+              cursor:"pointer", padding:"2px 6px", fontSize:"13px", lineHeight:1,
+            }
+          }, "🔗"),
           // Leesnotitie-paneel knop
           pdfFile && React.createElement("button",{
             onClick:()=>{
@@ -2443,7 +2514,7 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
                         const stem=pdfFile.name.replace(/\.pdf$/i,"");
                         if(onSaveNote) onSaveNote({
                           title:(h.text?h.text.slice(0,50):"HL")+" (p."+h.page+")",
-                          content:"> "+(h.text||"")+(h.note?"\n"+h.note:"")+"\n\n---\n*Bron: [["+stem+"]], p."+h.page+"*",
+                          content:"> "+layerWrap(h.text||"",h.colorId)+(h.note?"\n"+h.note:"")+"\n\n---\n*Bron: [["+stem+"]], p."+h.page+"*",
                           tags:["highlight","pdf"],noteType:"literature"});
                       },
                       style:{fontSize:"11px",padding:"2px 8px",borderRadius:"4px",
@@ -2468,7 +2539,7 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
             const byPage={};hlItems.forEach(h=>{(byPage[h.page]=byPage[h.page]||[]).push(h);});
             const body=["# Highlights — "+stem,"*[["+stem+"]]*",
               ...Object.keys(byPage).sort((a,b)=>+a-+b).flatMap(pg=>
-                ["\n## Pagina "+pg,...byPage[pg].map(h=>"> "+(h.text||"")+(h.note?"\n\n"+h.note:""))]
+                ["\n## Pagina "+pg,...byPage[pg].map(h=>"> "+layerWrap(h.text||"",h.colorId)+(h.note?"\n\n"+h.note:""))]
               )].join("\n");
             if(onSaveNote) onSaveNote({title:"Highlights — "+stem,content:body,
               tags:["highlights","pdf"],noteType:"literature",importedAt:new Date().toISOString()});
@@ -2477,6 +2548,54 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
             background:W.blueBg||"rgba(138,198,242,.12)",color:W.blue,
             border:`1px solid ${W.blueBorder||"rgba(138,198,242,.3)"}`,
             cursor:"pointer",fontSize:"13px",fontWeight:"600"}},"⬆ Alle highlights als notitie")
+      )
+    ),
+
+    // ── Verwante-notities-paneel (naast main column) ────────────────────────
+    // Toont notities die raken aan de laatst geselecteerde/gehighlighte
+    // tekst — brengt "onderzoeken in de kennisdatabase" ook naar het
+    // leesmoment, niet alleen naar het schrijfmoment (SmartLinkSuggester).
+    showRelated && pdfFile && React.createElement("div",{style:{
+      width:"320px", flexShrink:0, background:W.bg2,
+      borderLeft:`1px solid ${W.splitBg}`,
+      display:"flex", flexDirection:"column", minHeight:0,
+    }},
+      React.createElement("div",{style:{padding:"10px 14px",borderBottom:`1px solid ${W.splitBg}`,
+        display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0}},
+        React.createElement("span",{style:{fontWeight:"600",color:W.fg,fontSize:"14px"}},"🔗 Verwante notities"),
+        React.createElement("button",{onClick:()=>setShowRelated(false),
+          style:{background:"none",border:"none",color:W.fgMuted,cursor:"pointer",fontSize:"18px"}},"×")
+      ),
+      React.createElement("div",{style:{flex:1,overflowY:"auto",padding:"10px 14px"}},
+        !relatedFor && !relatedLoading && React.createElement("div",{
+          style:{fontSize:"12.5px",color:W.fgMuted,lineHeight:"1.5"}
+        },"Selecteer of highlight tekst in het PDF — verwante notities uit je vault verschijnen hier automatisch."),
+        relatedLoading && React.createElement("div",{
+          style:{fontSize:"12px",color:W.fgMuted}
+        },"⏳ Zoeken…"),
+        relatedFor && !relatedLoading && React.createElement("div",{
+          style:{fontSize:"10.5px",color:W.fgDim,marginBottom:"8px",lineHeight:"1.4",
+                 borderLeft:`2px solid ${W.splitBg}`,paddingLeft:"6px"}
+        },'Op basis van: "'+relatedFor.slice(0,90)+(relatedFor.length>90?"…":"")+'"'),
+        relatedFor && !relatedLoading && relatedSuggestions.length===0 && React.createElement("div",{
+          style:{fontSize:"12.5px",color:W.fgMuted,fontStyle:"italic"}
+        },"Geen duidelijk verwante notities gevonden."),
+        relatedSuggestions.map(sug =>
+          React.createElement("div",{
+            key:sug.id,
+            onClick:()=>onOpenNote?.(sug.id),
+            style:{marginBottom:"6px",padding:"8px 10px",borderRadius:"7px",
+              border:`1px solid ${W.splitBg}`,cursor:"pointer"},
+            onMouseEnter:e=>e.currentTarget.style.background="rgba(255,255,255,0.04)",
+            onMouseLeave:e=>e.currentTarget.style.background="transparent",
+          },
+            React.createElement("div",{style:{fontSize:"12.5px",fontWeight:"600",color:W.fg,
+              overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},sug.title),
+            sug.reasons?.length>0 && React.createElement("div",{
+              style:{fontSize:"10.5px",color:W.fgDim,marginTop:"3px"}
+            },sug.reasons.join(" · "))
+          )
+        )
       )
     ),
 

@@ -2367,7 +2367,7 @@ const LLMNotebook = ({notes, pdfNotes, serverPdfs, serverImages, allTags, onAddN
   const [showContext,   setShowContext]  = useState(true);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(true); // sidebar standaard ingeklapt
   const [showInstall,   setShowInstall]  = useState(false);
-  const [tagFilter,     setTagFilter]    = useState(null);
+  const [tagFilter,     setTagFilter]    = useState(() => new Set());   // multi-select tagfilter
   const [savingNote,    setSavingNote]   = useState(false);
   const [mmPending,     setMmPending]    = useState(false);   // mindmap genereren
   const [graphRagMode,  setGraphRagMode] = useState(true);   // GraphRAG standaard aan
@@ -2554,9 +2554,11 @@ const LLMNotebook = ({notes, pdfNotes, serverPdfs, serverImages, allTags, onAddN
   }, [ctxNotes, ctxPdfs, ctxImages, ctxExtPdfs]);
 
   // ── Gefilterde notities voor context-selector ─────────────────────────────
+  // Multi-select: een notitie matcht als hij minstens één van de geselecteerde
+  // tags heeft (OR — de gangbare verwachting bij meerdere tag-chips tegelijk).
   const filteredNotes = useMemo(() => {
-    if (!tagFilter) return notes;
-    return notes.filter(n => (n.tags||[]).includes(tagFilter));
+    if (!tagFilter || tagFilter.size === 0) return notes;
+    return notes.filter(n => (n.tags||[]).some(t => tagFilter.has(t)));
   }, [notes, tagFilter]);
 
   // ── Altijd alle (gefilterde) notities meenemen ───────────────────────────
@@ -2901,7 +2903,7 @@ REGELS:
                 border:"1px solid rgba(138,198,242,0.25)",lineHeight:"1.4",
                 whiteSpace:"nowrap",
               }}, ctxNotes.length),
-              tagFilter && React.createElement("span",{style:{
+              tagFilter && tagFilter.size > 0 && React.createElement("span",{style:{
                 fontSize:"9px",background:"rgba(159,202,86,0.2)",
                 color:W.green,borderRadius:"8px",padding:"1px 4px",
                 border:"1px solid rgba(159,202,86,0.35)",
@@ -2931,7 +2933,9 @@ REGELS:
                 background:"rgba(138,198,242,0.08)",borderRadius:"4px",padding:"4px 8px",
                 border:"1px solid rgba(138,198,242,0.2)"}},
                 `📚 ${ctxNotes.length} notitie${ctxNotes.length!==1?"s":""} in context`
-                + (tagFilter ? ` · filter: #${tagFilter}` : " · alle")
+                + (tagFilter && tagFilter.size > 0
+                    ? ` · filter: ${[...tagFilter].map(t=>"#"+t).join(", ")}`
+                    : " · alle")
               ),
               // Tag-filter
               allNoteTags.length > 0 && React.createElement("div",null,
@@ -3095,10 +3099,10 @@ REGELS:
         },
           React.createElement("span",null, sidebarCollapsed ? "▶" : "◀"),
           React.createElement("span",null, "filter"),
-          tagFilter && React.createElement("span",{style:{
+          tagFilter && tagFilter.size > 0 && React.createElement("span",{style:{
             fontSize:"11px",background:"rgba(159,202,86,0.2)",color:W.green,
             borderRadius:"8px",padding:"1px 6px",border:"1px solid rgba(159,202,86,0.35)"
-          }}, tagFilter || "")
+          }}, tagFilter.size)
         ),
 
         // Context badge — altijd zichtbaar
@@ -3109,7 +3113,7 @@ REGELS:
         }, `📚 ${ctxNotes.length} notitie${ctxNotes.length!==1?"s":""}` +
            (ctxPdfs.length ? ` + ${ctxPdfs.length} PDF` : "") +
            (ctxExtPdfs.length ? ` + ${ctxExtPdfs.length} ext.` : "") +
-           (tagFilter ? ` · #${tagFilter}` : "")
+           (tagFilter && tagFilter.size > 0 ? ` · ${[...tagFilter].map(t=>"#"+t).join(", ")}` : "")
         ),
 
         // Externe PDF's knop
@@ -3590,7 +3594,7 @@ REGELS:
                 (ctxPdfs.length?` + ${ctxPdfs.length} PDF`:"") +
                 (ctxExtPdfs.length?` + ${ctxExtPdfs.length} ext.`:"") +
                 " meegestuurd" +
-                (tagFilter?` · filter: #${tagFilter}`:"")
+                (tagFilter && tagFilter.size > 0 ? ` · filter: ${[...tagFilter].map(t=>"#"+t).join(", ")}` : "")
           )
         )
       )

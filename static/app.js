@@ -354,6 +354,32 @@ const HCOLORS = [
    bg:"rgba(215,135,255,0.40)", border:"#d787ff"},
 ];
 
+// ── Boek ↔ PDF matching (voor "Lees dit boek" in BookLibrary) ────────────────
+// Geen apart koppelveld in het boek-schema — best-effort matchen op
+// woordoverlap tussen boektitel en PDF-bestandsnaam. Alleen een match
+// teruggeven bij voldoende overlap (voorkomt valse positieven bij generieke
+// titels/bestandsnamen).
+const _normalizeForPdfMatch = (s) => (s || "")
+  .toLowerCase()
+  .normalize("NFD").replace(/[\u0300-\u036f]/g, "") // diakrieten weg
+  .replace(/\.pdf$/i, "")
+  .replace(/[^a-z0-9]+/g, " ")
+  .trim();
+
+const findPdfForBook = (book, pdfs) => {
+  const bt = _normalizeForPdfMatch(book?.titel);
+  const btWords = bt.split(" ").filter(w => w.length > 2);
+  if (!btWords.length || !pdfs?.length) return null;
+  let best = null, bestScore = 0;
+  pdfs.forEach(p => {
+    const pn = _normalizeForPdfMatch(p.name);
+    const hits = btWords.filter(w => pn.includes(w)).length;
+    const score = hits / btWords.length;
+    if (score > bestScore) { bestScore = score; best = p; }
+  });
+  return (best && bestScore >= 0.6) ? best : null;
+};
+
 // ── Markdown snippets (UltiSnips-stijl, geactiveerd met Tab) ──────────────────
 const MD_SNIPPETS = {
   "h1":    "# ${1:Titel}\n\n${0}",
@@ -1067,6 +1093,9 @@ const App = () => {
   const [pdfNotes,     setPdfNotes]    = useState([]);
   const [imgNotes,     setImgNotes]    = useState([]);
   const [serverPdfs,   setServerPdfs]  = useState([]);
+  // Voor "Lees dit boek" vanuit BookLibrary: welk PDF-bestand moet de
+  // PDF-hub bij het volgende bezoek automatisch openen.
+  const [openPdfName,  setOpenPdfName] = useState(null);
   const [isOffline,    setIsOffline]   = useState(!navigator.onLine);
   const [serverImages, setServerImages]= useState([]);
   // Verwijder embedding-modellen uit opgeslagen model
@@ -1939,6 +1968,13 @@ const App = () => {
             React.createElement(PDFViewer,{pdfNotes,setPdfNotes,allTags,serverPdfs,
               notes,isTablet,
               llmModel,
+              onSaveNote:async(note)=>{ await NoteStore.save({...note,id:note.id||genId(),created:note.created||new Date().toISOString(),modified:new Date().toISOString()}); setNotes([...NoteStore.getAll()]); },
+              onOpenNote: (id) => {
+                if (isSplitRight) { setSplitSelId(id); }
+                else { setSelId(id); setTab("notes"); }
+              },
+              openPdfName,
+              onOpenPdfConsumed: () => setOpenPdfName(null),
               onRefreshPdfs:refreshPdfs,
               pdfAnnotations: pdfNotes,
               onTogglePdfRead: async name => {
@@ -2197,6 +2233,12 @@ const App = () => {
             onOpenNote: id => {
               if (isSplitRight) { setSplitSelId(id); }
               else { setSelId(id); setTab("notes"); }
+            },
+            serverPdfs,
+            onReadBook: (book) => {
+              const match = findPdfForBook(book, serverPdfs);
+              if (match) setOpenPdfName(match.name);
+              setTab("pdf");
             },
           });
           if(t==="today" || t==="daily") return React.createElement(DailyView,{

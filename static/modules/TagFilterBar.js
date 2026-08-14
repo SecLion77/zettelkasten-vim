@@ -39,10 +39,25 @@ const TagFilterBar = ({tags=[], activeTag, onChange, compact=false, tagColors={}
   const hiddenCount = filtered.length - maxVisible;
   const hasMore     = hiddenCount > 0;
 
-  // activeTag kan een string zijn (enkelvoudig) of een Set (multi-select)
-  const isActive = (t) => activeTag instanceof Set
-    ? activeTag.has(t)
-    : isActive(t);
+  // activeTag kan een string zijn (enkelvoudig, bestaand gedrag — Graph.js,
+  // PDFViewer.js) of een Set (multi-select — bv. LLMNotebook). Alle logica
+  // hieronder werkt voor beide, zonder dat bestaande aanroepers iets hoeven
+  // te veranderen.
+  const isActive   = (t) => activeTag instanceof Set ? activeTag.has(t) : activeTag === t;
+  const hasFilter  = activeTag instanceof Set ? activeTag.size > 0 : !!activeTag;
+  // Reset naar het "lege" filter in hetzelfde type als het huidige gebruik
+  // (lege Set voor multi-select, null voor enkelvoudig) — zo hoeft een
+  // multi-select-aanroeper na het wissen niet zelf te herstellen naar een Set.
+  const clearFilter = () => onChange(activeTag instanceof Set ? new Set() : null);
+  const toggleTag = (t) => {
+    if (activeTag instanceof Set) {
+      const next = new Set(activeTag);
+      next.has(t) ? next.delete(t) : next.add(t);
+      onChange(next);
+    } else {
+      onChange(activeTag === t ? null : t);
+    }
+  };
 
   // chipStyle: geef alleen layout terug — kleur komt via CSS klasse .zk-chip
   const chipStyle = (t, active) => ({
@@ -66,7 +81,7 @@ const TagFilterBar = ({tags=[], activeTag, onChange, compact=false, tagColors={}
   // Header-rij: "TAGS" label + actief filter + inklapknop
   const header = React.createElement("div",{
     style:{display:"flex", alignItems:"center", gap:"5px",
-           marginBottom: open||activeTag ? "5px" : "0"}
+           marginBottom: open||hasFilter ? "5px" : "0"}
   },
     // Inklapknop + label
     React.createElement("span",{
@@ -90,19 +105,21 @@ const TagFilterBar = ({tags=[], activeTag, onChange, compact=false, tagColors={}
     // Badge: aantal tags + actief filter indicator
     React.createElement("span",{style:{
       fontSize:"11px", padding:"2px 7px", borderRadius:"4px",
-      background: activeTag ? (W.tagBg||"rgba(159,202,86,0.14)") : (W.commentBg3||"rgba(255,255,255,0.07)"),
-      color: activeTag ? (W.tagColor||W.comment) : W.fgMuted,
-      border:`1px solid ${activeTag ? (W.tagBorder||"rgba(159,202,86,0.45)") : (W.splitBg||"rgba(255,255,255,0.14)")}`,
-      fontWeight: activeTag ? "600" : "400",
+      background: hasFilter ? (W.tagBg||"rgba(159,202,86,0.14)") : (W.commentBg3||"rgba(255,255,255,0.07)"),
+      color: hasFilter ? (W.tagColor||W.comment) : W.fgMuted,
+      border:`1px solid ${hasFilter ? (W.tagBorder||"rgba(159,202,86,0.45)") : (W.splitBg||"rgba(255,255,255,0.14)")}`,
+      fontWeight: hasFilter ? "600" : "400",
       cursor:"default",
     }},
       activeTag instanceof Set
-        ? (activeTag.size === 0 ? `${tags.length}` : [...activeTag].map(t=>"#"+t).join(", "))
+        ? (activeTag.size === 0 ? `${tags.length}`
+           : activeTag.size <= 3 ? [...activeTag].map(t=>"#"+t).join(", ")
+           : `${activeTag.size} tags`)
         : activeTag ? `#${activeTag}` : `${tags.length}`
     ),
     // "× wis filter" knopje als er een actief filter is
-    activeTag && React.createElement("span",{
-      onClick:()=>onChange(null),
+    hasFilter && React.createElement("span",{
+      onClick: clearFilter,
       title:"Filter wissen",
       style:{
         fontSize:"12px", color:W.orange, cursor:"pointer",
@@ -122,14 +139,14 @@ const TagFilterBar = ({tags=[], activeTag, onChange, compact=false, tagColors={}
       header,
       React.createElement("div",{style:{display:"flex",flexWrap:"wrap",gap,alignItems:"center",minWidth:0}},
         React.createElement("span",{
-          onClick:()=>onChange(null),
-          className: "zk-chip" + (!activeTag ? " zk-chip-active" : ""),
-          style: chipStyle(null, !activeTag)
+          onClick: clearFilter,
+          className: "zk-chip" + (!hasFilter ? " zk-chip-active" : ""),
+          style: chipStyle(null, !hasFilter)
         }, "alles"),
         ...visibleTags.map(t => React.createElement("span",{
-          key:t, onClick:()=>onChange(activeTag===t ? null : t),
-          className: "zk-chip" + (activeTag===t ? " zk-chip-active" : ""),
-          style: chipStyle(t, activeTag===t),
+          key:t, onClick:()=>toggleTag(t),
+          className: "zk-chip" + (isActive(t) ? " zk-chip-active" : ""),
+          style: chipStyle(t, isActive(t)),
           title:"#"+t,
         }, "#"+t)),
         // "… N meer" knop
@@ -193,16 +210,16 @@ const TagFilterBar = ({tags=[], activeTag, onChange, compact=false, tagColors={}
     }},
       // "alles" chip altijd bovenaan
       React.createElement("span",{
-        onClick:()=>onChange(null), style:chipStyle(null)
+        onClick: clearFilter, style:chipStyle(null, !hasFilter)
       }, "alles"),
       filtered.length === 0
         ? React.createElement("span",{style:{fontSize:"12px",color:W.fgMuted,fontStyle:"italic"}},
             "geen tags gevonden")
         : filtered.map(t => React.createElement("span",{
             key:t,
-            onClick:()=>onChange(activeTag===t ? null : t),
-            className: "zk-chip" + (activeTag===t ? " zk-chip-active" : ""),
-            style: chipStyle(t, activeTag===t)
+            onClick:()=>toggleTag(t),
+            className: "zk-chip" + (isActive(t) ? " zk-chip-active" : ""),
+            style: chipStyle(t, isActive(t))
           }, "#"+t))
     ),
 

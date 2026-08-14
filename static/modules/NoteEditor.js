@@ -28,11 +28,16 @@ const NoteEditor = ({
   const [editTitle,   setEditTitle]   = useState(note?.title   || "");
   const [editContent, setEditContent] = useState(note?.content || "");
   const [editTags,    setEditTags]    = useState(note?.tags    || []);
-  const [outlineMode, setOutlineMode] = useState(false);
 
   // iPad/iOS: detecteer touch-apparaat voor native textarea modus
   const isTouch = typeof window !== "undefined" &&
     ("ontouchstart" in window || navigator.maxTouchPoints > 0);
+
+  // Op touch-apparaten: start expliciet in OutlineEditor (gewone textarea,
+  // geen modale Vim-toetsen nodig) i.p.v. impliciet met VimEditor te starten
+  // en de gebruiker zelf de kleine toolbar-knop te laten vinden. VimEditor
+  // blijft één klik weg voor wie een toetsenbord heeft aangesloten.
+  const [outlineMode, setOutlineMode] = useState(isTouch);
 
   const titleRef   = useRef(null);
   const contentRef = useRef(null);
@@ -150,14 +155,21 @@ const NoteEditor = ({
     ...[
       { label: "◎ focus", show: true,        onClick: onToggleGoyo,
         active: goyoMode, color: goyoMode ? W.comment : W.fgMuted },
-      { label: "☰ outline", show: !isMobile, onClick: () => setOutlineMode(p => !p),
+      // Altijd zichtbaar op touch (ongeacht isMobile, dat puur op vensterbreedte
+      // let en in iPad-split-view/kleinere iPads al snel "mobiel" aangeeft) —
+      // anders is er geen zichtbare uitweg uit modale Vim op zo'n scherm.
+      { label: outlineMode ? "⌨ Vim" : "☰ Outline", show: !isMobile || isTouch,
+        onClick: () => setOutlineMode(p => !p),
+        title: outlineMode
+          ? "Wissel naar Vim-editor (toetsenbord aanbevolen)"
+          : "Wissel naar eenvoudige outline-editor (geen toetsenbord-commando's nodig)",
         active: outlineMode, color: outlineMode ? W.purple : W.fgMuted },
       { label: "✓ opslaan", show: true,       onClick: () => { if (handleSave()) onClose?.(); },
         color: W.bg, fgColor: W.bg, bg: "rgba(159,202,86,0.85)", bold: true },
       { label: "✕ sluiten", show: true,       onClick: onClose,     color: W.fgMuted },
       { label: "🗑 del",    show: !isMobile,  onClick: onDelete,    color: W.orange },
     ].filter(b => b.show).map((b, i) => React.createElement("button", {
-      key: i, onClick: b.onClick,
+      key: i, onClick: b.onClick, title: b.title,
       style: { border: `1px solid ${b.bg || W.splitBg}`, borderRadius: "6px",
                padding: isMobile ? "7px 12px" : "4px 10px",
                color: b.fgColor || b.color,

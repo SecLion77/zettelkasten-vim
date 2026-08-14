@@ -104,7 +104,7 @@ const smartCropBookCover = (file) => new Promise((resolve, reject) => {
 });
 
 const BookLibrary = (
-{ notes = [], onNotesChange, onOpenNote }) => {
+{ notes = [], onNotesChange, onOpenNote, serverPdfs = [], onReadBook }) => {
   const { useState, useMemo, useCallback } = React;
 
   // ── State ──────────────────────────────────────────────────────────────────
@@ -447,14 +447,23 @@ const BookLibrary = (
                     React.createElement("div",{style:S.cardBody},
                       React.createElement("div",{style:S.cardTitle},book.titel),
                       React.createElement("div",{style:S.cardAuthor},book.auteur||"—"),
-                      React.createElement("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",marginTop:"auto",paddingTop:"4px"}},
+                      React.createElement("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",marginTop:"auto",paddingTop:"4px",gap:"4px"}},
                         statusBadge(book.status, ()=>cycleStatus(book)),
-                        React.createElement("button",{
-                          onClick:e=>{e.stopPropagation();openEdit(book);},
-                          style:{background:"rgba(138,198,242,0.12)",border:`1px solid ${W.blue||"#7aa8c8"}`,
-                            color:W.blue||"#7aa8c8",cursor:"pointer",fontSize:"12px",
-                            borderRadius:"5px",padding:"2px 8px",fontWeight:"600"}
-                        },"✏ Bewerken")
+                        React.createElement("div",{style:{display:"flex",gap:"4px"}},
+                          book.type==="ebook" && React.createElement("button",{
+                            onClick:e=>{e.stopPropagation();onReadBook?.(book);},
+                            title:"Open bijbehorend PDF om te lezen/highlighten",
+                            style:{background:"rgba(159,202,86,0.12)",border:`1px solid ${W.comment||"#9fca56"}`,
+                              color:W.comment||"#9fca56",cursor:"pointer",fontSize:"12px",
+                              borderRadius:"5px",padding:"2px 8px",fontWeight:"600"}
+                          },"📖 Lees"),
+                          React.createElement("button",{
+                            onClick:e=>{e.stopPropagation();openEdit(book);},
+                            style:{background:"rgba(138,198,242,0.12)",border:`1px solid ${W.blue||"#7aa8c8"}`,
+                              color:W.blue||"#7aa8c8",cursor:"pointer",fontSize:"12px",
+                              borderRadius:"5px",padding:"2px 8px",fontWeight:"600"}
+                          },"✏ Bewerken")
+                        )
                       )
                     )
                   )
@@ -490,6 +499,11 @@ const BookLibrary = (
                       )
                     ),
                     statusBadge(book.status, ()=>cycleStatus(book)),
+                    book.type==="ebook" && React.createElement("button",{
+                      onClick:e=>{e.stopPropagation();onReadBook?.(book);},
+                      title:"Open bijbehorend PDF om te lezen/highlighten",
+                      style:{background:"none",border:"none",color:W.comment||"#9fca56",cursor:"pointer",fontSize:"13px",padding:"0 4px"}
+                    },"📖 Lees"),
                     React.createElement("button",{
                       onClick:e=>{e.stopPropagation();openEdit(book);},
                       style:{background:"none",border:"none",color:W.fgDim,cursor:"pointer",fontSize:"13px",padding:"0 4px"}
@@ -576,7 +590,13 @@ const BookLibrary = (
               }, book.isRead ? "✅" : "⬜")
             ),
             // Bewerken
-            React.createElement("td",{style:{padding:"6px 10px",textAlign:"right"}},
+            React.createElement("td",{style:{padding:"6px 10px",textAlign:"right",whiteSpace:"nowrap"}},
+              book.type==="ebook" && React.createElement("button",{
+                onClick:e=>{e.stopPropagation();onReadBook?.(book);},
+                title:"Open bijbehorend PDF om te lezen/highlighten",
+                style:{background:"none",border:"none",color:W.comment||"#9fca56",
+                       cursor:"pointer",fontSize:"13px",padding:"0 4px"}
+              },"📖 Lees"),
               React.createElement("button",{
                 onClick:e=>{e.stopPropagation();openEdit(book);},
                 style:{background:"none",border:"none",color:W.fgDim,
