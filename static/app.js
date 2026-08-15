@@ -2447,7 +2447,10 @@ const App = () => {
                 );
               })()
             ,
-              renderTab(splitTab, true),
+              // Notebook in het rechterpaneel: hergebruikt dezelfde persistente
+              // instantie als de hoofdweergave (llmTabEl bestaat maar één keer,
+              // zie boven) i.p.v. 'm via renderTab opnieuw te laten aanmaken.
+              splitTab === "llm" ? llmTabEl : renderTab(splitTab, true),
               // ── Preview overlay in rechter paneel ──────────────────────────
               // Toont gevonden notitie als preview zonder de linker notitie te verstoren
               splitSelId && (() => {
