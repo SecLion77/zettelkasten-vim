@@ -1,10 +1,14 @@
 // ── ImagesGallery ────────────────────────────────────────────────────────────
 // Deps: W, api, genId, renderMd
 
-const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote, setAiStatus,
+const ImagesGallery = ({serverImages, onRefresh, llmModel, taskLlmModel="", onAddNote, setAiStatus,
                         notes, onDeleteNote, imgNotes, setImgNotes, allTags,
                         addJob, updateJob, onPasteToNote=null}) => {
   const { useState, useRef, useCallback, useEffect, useMemo } = React;
+
+  // Model per taak: expliciete instelling (VaultSettings → Modellen) wint,
+  // anders het hoofdmodel, anders een vision-model als laatste redmiddel.
+  const effectiveModel = taskLlmModel || llmModel || "llama3.2-vision";
 
   const [busy,          setBusy]         = useState(null);
   const [descriptions,  setDescs]        = useState({});
@@ -187,7 +191,7 @@ const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote, setAiStatu
     // Achtergrond — UI blijft vrij
     (async () => {
       try {
-        const model = llmModel || "llama3.2-vision";
+        const model = effectiveModel;
         const res   = await api.llmDescribeImage(fname, model, ctrl.signal);
         if (res?.description) {
           // Sla beschrijving op in setDescs (live UI)
@@ -221,7 +225,7 @@ const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote, setAiStatu
         }
       } finally { setBusy(null); }
     })();
-  }, [llmModel, onAddNote, addJob, updateJob, setImgNotes]);
+  }, [effectiveModel, onAddNote, addJob, updateJob, setImgNotes]);
 
   const deleteImg = useCallback(async (fname) => {
     const linked = (notes||[]).filter(n =>
@@ -302,6 +306,18 @@ const ImagesGallery = ({serverImages, onRefresh, llmModel, onAddNote, setAiStatu
           letterSpacing:"1.5px",fontWeight:"bold"}},"AFBEELDINGEN"),
         React.createElement("span",{style:{background:W.blue,color:W.bg,
           borderRadius:"10px",padding:"0 7px",fontSize:"14px"}}, imgs.length),
+        // Indicator: een ander model dan het hoofdmodel is ingesteld voor
+        // deze taak (VaultSettings → Modellen → "Model per taak")
+        taskLlmModel && React.createElement("span",{
+          title:`Deze tab gebruikt een eigen model (${taskLlmModel}) i.p.v. het hoofdmodel — instelbaar bij Instellingen → Modellen`,
+          style:{
+            display:"flex",alignItems:"center",gap:"4px",
+            fontSize:"11px",color:"#a8d8f0",
+            background:"rgba(138,198,242,0.1)",
+            border:"1px solid rgba(138,198,242,0.3)",
+            borderRadius:"10px",padding:"2px 9px",
+          }
+        }, "🧠 ", taskLlmModel),
         React.createElement("div",{style:{flex:1}}),
         // Zoekbalk
         React.createElement("input",{

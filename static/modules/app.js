@@ -1104,12 +1104,6 @@ const App = () => {
   const _cleanModel = EMBED_PATS.some(p=>_savedModel.toLowerCase().includes(p))
     ? "gemma3:12b" : _savedModel;
   const [llmModel,     setLlmModel]    = useState(_cleanModel);
-  // Bug: zk_model werd wel GELEZEN bij opstarten, maar nooit teruggeschreven
-  // naar localStorage bij een modelwissel — elke keuze ging dus verloren na
-  // een herlaad/herstart. Nu synchroon bewaard bij elke wijziging.
-  React.useEffect(() => {
-    if (llmModel) localStorage.setItem("zk_model", llmModel);
-  }, [llmModel]);
   // Model per taak (optioneel override, leeg = val terug op llmModel) —
   // ingesteld via VaultSettings → tab "Modellen".
   const [imageLlmModel,    setImageLlmModel]    = useState("");

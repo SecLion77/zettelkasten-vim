@@ -1,7 +1,7 @@
 // ── VaultSettings ────────────────────────────────────────────────────────────
 // Deps: W, api
 
-const VaultSettings = ({vaultPath, onChangeVault, onClose}) => {
+const VaultSettings = ({vaultPath, onChangeVault, onClose, onTaskModelsChange=null}) => {
   const { useState, useEffect } = React;
   const [tab,      setTab]     = useState("vault");   // "vault" | "keys" | "pdf" | "weergave" | "offline"
   const [newPath,  setNewPath] = useState(vaultPath);
@@ -91,6 +91,15 @@ const VaultSettings = ({vaultPath, onChangeVault, onClose}) => {
   const [expandedProvider, setExpandedProvider] = useState(null);
   const [testResults, setTestResults] = useState({}); // {providerId: {ok, msg, loading}}
 
+  // Model per taak — "" betekent: val terug op het standaardmodel voor die taak
+  const [imageLlmModel,    setImageLlmModel]    = useState("");
+  const [semanticLlmModel, setSemanticLlmModel] = useState("");
+  const [taskModelsMsg,    setTaskModelsMsg]    = useState("");
+  // Welke modellen zijn daadwerkelijk lokaal geïnstalleerd (Ollama) — om de
+  // standaardwaarden (llama3.2-vision / nomic-embed-text) als beschikbaar
+  // of ontbrekend te kunnen tonen i.p.v. een blinde lege keuze.
+  const [installedModels,  setInstalledModels]  = useState(null); // null = nog aan het laden
+
   // PDF personal use state
   const [personalUse,      setPersonalUse]      = useState(false);
   const [personalEmail,    setPersonalEmail]    = useState("");
@@ -107,7 +116,15 @@ const VaultSettings = ({vaultPath, onChangeVault, onClose}) => {
       setPersonalUse(!!cfg.pdf_personal_use);
       setPersonalEmail(cfg.pdf_personal_email || "");
       setJanUrl(cfg.jan_url || "http://127.0.0.1:1337");
+      setImageLlmModel(cfg.image_llm_model || "");
+      setSemanticLlmModel(cfg.semantic_llm_model || "");
     }).catch(()=>{});
+    // Lokaal geïnstalleerde Ollama-modellen — voor de beschikbaarheids-
+    // indicator bij "Model per taak" hieronder.
+    fetch("/api/ollama-models", { method:"POST", headers:{"Content-Type":"application/json"}, body:"{}" })
+      .then(r=>r.json())
+      .then(d => setInstalledModels(d.models || []))
+      .catch(() => setInstalledModels([]));
   }, []);
 
   const savePdfSettings = async () => {
@@ -119,6 +136,15 @@ const VaultSettings = ({vaultPath, onChangeVault, onClose}) => {
       setPdfMsg("✓ Opgeslagen");
       setTimeout(() => setPdfMsg(""), 3000);
     } catch(e) { setPdfMsg("✗ " + e.message); }
+  };
+
+  const saveTaskModels = async (patch) => {
+    try {
+      await api.post("/config", patch);
+      onTaskModelsChange?.(patch);
+      setTaskModelsMsg("✓ Opgeslagen");
+      setTimeout(() => setTaskModelsMsg(""), 2000);
+    } catch(e) { setTaskModelsMsg("✗ " + e.message); }
   };
 
   const applyVault = async () => {
@@ -759,10 +785,104 @@ const VaultSettings = ({vaultPath, onChangeVault, onClose}) => {
           )
         ),
 
-        // ── WEERGAVE TAB ─────────────────────────────────────────────────────
+        // ── MODELLEN TAB ─────────────────────────────────────────────────────
         tab==="modellen" && React.createElement("div", {
           style: { display:"flex", flexDirection:"column", gap:"20px" }
         },
+          // ── Model per taak ───────────────────────────────────────────────
+          // Voor sommige taken is een ander model handiger dan het hoofdmodel
+          // (bv. een vision-model voor afbeeldingen, of een lichter/sneller
+          // model voor semantisch zoeken). Leeg = val terug op het hoofdmodel
+          // dat je in de hoofdbalk kiest (ModelPicker).
+          React.createElement("div", {
+            style: { border:`1px solid ${W.splitBg}`, borderRadius:"7px", padding:"14px 16px" }
+          },
+            React.createElement("div", {
+              style: { fontSize:"13px", fontWeight:"600", color:W.fg, marginBottom:"4px" }
+            }, "Model per taak"),
+            React.createElement("div", {
+              style: { fontSize:"12px", color:W.fgDim, lineHeight:"1.5", marginBottom:"14px" }
+            },
+              "Leeg = gebruik het hoofdmodel dat je bovenin kiest. Alleen invullen als je",
+              " voor deze taak bewust een ander model wilt."
+            ),
+
+            [
+              { key:"image_llm_model",    label:"Afbeeldingen",        value:imageLlmModel,    setValue:setImageLlmModel,
+                defaultModel:"llama3.2-vision",
+                hint:"Gebruikt bij het analyseren/beschrijven van afbeeldingen (Plaatjes-tab)." },
+              { key:"semantic_llm_model", label:"Semantisch zoeken",   value:semanticLlmModel, setValue:setSemanticLlmModel,
+                defaultModel:"nomic-embed-text",
+                hint:"Gebruikt voor de embeddings bij semantisch zoeken (Ontdekken-tab) — bewust niet het hoofdmodel, want dat is meestal een chat-model en geen embedding-model." },
+            ].map(row => {
+              // Staat het standaardmodel voor deze taak lokaal geïnstalleerd?
+              // Zo ja: toon 'm automatisch geselecteerd i.p.v. een lege
+              // placeholder — precies het model dat er anders toch gebruikt
+              // wordt als je hier niets kiest.
+              const defaultInstalled = installedModels?.some(
+                m => m === row.defaultModel || m.startsWith(row.defaultModel + ":")
+              );
+              const effectiveValue = row.value || (defaultInstalled ? row.defaultModel : "");
+              return React.createElement("div", {
+                key: row.key, style:{ marginBottom:"12px" }
+              },
+                React.createElement("label", {
+                  style:{ display:"block", fontSize:"12px", color:W.fgMuted, marginBottom:"4px" }
+                }, row.label),
+                React.createElement("select", {
+                  value: effectiveValue,
+                  onChange: e => {
+                    const v = e.target.value;
+                    row.setValue(v);
+                    saveTaskModels({ [row.key]: v });
+                  },
+                  style: {
+                    width:"100%", background:W.bg, border:`1px solid ${W.splitBg}`,
+                    borderRadius:"5px", padding:"6px 8px", color:W.fg, fontSize:"13px",
+                  }
+                },
+                  React.createElement("option", { value:"" },
+                    defaultInstalled
+                      ? `— Automatisch (${row.defaultModel}) —`
+                      : "— Automatisch —"),
+                  React.createElement("optgroup", { label:"Online" },
+                    ...ONLINE_MODELS.map(m => React.createElement("option", { key:m.id, value:m.id }, m.label))
+                  ),
+                  React.createElement("optgroup", { label:"Lokaal (Ollama)" },
+                    ...[
+                      {id:"qwen3:8b",       label:"Qwen3 8B"},
+                      {id:"gemma3:12b",     label:"Gemma 3 12B"},
+                      {id:"llama3.3:8b",    label:"Llama 3.3 8B"},
+                      {id:"llama3.2-vision",label:"Llama 3.2 Vision"},
+                      {id:"nomic-embed-text",label:"nomic-embed-text (embeddings)"},
+                    ].map(m => React.createElement("option", { key:m.id, value:m.id }, m.label))
+                  ),
+                  customModels.length > 0 && React.createElement("optgroup", { label:"Aangepast" },
+                    ...customModels.map(m => React.createElement("option", { key:m.id, value:m.id }, m.label || m.id))
+                  ),
+                ),
+                // Rustige, niet-blokkerende toelichting — geen waarschuwing.
+                // Alle modellen blijven altijd gewoon kiesbaar, ongeacht of
+                // het standaardmodel al dan niet geïnstalleerd is.
+                React.createElement("div", {
+                  style:{ fontSize:"11px", color:W.fgDim, marginTop:"3px", lineHeight:"1.4" }
+                },
+                  row.hint,
+                  installedModels !== null && !defaultInstalled && !row.value &&
+                    ` (${row.defaultModel} is nog niet geïnstalleerd — kies hierboven gerust een ander model, of installeer met `,
+                  installedModels !== null && !defaultInstalled && !row.value &&
+                    React.createElement("code",{key:"cmd",style:{fontSize:"10.5px"}}, `ollama pull ${row.defaultModel}`),
+                  installedModels !== null && !defaultInstalled && !row.value && ".)"
+                )
+              );
+            }),
+
+            taskModelsMsg && React.createElement("div", {
+              style:{ fontSize:"12px", marginTop:"4px",
+                      color: taskModelsMsg.startsWith("✓") ? W.comment : W.orange }
+            }, taskModelsMsg)
+          ),
+
           // Instructie
           React.createElement("div", {
             style: { fontSize:"13px", color:W.fgDim, lineHeight:"1.6",

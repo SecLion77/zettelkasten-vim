@@ -2,8 +2,8 @@
 // Zoekt notities op betekenis via lokale Ollama embeddings (nomic-embed-text).
 // Bouwt een index op en bewaart die in de vault als .zettelkasten_embeddings.json
 
-const SemanticSearch = ({ notes = [], onOpenNote, llmModel = "" }) => {
-  const { useState, useEffect, useCallback, useMemo } = React;
+const SemanticSearch = ({ notes = [], onOpenNote, llmModel = "", taskLlmModel = "" }) => {
+  const { useState, useEffect, useCallback, useMemo, useRef } = React;
 
   const [query,       setQuery]       = useState("");
   const [results,     setResults]     = useState([]);
@@ -12,8 +12,20 @@ const SemanticSearch = ({ notes = [], onOpenNote, llmModel = "" }) => {
   const [indexing,    setIndexing]    = useState(false);
   const [indexPct,    setIndexPct]    = useState(0);
   const [error,       setError]       = useState("");
-  const [embedModel,  setEmbedModel]  = useState("nomic-embed-text");
+  const [embedModel,  setEmbedModel]  = useState(taskLlmModel || "nomic-embed-text");
   const [ollamaModels,setOllamaModels]= useState([]);
+
+  // Model per taak (VaultSettings → Modellen), anders direct nomic-embed-text
+  // — NIET het hoofdmodel: semantisch zoeken heeft een embedding-model
+  // nodig, en het hoofdmodel is vrijwel altijd een gewoon chat-model
+  // (bv. gemma3:12b), dat Ollama's embeddings-endpoint niet kan bedienen.
+  // Alleen zolang de gebruiker deze sessie niet zelf iets anders koos
+  // in de dropdown hieronder.
+  const userPickedModelRef = useRef(false);
+  useEffect(() => {
+    if (userPickedModelRef.current) return;
+    setEmbedModel(taskLlmModel || "nomic-embed-text");
+  }, [taskLlmModel]);
 
   // ── Laad status bij mount ─────────────────────────────────────────────────
   useEffect(() => {
@@ -31,7 +43,17 @@ const SemanticSearch = ({ notes = [], onOpenNote, llmModel = "" }) => {
         const emb = (d.models || []).filter(m =>
           m.includes("embed") || m.includes("nomic") || m.includes("mxbai")
         );
-        if (emb.length > 0) { setOllamaModels(emb); setEmbedModel(emb[0]); }
+        if (emb.length > 0) {
+          setOllamaModels(emb);
+          // Automatisch kiezen alleen als er geen ingestelde taak-voorkeur is
+          // (VaultSettings → Modellen) en de gebruiker deze sessie nog niets
+          // zelf koos — anders overschrijft dit stilzwijgend een bewuste
+          // instelling. Geen check op llmModel meer: het hoofdmodel is geen
+          // geldige fallback voor embeddings, dus die telt hier niet mee.
+          if (!taskLlmModel && !userPickedModelRef.current) {
+            setEmbedModel(emb[0]);
+          }
+        }
       })
       .catch(() => {});
   }, [notes.length]);
@@ -131,8 +153,21 @@ const SemanticSearch = ({ notes = [], onOpenNote, llmModel = "" }) => {
       style: { padding:"16px 20px", borderBottom:`1px solid ${W.splitBg}`,
                display:"flex", flexDirection:"column", gap:"10px" }
     },
-      React.createElement("div", { style:{fontWeight:"700",fontSize:"15px",color:W.fg} },
-        "🔍 Semantisch zoeken"),
+      React.createElement("div", { style:{fontWeight:"700",fontSize:"15px",color:W.fg,display:"flex",alignItems:"center",gap:"8px"} },
+        "🔍 Semantisch zoeken",
+        // Indicator: een ander model dan het hoofdmodel is ingesteld voor
+        // deze taak (VaultSettings → Modellen → "Model per taak")
+        taskLlmModel && React.createElement("span",{
+          title:`Deze tab gebruikt een eigen model (${taskLlmModel}) i.p.v. het hoofdmodel — instelbaar bij Instellingen → Modellen`,
+          style:{
+            display:"flex",alignItems:"center",gap:"4px",
+            fontSize:"11px",fontWeight:"400",color:"#a8d8f0",
+            background:"rgba(138,198,242,0.1)",
+            border:"1px solid rgba(138,198,242,0.3)",
+            borderRadius:"10px",padding:"2px 9px",
+          }
+        }, "🧠 ", taskLlmModel)
+      ),
       React.createElement("div", { style:{fontSize:"12px",color:W.fgMuted} },
         "Zoekt op betekenis via lokale Ollama embeddings — vindt ook zonder exacte woorden."),
 
@@ -162,7 +197,7 @@ const SemanticSearch = ({ notes = [], onOpenNote, llmModel = "" }) => {
       },
         // Model selector (toon alleen als er embedding-modellen zijn)
         ollamaModels.length > 1 && React.createElement("select", {
-          value: embedModel, onChange: e => setEmbedModel(e.target.value),
+          value: embedModel, onChange: e => { userPickedModelRef.current = true; setEmbedModel(e.target.value); },
           style: { background:W.bg2, border:`1px solid ${W.splitBg}`,
                    color:W.fg, borderRadius:"5px", padding:"3px 8px",
                    fontSize:"11px", cursor:"pointer" }
