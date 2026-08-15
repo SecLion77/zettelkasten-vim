@@ -1515,6 +1515,20 @@ const App = () => {
     editorFocusTrigger,
   });
 
+  // Notebook (LLM-chat) altijd in DOM — display:none bewaart chatgeschiedenis,
+  // zoekresultaten, tag-filter en contextselectie bij het wisselen van tab.
+  // Zelfde patroon als notesTabEl hierboven. Een "opnieuw beginnen"-knop zit
+  // in LLMNotebook zelf (zie MermaidEditor.js) voor wie bewust wil resetten.
+  const llmTabEl = React.createElement(LLMNotebook,{notes,pdfNotes,serverPdfs,serverImages,allTags,llmModel,setLlmModel,
+    onMindmapReady:(mm)=>{ setAiMindmap(mm); setTab("mindmap"); },
+    onAddNote:async(note)=>{
+      const saved=await NoteStore.save(note);
+      setNotes([...NoteStore.getAll()]); setSelId(saved.id); setTab("notes");
+    },
+    onPasteToNote: selId ? handlePasteToNote : null,
+    prefillMsg: window._notebookPrefill || null,
+  });
+
   // Houd sidebarOverlay hier — het is App-layout, niet notitie-logica
   // Alleen op mobiel (niet tablet) — tablet heeft eigen inklapbare sidebar in NotesTab
   const sidebarOverlay = isMobile && sidebarOpen && React.createElement(React.Fragment, null,
@@ -1930,6 +1944,15 @@ const App = () => {
         }
       }, notesTabEl),
 
+      // Notebook altijd in DOM — display:none bewaart chatgeschiedenis e.d.
+      React.createElement("div", {
+        key:"llm-always",
+        style:{
+          flex:1, display:(tab==="llm"&&!splitMode)?"flex":"none",
+          flexDirection:"column", overflow:"hidden", minHeight:0
+        }
+      }, llmTabEl),
+
       // Andere tabs: alleen renderen als actief
       (tab!=="notes"||splitMode) && (() => {
         const renderTab = (t, isSplitRight=false) => {
@@ -2183,16 +2206,6 @@ const App = () => {
                 const saved=await NoteStore.save(note);
                 setNotes([...NoteStore.getAll()]); setSelId(saved.id); setTab("notes");
               }}));
-          if(t==="llm") return React.createElement("div",{style:{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",minHeight:0}},
-            React.createElement(LLMNotebook,{notes,pdfNotes,serverPdfs,serverImages,allTags,llmModel,setLlmModel,
-              onMindmapReady:(mm)=>{ setAiMindmap(mm); setTab("mindmap"); },
-              onAddNote:async(note)=>{
-                const saved=await NoteStore.save(note);
-                setNotes([...NoteStore.getAll()]); setSelId(saved.id); setTab("notes");
-              },
-              onPasteToNote: selId ? handlePasteToNote : null,
-              prefillMsg: window._notebookPrefill || null,
-            }));
           if(t==="semantic") return React.createElement(SemanticSearch,{
             notes,
             llmModel,

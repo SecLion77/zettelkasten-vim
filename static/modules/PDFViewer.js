@@ -433,6 +433,9 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
   const [pdfFile,    setPdfFile]    = useState(null);
   const [pageNum,    setPageNum]    = useState(1);   // huidige zichtbare pagina (voor annotaties)
   const pageNumRef      = useRef(1);      // ref-versie: altijd actueel zonder closure-problemen
+  const pdfDocRef        = useRef(null);
+  const scaleRef         = useRef(1.4);
+  const rotationRef      = useRef(0);
   const scrollToPageRef  = useRef(null);   // ref naar scrollToPage — vermijdt circular dependency
   const searchIdRef      = useRef(0);      // annuleer lopende zoekopdracht bij nieuwe query
   const [isSearching,  setIsSearching]  = useState(false);
@@ -622,6 +625,9 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
         wrapRef.current.style.userSelect = "";
         wrapRef.current.style.webkitUserSelect = "";
       }
+      // Selectie losgelaten: eventueel uitgestelde cache-opschoning
+      // (zie renderNearby) alsnog laten plaatsvinden.
+      if (pdfDocRef.current) renderNearby(pdfDocRef.current, scaleRef.current, rotationRef.current, pageNumRef.current);
     };
 
     el.addEventListener("mousedown", onDown);
@@ -756,6 +762,11 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
   // ── Laad nabije pagina's bij paginawisseling ──────────────────────────────
   const renderNearby = useCallback(async (doc, sc, rot, centerPage) => {
     if (!doc) return;
+    // Tijdens een actieve sleep-selectie (muis): niets aan de gerenderde
+    // pagina's wijzigen — dat zou de tekst-DOM onder de cursor vervangen en
+    // de lopende browser-selectie afbreken. onUp() roept renderNearby()
+    // hierna alsnog aan om bij te werken.
+    if (isSelectingRef.current) return;
     const myId = renderIdRef.current; // gebruik huidig ID — geen nieuwe render-ronde
     const start = Math.max(1, centerPage - RENDER_WINDOW);
     const end   = Math.min(doc.numPages, centerPage + RENDER_WINDOW);
@@ -769,6 +780,7 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
 
     for (let i = start; i <= end; i++) {
       if (renderIdRef.current !== myId) return;
+      if (isSelectingRef.current) return; // ook mid-lus afbreken als selectie start
       if (pageCacheRef.current.has(i)) continue;
       const entry = await renderOnePage(doc, i, sc, rot, myId);
       if (!entry || renderIdRef.current !== myId) return;
@@ -798,6 +810,9 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
 
   // Sync pageNumRef — altijd up-to-date zonder closure problemen
   React.useEffect(() => { pageNumRef.current = pageNum; }, [pageNum]);
+  React.useEffect(() => { pdfDocRef.current = pdfDoc; }, [pdfDoc]);
+  React.useEffect(() => { scaleRef.current = scale; }, [scale]);
+  React.useEffect(() => { rotationRef.current = rotation; }, [rotation]);
   // Registreer scrollToPage in ref zodat renderVirtual hem kan aanroepen zonder dep
   React.useEffect(() => { scrollToPageRef.current = scrollToPage; }, [scrollToPage]);
 
@@ -981,6 +996,51 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
   }, [showRelated, floatBar?.text, fetchRelated]);
 
 
+  // ── mergeRectsByLine ────────────────────────────────────────────────────
+  // range.getClientRects() geeft vaak meerdere kleine deel-rechthoeken per
+  // zichtbare regel (één per tekstlaag-span-grens), met soms een paar pixels
+  // tussenruimte — vooral bij PDF's met lettertype-substitutie (zie console-
+  // warnings elders). Los getekend levert dat een grillig, "gaten"-patroon
+  // op i.p.v. een nette doorlopende markering. Groepeer daarom rects die
+  // verticaal overlappen (dezelfde regel) tot één rechthoek per regel, zoals
+  // gangbare PDF-lezers (Adobe, Preview) dat ook doen.
+  const mergeRectsByLine = (rects) => {
+    if (!rects.length) return rects;
+    const sorted = [...rects].sort((a, b) => a.y - b.y);
+    const lines = [];
+    for (const r of sorted) {
+      let line = lines.find(l => r.y < l.y + l.h && r.y + r.h > l.y); // verticale overlap
+      if (!line) { line = { y: r.y, h: r.h, items: [] }; lines.push(line); }
+      const minY = Math.min(line.y, r.y);
+      const maxYH = Math.max(line.y + line.h, r.y + r.h);
+      line.y = minY; line.h = maxYH - minY;
+      line.items.push(r);
+    }
+    // Binnen elke "regel"-groep: splits alsnog als er een grote horizontale
+    // sprong tussen twee fragmenten zit (bv. de tussenruimte tussen twee
+    // kolommen) — dat is geen tekstlaag-spangat maar een echte kolomgrens.
+    const out = [];
+    for (const line of lines) {
+      const items = [...line.items].sort((a, b) => a.x - b.x);
+      let cluster = [items[0]];
+      const flush = () => {
+        const minX = Math.min(...cluster.map(r => r.x));
+        const maxX = Math.max(...cluster.map(r => r.x + r.w));
+        const minY = Math.min(...cluster.map(r => r.y));
+        const maxYH = Math.max(...cluster.map(r => r.y + r.h));
+        out.push({ x: minX, y: minY, w: maxX - minX, h: maxYH - minY });
+      };
+      for (let i = 1; i < items.length; i++) {
+        const prevEnd = cluster[cluster.length - 1].x + cluster[cluster.length - 1].w;
+        const gap = items[i].x - prevEnd;
+        if (gap > line.h * 3) { flush(); cluster = [items[i]]; } // gutter, niet een spangat
+        else cluster.push(items[i]);
+      }
+      flush();
+    }
+    return out;
+  };
+
   // ── tryOpenAnnotPopup ──────────────────────────────────────────────────────
   // Wordt aangeroepen na mouseup (desktop) of via iOS-knop.
   // Leest altijd live state via closure — geen stale refs nodig.
@@ -1007,9 +1067,10 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
       // Rects relatief aan pagina-wrapper
       const refEl = (foundPage && node) ? node : scrollEl;
       const refRect = refEl.getBoundingClientRect();
-      const rects = Array.from(range.getClientRects())
+      const rawRects = Array.from(range.getClientRects())
         .map(r => ({ x: r.left - refRect.left, y: r.top - refRect.top, w: r.width, h: r.height }))
         .filter(r => r.w > 1 && r.h > 1);
+      const rects = mergeRectsByLine(rawRects);
 
       pendingRectsRef.current = rects;
       // Sla de pagina op in een ref — NIET via setPageNum, anders scrollt de viewer
@@ -1027,7 +1088,7 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
         const pg  = detectedPage || pageNum;
         AnnotationStore.add({
           id: hid, file: pdfFile?.name || "", page: pg,
-          text: txt, note: "", color: activeColor.id,
+          text: txt, note: "", colorId: activeColor.id,
           rects: rects.length ? rects : [], tags: [],
           createdAt: new Date().toISOString(), hlOnly: true,
         });
@@ -1098,11 +1159,12 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
     const pgWrap = pageRefs.current[result.page];
     const cw = pgWrap ? pgWrap.offsetWidth  : (renderedPages.find(p=>p.num===result.page)?.width  || 1);
     const ch = pgWrap ? pgWrap.offsetHeight : (renderedPages.find(p=>p.num===result.page)?.height || 1);
-    const normRects = result.rects.map(r=>({
+    const mergedRects = mergeRectsByLine(result.rects);
+    const normRects = mergedRects.map(r=>({
       x: r.x/cw, y: r.y/ch, w: r.w/cw, h: r.h/ch,
     })).filter(r=>r.w>0&&r.h>0);
 
-    pendingRectsRef.current = result.rects;  // origineel voor saveHighlight
+    pendingRectsRef.current = mergedRects;  // origineel voor saveHighlight
     pendingPageRef.current  = result.page;
 
     if (hlMode==="hl") {
@@ -1237,7 +1299,7 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
     const pgWrap = pageRefs.current[hlPage];
     const cw = pgWrap ? pgWrap.offsetWidth  : (renderedPages.find(p=>p.num===hlPage)?.width  || 1);
     const ch = pgWrap ? pgWrap.offsetHeight : (renderedPages.find(p=>p.num===hlPage)?.height || 1);
-    const rects = pendingRectsRef.current.map(r=>({
+    const rects = mergeRectsByLine(pendingRectsRef.current).map(r=>({
       x: r.x/cw, y: r.y/ch, w: r.w/cw, h: r.h/ch,
     })).filter(r => r.w>0 && r.h>0);
     const fname = pdfFile?.name||"PDF";
