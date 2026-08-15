@@ -1529,6 +1529,21 @@ const App = () => {
     prefillMsg: window._notebookPrefill || null,
   });
 
+  // Aparte, eveneens persistente instantie voor de split-rechts-positie.
+  // Kan geen React-element op twee boomposities tegelijk hergebruiken (dat
+  // zou React alsnog dwingen tot twee losse mounts, dus geen winst) — dit is
+  // daarom een eigen LLMNotebook-instantie met zijn eigen, losse state, die
+  // wél blijft bestaan zolang je binnen split-mode tussen rechter-tabs wisselt.
+  const llmTabElSplit = React.createElement(LLMNotebook,{notes,pdfNotes,serverPdfs,serverImages,allTags,llmModel,setLlmModel,
+    onMindmapReady:(mm)=>{ setAiMindmap(mm); setTab("mindmap"); },
+    onAddNote:async(note)=>{
+      const saved=await NoteStore.save(note);
+      setNotes([...NoteStore.getAll()]); setSelId(saved.id); setTab("notes");
+    },
+    onPasteToNote: selId ? handlePasteToNote : null,
+    prefillMsg: window._notebookPrefill || null,
+  });
+
   // Houd sidebarOverlay hier — het is App-layout, niet notitie-logica
   // Alleen op mobiel (niet tablet) — tablet heeft eigen inklapbare sidebar in NotesTab
   const sidebarOverlay = isMobile && sidebarOpen && React.createElement(React.Fragment, null,
@@ -2447,10 +2462,16 @@ const App = () => {
                 );
               })()
             ,
-              // Notebook in het rechterpaneel: hergebruikt dezelfde persistente
-              // instantie als de hoofdweergave (llmTabEl bestaat maar één keer,
-              // zie boven) i.p.v. 'm via renderTab opnieuw te laten aanmaken.
-              splitTab === "llm" ? llmTabEl : renderTab(splitTab, true),
+              // Notebook in het rechterpaneel: eigen altijd-gemonteerde wrapper
+              // (llmTabElSplit) i.p.v. conditioneel aanmaken/afbreken — anders
+              // verdwijnt het gesprek zodra je binnen split-mode naar een
+              // andere rechter-tab wisselt en terugkomt.
+              React.createElement("div", {
+                key:"split-llm-always",
+                style:{flex:1, display: splitTab==="llm" ? "flex" : "none",
+                       flexDirection:"column", overflow:"hidden", minHeight:0}
+              }, llmTabElSplit),
+              splitTab !== "llm" && renderTab(splitTab, true),
               // ── Preview overlay in rechter paneel ──────────────────────────
               // Toont gevonden notitie als preview zonder de linker notitie te verstoren
               splitSelId && (() => {
