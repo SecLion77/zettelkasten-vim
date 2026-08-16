@@ -1549,3 +1549,43 @@ zijn) is mee naar voren verhuisd, want beide doorlopen hebben 'm nodig.
 ### Wat te kopiëren
 
 Alleen `VimEditor.js`.
+
+---
+
+## Update: startscherm schaalt nu mee op iPad
+
+**Gewijzigd:** alleen `DailyView.js`.
+
+### De oorzaak
+
+`isWide` (bepaalt of de layout 2 kolommen naast elkaar toont of alles
+onder elkaar) werd berekend als `window.innerWidth >= 900` — **één keer**
+gelezen op het moment van renderen, zonder resize-listener. Draaide je de
+iPad (portrait ↔ landscape), ging in/uit split-view-multitasking, of
+verscheen/verdween het schermtoetsenbord, dan bleef de layout vastzitten
+in de oude stand totdat er om een andere reden toevallig een her-render
+plaatsvond.
+
+De hoofdstatistieken-grid (Notities/Reviews/SR-systeem/Open taken) bleek al
+responsief (`auto-fit`/`minmax`) — dat was dus niet het probleem. Wel nog
+gevonden: de 4 beoordelingsknoppen tijdens een actieve review-sessie
+(Vergeten/Moeite/Goed/Makkelijk) stonden nog vast op 4 gelijke kolommen.
+
+### De fix
+
+- `isWide` nu React-state, bijgewerkt via een `resize`- én
+  `orientationchange`-listener — reageert meteen op elke schermverandering.
+- De review-beoordelingsknoppen naar hetzelfde `auto-fit`/`minmax`-patroon
+  gebracht dat de hoofdstatistieken al gebruikten.
+
+### Getest
+
+- De 900px-drempel doorgerekend voor zeven realistische scenario's (iPad
+  mini/Air/Pro, portrait/landscape, én een split-view-helft) — logisch
+  resultaat in alle gevallen: portrait en split-view-helften krijgen 1
+  kolom, volledige landscape-breedtes krijgen 2 kolommen.
+- `node --check` geslaagd.
+
+### Wat te kopiëren
+
+Alleen `DailyView.js`.

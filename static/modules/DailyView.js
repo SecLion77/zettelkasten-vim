@@ -797,7 +797,19 @@ const DailyView = ({ notes=[], onOpenNote, onAddNote, llmModel="" }) => {
   const doneToday = Object.keys(sessionDone).length;
   const totalDue  = dueNotes.length + doneToday;
   const pct       = totalDue>0 ? Math.round((doneToday/totalDue)*100) : 100;
-  const isWide    = window.innerWidth >= 900;
+  // Was: const isWide = window.innerWidth >= 900 — één keer gelezen bij
+  // render, reageerde niet op het draaien van de iPad of andere
+  // resize-momenten (split-view, on-screen toetsenbord). Nu reactief.
+  const [isWide, setIsWide] = useState(() => window.innerWidth >= 900);
+  useEffect(() => {
+    const onResize = () => setIsWide(window.innerWidth >= 900);
+    window.addEventListener("resize", onResize);
+    window.addEventListener("orientationchange", onResize);
+    return () => {
+      window.removeEventListener("resize", onResize);
+      window.removeEventListener("orientationchange", onResize);
+    };
+  }, []);
 
   const W   = window.THEME_VARS || {};
   const card = {background:W.bg2,border:`1px solid ${W.splitBg}`,borderRadius:"10px",padding:"16px 20px"};
@@ -834,7 +846,7 @@ const DailyView = ({ notes=[], onOpenNote, onAddNote, llmModel="" }) => {
       ),
       revealed && React.createElement("div",{style:card},
         React.createElement("div",{style:{fontSize:"12px",color:W.fgMuted,marginBottom:"12px"}},"Hoe goed kon je de inhoud terugbrengen?"),
-        React.createElement("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:"8px"}},
+        React.createElement("div",{style:{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(110px,1fr))",gap:"8px"}},
           [{label:"😕 Vergeten",r:1,col:"#e5786d",next:SM2.previewLabel(srData[note.id]||{},1)},
            {label:"😐 Moeite",r:2,col:W.orange,next:SM2.previewLabel(srData[note.id]||{},2)},
            {label:"🙂 Goed",r:3,col:W.blue,next:SM2.previewLabel(srData[note.id]||{},3)},
