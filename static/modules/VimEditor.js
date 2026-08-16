@@ -104,8 +104,9 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
     macros: {},
     macroRec: null,             // null of 'a'-'z' (opname-register)
     macroKeys: [],              // gebufferde toetsen tijdens opname
-    // Relative line numbers
-    relativeNumbers: false,
+    // Relative line numbers — standaard aan (net als in echte Vim met
+    // 'relativenumber' + 'number'), uit te zetten met :set nornu
+    relativeNumbers: true,
   });
 
   const cvRef      = useRef(null);  // canvas
@@ -1971,6 +1972,41 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
     ctx.fillStyle = W.splitBg;
     ctx.fillRect(nw - 2, 0, 1, CH - LINE_H);
 
+    // Bouw fold-skip set: welke regels zijn verborgen? (nodig voor zowel de
+    // regelnummers hieronder als de content-doorloop verderop)
+    const hiddenRows = new Set();
+    Object.entries(s.folds).forEach(([startStr, endRow]) => {
+      const start = parseInt(startStr);
+      for (let r = start + 1; r <= endRow; r++) hiddenRows.add(r);
+    });
+
+    // ── Regelnummers ─────────────────────────────────────────────────────
+    // Moet vóór ctx.clip() hieronder getekend worden (die begint bij x=nw
+    // voor de horizontale scrollX-pan van de inhoud) — anders valt het
+    // regelnummer zelf (x = nw - PAD_LEFT, dus binnen het afgeknipte
+    // gutter-gebied) buiten de clip-regio en tekent de canvas 'm
+    // stilzwijgend niet. (Was de oorzaak van "regelnummers onzichtbaar,
+    // in meerdere thema's" — geen kleurprobleem, een clip-volgorde-bug.)
+    {
+      let visLineNr = 0;
+      for (let li = s.scroll; li < s.lines.length && visLineNr <= s.visRows; li++) {
+        if (hiddenRows.has(li)) continue;
+        const yNr   = visLineNr++ * LINE_H;
+        const isCurNr = li === curRow;
+        ctx.textAlign = "right";
+        ctx.fillStyle = isCurNr ? W.statusFg : W.fgMuted;
+        ctx.font      = isCurNr
+          ? `bold ${FONT_SIZE}px 'Hack','Courier New',monospace`
+          : `${FONT_SIZE}px 'Hack','Courier New',monospace`;
+        const lineNrStr = s.relativeNumbers && !isCurNr
+          ? String(Math.abs(li - curRow))   // relatief
+          : String(li + 1);                 // absoluut
+        ctx.fillText(lineNrStr, nw - PAD_LEFT, yNr + 4);
+      }
+      ctx.textAlign = "left";
+      ctx.font      = `${FONT_SIZE}px 'Hack','Courier New',monospace`;
+    }
+
     // Vanaf hier: alle content rechts van de gutter kan horizontaal
     // wegscrollen (lange regels) — clip zodat niets over de regelnummers
     // heen tekent, en verschuif met -scrollX voor het pan-effect.
@@ -2004,12 +2040,6 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
     }
 
     // ── Regels tekenen ────────────────────────────────────────────────────
-    // Bouw fold-skip set: welke regels zijn verborgen?
-    const hiddenRows = new Set();
-    Object.entries(s.folds).forEach(([startStr, endRow]) => {
-      const start = parseInt(startStr);
-      for (let r = start + 1; r <= endRow; r++) hiddenRows.add(r);
-    });
 
     let visLine = 0;
     for (let li = s.scroll; li < s.lines.length && visLine <= s.visRows; li++) {
@@ -2020,18 +2050,6 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
       const isCur = li === curRow;
       const isFolded = s.folds[li] !== undefined; // header van gevouwen sectie
 
-      // Regelnummer — rechts uitgelijnd, relatief of absoluut
-      ctx.textAlign = "right";
-      ctx.fillStyle = isCur ? W.statusFg : W.fgMuted;
-      ctx.font      = isCur
-        ? `bold ${FONT_SIZE}px 'Hack','Courier New',monospace`
-        : `${FONT_SIZE}px 'Hack','Courier New',monospace`;
-      const lineNrStr = s.relativeNumbers && !isCur
-        ? String(Math.abs(li - curRow))   // relatief
-        : String(li + 1);                 // absoluut
-      ctx.fillText(lineNrStr, nw - PAD_LEFT, y + 4);
-      ctx.textAlign = "left";
-      ctx.font      = `${FONT_SIZE}px 'Hack','Courier New',monospace`;
       // Zoek-highlights
       if (s.search && s.matches.length) {
         s.matches.filter(m => m.row === li).forEach((m, mi) => {
@@ -2346,6 +2364,15 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
           style:{background:"none",border:"none",color:W.fgMuted,fontSize:"18px",cursor:"pointer"}}, "\u00d7")
       ),
       ...[
+        ["LINKS & VERWIJZINGEN", W.type, [
+          ["[[",             "Typ dit → notitie-dropdown opent automatisch"],
+          ["[[naam",         "Filtert de dropdown terwijl je verder typt"],
+        ]],
+        ["BRON-MARKERING (\\)", W.orange, [
+          ["\\  b",          "Markeer woord/selectie als bron"],
+          ["\\  k",          "Markeer woord/selectie als kritische noot"],
+          ["\\  e",          "Markeer woord/selectie als eigen gedachte"],
+        ], "Wrapt de tekst als [tekst]{.bron} e.d. — deze laag-markering wordt herkend bij het exporteren van PDF-highlights, zodat bron/kritiek/eigen-gedachte later ook visueel te onderscheiden zijn."],
         ["NAVIGATIE", W.blue, [
           ["h j k l",      "Beweeg cursor"],
           ["w / b",         "Woord voor/achteruit"],
@@ -2386,17 +2413,20 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
           [":w / :wq",      "Opslaan / opslaan+sluiten"],
           [":spell / :rnu", "Toggle spellcheck / relatieve regelnummers"],
           [":tag+ #naam",   "Voeg tag toe"],
-          [":template naam","Laad template (dagnotitie/meeting/...)"],
+          [":template naam","Laad template — dagnotitie/meeting/literatuur/project/vraag"],
           [":goyo",         "Toggle focusmodus"],
           [":vs / :sp",     "Verticaal / horizontaal splitsen"],
           [":? of :help",   "Dit scherm"],
         ]],
-      ].map(([titel, kleur, items]) =>
+      ].map(([titel, kleur, items, subtitel]) =>
         React.createElement("div", {key:titel, style:{marginBottom:"14px"}},
           React.createElement("div", {style:{
             fontSize:"10px", fontWeight:"700", color:kleur,
             letterSpacing:"1.5px", marginBottom:"6px"
           }}, titel),
+          subtitel && React.createElement("div", {style:{
+            fontSize:"11px", color:W.fgDim, marginBottom:"6px", lineHeight:"1.4"
+          }}, subtitel),
           React.createElement("div", {style:{display:"grid", gridTemplateColumns:"1fr 1.5fr", gap:"3px 12px"}},
             ...items.flatMap(([key, desc]) => [
               React.createElement("div", {key:key, style:{

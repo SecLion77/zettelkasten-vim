@@ -1421,3 +1421,131 @@ zoeken.
 Alle tien: `DailyView.js`, `app.js`, `Graph.js`, `PDFViewer.js`,
 `BookLibrary.js`, `NoteEditor.js`, `MermaidEditor.js`, `TagManager.js`,
 `SemanticSearch.js`, `ModelPicker.js`.
+
+---
+
+## Update: uitgaande links tonen nu leesbare titels + tags (net als inkomende)
+
+**Gewijzigd:** alleen `LinksSidebar.js`.
+
+### De oorzaak
+
+De "Uit"-tab (uitgaande links) toonde de **ruwe linktekst** zoals die
+letterlijk tussen `[[...]]` staat — inclusief interne note-ID's zoals
+`note_1779560214726_sl0...` wanneer een link ooit via ID i.p.v. titel is
+aangemaakt. De code zocht daarbij wél al de bijbehorende notitie op
+(`o.note`), maar gebruikte die vervolgens niet om de titel te tonen — puur
+een rendering-omissie, de opzoeklogica zelf werkte al correct. De "In"-tab
+(inkomende links) had dit probleem niet, want die itereert al over echte
+notitie-objecten en toont dus altijd vanzelf `n.title`.
+
+### De fix
+
+`o.title` (ruwe tekst) vervangen door `o.note ? (o.note.title || o.note.id) : o.title`
+— toont de leesbare titel zodra de notitie gevonden is, valt alleen terug
+op de ruwe tekst bij een echt gebroken link (of een PDF-/afbeeldings-
+referentie, die geen notitie-object heeft — dat gedrag blijft ongewijzigd
+correct). Voor volledige gelijkenis met de "In"-tab ook de tag-pills
+toegevoegd onder elke gevonden notitie (max. 3, zelfde `TagPill`-component
+die de "In"-tab al gebruikte).
+
+### Getest
+
+- Vier scenario's los doorgerekend: ID-link met gevonden notitie (het
+  gemelde probleem) → toont nu de titel; titel-link met gevonden notitie →
+  ongewijzigd correct; écht gebroken link → valt terecht terug op de ruwe
+  tekst; PDF-referentie → ongewijzigd, toont de bestandsnaam.
+- `node --check` geslaagd.
+
+### Wat te kopiëren
+
+Alleen `LinksSidebar.js`.
+
+---
+
+## Update: relatieve nummering standaard aan + hulpscherm uitgebreid
+
+**Gewijzigd:** alleen `VimEditor.js`.
+
+### 1. Relatieve regelnummering
+
+Bestond al volledig (renderlogica, `:set rnu`/`:set nornu`-commando's) maar
+stond standaard **uit** (`relativeNumbers: false`) — geen bug in de
+weergave zelf, gewoon de verkeerde default. Nu standaard **aan**, zoals
+gevraagd (nog steeds uit te zetten met `:set nornu`).
+
+### 2. Hulpscherm (`?`) uitgebreid
+
+Twee bestaande, maar nergens gedocumenteerde functies toegevoegd:
+
+- **LINKS & VERWIJZINGEN** — `[[` typen opent automatisch de
+  notitie-dropdown; verder typen filtert die lijst. Bestond al, stond
+  nergens uitgelegd.
+- **BRON-MARKERING (`\`)** — de leader-toets `\` gevolgd door `b`/`k`/`e`
+  markeert het woord (of de visuele selectie) als bron/kritische
+  noot/eigen gedachte (`[tekst]{.bron}` e.d.). Dit is dezelfde
+  laag-markering die bij het exporteren van PDF-highlights wordt herkend
+  (bron/kritisch/eigen — zie de eerdere PDF-highlight-verbeteringen deze
+  sessie). Met een korte toelichtingsregel erbij die dat verband uitlegt.
+
+Ook de bestaande `:template naam`-regel bijgewerkt met de vijf echte
+templatenamen (dagnotitie/meeting/literatuur/project/vraag) i.p.v. de
+vage "...".
+
+**Bijvangst:** de kleuren van de twee nieuwe secties gebruiken bewust
+`W.type`/`W.orange` (thema-tokens) i.p.v. losse hex-waarden — anders had ik
+hier precies dezelfde theme-onbewuste-kleur-bug geïntroduceerd die ik deze
+sessie net overal aan het opruimen was.
+
+### Getest
+
+- `node --check` geslaagd.
+- De render-functie voor hulpscherm-secties (nu met optionele vierde
+  subtitel-waarde) los getest voor zowel 3- als 4-elementen — beide vormen
+  werken correct naast elkaar.
+
+### Wat te kopiëren
+
+Alleen `VimEditor.js`.
+
+---
+
+## Update: regelnummers onzichtbaar — echte oorzaak gevonden (geen kleurenkwestie)
+
+**Gewijzigd:** alleen `VimEditor.js`.
+
+### De oorzaak — een regressie van de eerdere horizontaal-scroll-fix
+
+Niet gerelateerd aan thema-kleuren (die klopten al, zoals eerder
+nagerekend). De horizontale auto-scroll-fix van eerder deze sessie (voor
+"tekst loopt uit het zichtbare veld") stelt een canvas-clip-regio in die
+begint bij `x = nw` (de breedte van de regelnummer-kolom) — bedoeld om te
+voorkomen dat lange, weggeschoven regels over de regelnummers heen tekenen.
+
+Het regelnummer zelf wordt echter getekend op `x = nw - PAD_LEFT` — dus
+**binnen** dat net-afgeknipte gebied. Een canvas voert tekenopdrachten
+buiten de actieve clip-regio stilzwijgend niet uit: geen foutmelding, gewoon
+niets zichtbaars. Dit trof alle regelnummers, in elk thema — vandaar
+"meerdere thema's" en niet een specifiek kleurprobleem.
+
+### De fix
+
+De regelnummer-tekening losgetrokken uit de bestaande, afgeknipte
+per-regel-doorloop en verplaatst naar een eigen doorloop **vóór** de
+`ctx.clip()`-instelling — buiten het afgeknipte gebied, dus altijd
+zichtbaar. De `hiddenRows`-berekening (welke regels door een fold verborgen
+zijn) is mee naar voren verhuisd, want beide doorlopen hebben 'm nodig.
+
+### Getest
+
+- De clip-grens-logica los gesimuleerd: bevestigt dat x=32 (regelnummer)
+  bij de oude volgorde buiten x=40 (clip-start) viel — exact het
+  mechanisme achter de bug.
+- Gecontroleerd dat `hiddenRows` precies één keer gedeclareerd wordt en
+  door beide doorlopen correct hergebruikt wordt.
+- `ctx.save()`/`ctx.clip()`/`ctx.restore()` opnieuw in balans geverifieerd.
+- `node --check` geslaagd.
+
+### Wat te kopiëren
+
+Alleen `VimEditor.js`.

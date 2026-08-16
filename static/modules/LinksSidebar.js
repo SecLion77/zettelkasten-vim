@@ -301,7 +301,12 @@ const LinksSidebar = ({
                     overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
                     textDecoration: o.note ? "none" : "line-through",
                   }
-                }, o.title),
+                }, o.note ? (o.note.title || o.note.id) : o.title),
+                o.note && o.note.tags?.length > 0 && React.createElement("div", {
+                  style: { display: "flex", gap: "3px", marginTop: "3px", flexWrap: "wrap" }
+                }, (o.note.tags||[]).slice(0,3).map(t =>
+                  React.createElement(TagPill, { key: t, tag: t, small: true })
+                )),
                 o.type && LINK_TYPES[o.type] && React.createElement("span", {
                   style: {
                     fontSize: "9px", color: LINK_TYPES[o.type].color, marginTop: "2px",
