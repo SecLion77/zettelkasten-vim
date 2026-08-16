@@ -453,14 +453,14 @@ const BookLibrary = (
                           book.type==="ebook" && React.createElement("button",{
                             onClick:e=>{e.stopPropagation();onReadBook?.(book);},
                             title:"Open bijbehorend PDF om te lezen/highlighten",
-                            style:{background:"rgba(159,202,86,0.12)",border:`1px solid ${W.comment||"#9fca56"}`,
-                              color:W.comment||"#9fca56",cursor:"pointer",fontSize:"12px",
+                            style:{background:"rgba(159,202,86,0.12)",border:`1px solid ${W.comment}`,
+                              color:W.comment,cursor:"pointer",fontSize:"12px",
                               borderRadius:"5px",padding:"2px 8px",fontWeight:"600"}
                           },"📖 Lees"),
                           React.createElement("button",{
                             onClick:e=>{e.stopPropagation();openEdit(book);},
-                            style:{background:"rgba(138,198,242,0.12)",border:`1px solid ${W.blue||"#7aa8c8"}`,
-                              color:W.blue||"#7aa8c8",cursor:"pointer",fontSize:"12px",
+                            style:{background:"rgba(138,198,242,0.12)",border:`1px solid ${W.blue}`,
+                              color:W.blue,cursor:"pointer",fontSize:"12px",
                               borderRadius:"5px",padding:"2px 8px",fontWeight:"600"}
                           },"✏ Bewerken")
                         )
@@ -502,7 +502,7 @@ const BookLibrary = (
                     book.type==="ebook" && React.createElement("button",{
                       onClick:e=>{e.stopPropagation();onReadBook?.(book);},
                       title:"Open bijbehorend PDF om te lezen/highlighten",
-                      style:{background:"none",border:"none",color:W.comment||"#9fca56",cursor:"pointer",fontSize:"13px",padding:"0 4px"}
+                      style:{background:"none",border:"none",color:W.comment,cursor:"pointer",fontSize:"13px",padding:"0 4px"}
                     },"📖 Lees"),
                     React.createElement("button",{
                       onClick:e=>{e.stopPropagation();openEdit(book);},
@@ -594,7 +594,7 @@ const BookLibrary = (
               book.type==="ebook" && React.createElement("button",{
                 onClick:e=>{e.stopPropagation();onReadBook?.(book);},
                 title:"Open bijbehorend PDF om te lezen/highlighten",
-                style:{background:"none",border:"none",color:W.comment||"#9fca56",
+                style:{background:"none",border:"none",color:W.comment,
                        cursor:"pointer",fontSize:"13px",padding:"0 4px"}
               },"📖 Lees"),
               React.createElement("button",{

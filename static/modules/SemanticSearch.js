@@ -183,7 +183,7 @@ const SemanticSearch = ({ notes = [], onOpenNote, llmModel = "", taskLlmModel = 
         }),
         React.createElement("button", {
           onClick: doSearch, disabled: searching || !query.trim(),
-          style: { background:W.blue||"#7aa8c8", color:W.bg||"#1a1a1a", border:"none",
+          style: { background:W.blue, color:W.bg, border:"none",
                    borderRadius:"7px", padding:"9px 18px",
                    cursor: searching ? "wait" : "pointer",
                    fontSize:"13px", fontWeight:"700",
@@ -230,8 +230,8 @@ const SemanticSearch = ({ notes = [], onOpenNote, llmModel = "", taskLlmModel = 
           title: "Indexeer ontbrekende notities (nieuwe + gewijzigde)",
           style: {
             background: indexing ? "rgba(138,198,242,0.1)" : "rgba(255,255,255,0.07)",
-            border: `1px solid ${W.blue||"#7aa8c8"}`,
-            color: W.blue||"#7aa8c8",
+            border: `1px solid ${W.blue}`,
+            color: W.blue,
             borderRadius:"6px", padding:"4px 12px",
             fontSize:"12px", fontWeight:"600",
             cursor: indexing ? "wait" : "pointer",
@@ -244,8 +244,8 @@ const SemanticSearch = ({ notes = [], onOpenNote, llmModel = "", taskLlmModel = 
           title: "Herindexeer alle notities",
           style: {
             background: "rgba(255,255,255,0.05)",
-            border: `1px solid ${W.splitBg||"#444"}`,
-            color: W.fg||"#d4d4d4",
+            border: `1px solid ${W.splitBg}`,
+            color: W.fg,
             borderRadius:"6px", padding:"4px 10px",
             fontSize:"12px", fontWeight:"500",
             cursor:"pointer",
@@ -317,7 +317,7 @@ const SemanticSearch = ({ notes = [], onOpenNote, llmModel = "", taskLlmModel = 
               marginTop:"16px",padding:"12px 16px",
               background:"rgba(234,196,53,0.08)",
               border:"1px solid rgba(234,196,53,0.25)",
-              borderRadius:"8px",fontSize:"12px",color:W.yellow||"#eac435"
+              borderRadius:"8px",fontSize:"12px",color:W.yellow
             }},
               "⚠ Index is leeg. Klik '↻ Index bijwerken' om te starten.",
               React.createElement("br"),
@@ -337,8 +337,8 @@ const SemanticSearch = ({ notes = [], onOpenNote, llmModel = "", taskLlmModel = 
         results.map((hit, i) => {
           const pct   = Math.round(hit.score * 100);
           const color = pct > 80 ? "#72b660"
-            : pct > 60 ? (W.blue || "#8ac6f2")
-            : (W.fgMuted || "#888888");
+            : pct > 60 ? (W.blue)
+            : (W.fgMuted);
           const excerpt = (hit.note.content || "")
             .replace(/^---[\s\S]*?---/, "").replace(/#{1,6}\s/g, "")
             .trim().slice(0, 160);

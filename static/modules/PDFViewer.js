@@ -77,14 +77,27 @@ const ONLINE_MODELS = [
   { id:"mistralai/mistral-small-3.1", label:"Mistral Small (OR)",   provider:"openrouter", group:"Open source", icon:"🌬" },
 ];
 
-// Provider-kleuren
-const PROVIDER_COLOR = {
+// Provider-kleuren — licht/verzadigd voor donkere thema's (springt er dan
+// goed uit), duidelijk donkerder equivalent voor lichte thema's (anders
+// contrast <2:1 op crème — vrijwel onleesbaar, zoals bij het zomerlicht-
+// thema werd gemeld). Zelfde herkenbare kleurtoon per provider, alleen de
+// helderheid past zich aan. Elke lichte variant ≥7:1 op #F2EAD0 (AAA).
+const PROVIDER_COLOR_DARK = {
   anthropic:  "#d787ff",
   google:     "#8ac6f2",
   openai:     "#9fca56",
   openrouter: "#e5786d",
   mistral:    "#eae788",
 };
+const PROVIDER_COLOR_LIGHT = {
+  anthropic:  "#633E75",
+  google:     "#374F61",
+  openai:     "#405122",
+  openrouter: "#703B35",
+  mistral:    "#49482A",
+};
+const PROVIDER_COLOR = (providerId) =>
+  (W.dark === false ? PROVIDER_COLOR_LIGHT : PROVIDER_COLOR_DARK)[providerId];
 
 const MODEL_LABEL = (m) => {
   const o = ONLINE_MODELS.find(x => x.id === m);
@@ -95,7 +108,8 @@ const MODEL_LABEL = (m) => {
 
 const MODEL_COLOR = (m) => {
   const o = ONLINE_MODELS.find(x => x.id === m);
-  return o ? (PROVIDER_COLOR[o.provider] || "#e3e0d7") : "#9fca56";
+  const fallback = W.dark === false ? "#405122" : "#9fca56"; // lokale (Ollama) modellen
+  return o ? (PROVIDER_COLOR(o.provider) || W.fg) : fallback;
 };
 
 // ── PDFUploadPanel — clean upload-paneel voor Invoer → PDF tab ───────────────
@@ -315,7 +329,7 @@ const PDFUploadPanel = ({ serverPdfs=[], onRefreshPdfs, onOpenPdf, onTogglePdfRe
                 pdf.isRead && React.createElement("span",{style:{fontSize:"10px",color:"#72b660",fontWeight:"600"}},
                   "· ✓ gelezen"),
                 annotCount > 0 && React.createElement("span",{style:{
-                  fontSize:"10px",color:W.yellow||"#eac435",
+                  fontSize:"10px",color:W.yellow,
                   background:"rgba(234,196,53,0.08)",border:"1px solid rgba(234,196,53,0.2)",
                   borderRadius:"8px",padding:"1px 6px",
                 }}, `✦ ${annotCount}`)

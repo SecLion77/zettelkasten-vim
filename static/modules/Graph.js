@@ -1548,7 +1548,7 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
           React.createElement("button",{
             onClick, title,
             style:{background:"rgba(229,120,109,0.08)",border:"1px solid rgba(229,120,109,0.25)",
-                   color:W.orange||"#e5786d",borderRadius:"4px",padding:"3px 9px",
+                   color:W.orange,borderRadius:"4px",padding:"3px 9px",
                    fontSize:"12px",cursor:"pointer",flexShrink:0}
           }, label),
           msg && React.createElement("span",{
@@ -1572,10 +1572,10 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
           },pathOnly?"● alleen pad":"◎ toon alles")
         ),
         React.createElement("div",{style:{display:"flex",gap:"6px",alignItems:"center",flexWrap:"wrap"}},
-          React.createElement("div",{style:{fontSize:"12px",color:W.green||"#9fca56",minWidth:"70px"}},
+          React.createElement("div",{style:{fontSize:"12px",color:W.green,minWidth:"70px"}},
             pathFrom?(nodesRef.current.find(n=>n.id===pathFrom)?.title||pathFrom).substring(0,18)+"…":"▶ van: —"),
           React.createElement("span",{style:{color:W.fgDim}},"→"),
-          React.createElement("div",{style:{fontSize:"12px",color:W.orange||"#e5786d",minWidth:"70px"}},
+          React.createElement("div",{style:{fontSize:"12px",color:W.orange,minWidth:"70px"}},
             pathTo?(nodesRef.current.find(n=>n.id===pathTo)?.title||pathTo).substring(0,18)+"…":"▶ naar: —"),
           pathFrom&&pathTo&&React.createElement("button",{
             onClick:()=>{ const p=bfsPath(pathFrom,pathTo); setPathResult(p||[]); },
@@ -2035,7 +2035,7 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
                 onClick: () => { if(window._sendToCanvas) window._sendToCanvas([peekNoteId]); },
                 style:{fontSize:"12px",padding:"5px 10px",borderRadius:"5px",
                        background: W.tagBg||"rgba(159,202,86,0.12)",
-                       color: W.tagColor||"#9fca56",
+                       color: W.tagColor,
                        border:`1px solid ${W.tagBorder||"rgba(159,202,86,0.3)"}`,
                        cursor:"pointer", fontWeight:"500"}
               }, "📋 → Canvas")

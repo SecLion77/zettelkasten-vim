@@ -221,7 +221,7 @@ const NoteEditor = ({
       background: "rgba(229,120,109,.12)",
       borderBottom: "1px solid rgba(229,120,109,.3)",
       padding: "6px 14px", fontSize: "12px",
-      color: W.orange || "#e5786d",
+      color: W.orange,
       display: "flex", alignItems: "center", gap: "6px",
       flexShrink: 0, animation: "fadeIn .15s ease-out",
     }

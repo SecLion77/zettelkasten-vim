@@ -176,12 +176,12 @@ const SmartTagEditor=({tags=[],onChange,allTags=[],content="",llmModel=""})=>{
           background:W2.tagBg||"rgba(184,224,106,0.14)",
           border:`1px solid ${W2.tagBorder||"rgba(184,224,106,0.42)"}`,
           borderRadius:"11px",padding:"3px 10px",fontSize:"12px",
-          color:W2.tagColor||"#b8e06a",fontWeight:"500",flexShrink:0,
+          color:W2.tagColor,fontWeight:"500",flexShrink:0,
         }},
           "#"+t,
           React.createElement("span",{
             onMouseDown:e=>{e.preventDefault();e.stopPropagation();remove(t);},
-            style:{cursor:"pointer",color:W2.tagColor||"#b8e06a",opacity:0.6,
+            style:{cursor:"pointer",color:W2.tagColor,opacity:0.6,
                    fontSize:"11px",lineHeight:1,marginLeft:"2px",fontWeight:"bold"}
           },"✕")
         )),
@@ -300,7 +300,7 @@ const SmartTagEditor=({tags=[],onChange,allTags=[],content="",llmModel=""})=>{
               borderRadius:"20px",
               padding:"4px 13px",
               fontSize:"12px",fontWeight:"500",
-              color: alreadyAdded ? (W2.tagColor||W2.comment||"#9fca56") : W2.blue,
+              color: alreadyAdded ? (W2.tagColor||W2.comment) : W2.blue,
               cursor: alreadyAdded ? "default" : "pointer",
               display:"flex",alignItems:"center",gap:"4px",
             }
@@ -780,7 +780,7 @@ const TagManagerPanel=({allTags=[],notes=[],onMergeTags,onRenameTag,onDeleteTag,
 
       // Co-occurrences
       stats.topCo.length>0&&React.createElement("div",null,
-        React.createElement("div",{style:{fontSize:"13px",color:W2.purple||"#d787ff",fontWeight:"bold",marginBottom:"10px"}},
+        React.createElement("div",{style:{fontSize:"13px",color:W2.purple,fontWeight:"bold",marginBottom:"10px"}},
           "🔗 Meest samen gebruikte tags"),
         React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:"5px"}},
           (()=>{

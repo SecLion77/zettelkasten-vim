@@ -1131,7 +1131,7 @@ const MermaidEditor = ({ initialText="", onSave, onCancel, notes=[], serverPdfs=
           background: W.tagBg||"rgba(159,202,86,0.08)",
           border:`1px solid ${W.tagBorder||"rgba(159,202,86,0.3)"}`,
           borderRadius:"6px", padding:"4px 10px",
-          color: W.tagColor||"#9fca56",
+          color: W.tagColor,
           fontSize:"14px", cursor:"pointer", flexShrink:0,
         }
       },"📋 → Canvas"),
@@ -2143,7 +2143,7 @@ const MindMap = ({notes, allTags, onSelectNote, aiMindmap, onAddNote, serverPdfs
           display:"flex", alignItems:"center", gap:"6px", flexShrink:0,
           background:W.tagBg||"rgba(159,202,86,0.06)",
         }},
-          React.createElement("span",{style:{fontSize:"11px",color:W.tagColor||"#9fca56",flex:1}},
+          React.createElement("span",{style:{fontSize:"11px",color:W.tagColor,flex:1}},
             tagFilters.size+" actief: "+[...tagFilters].map(t=>"#"+t).join(", ")
           ),
           React.createElement("button",{
@@ -2179,7 +2179,7 @@ const MindMap = ({notes, allTags, onSelectNote, aiMindmap, onAddNote, serverPdfs
                     fontSize:"12px",padding:"3px 8px",borderRadius:"4px",
                     cursor:"pointer",whiteSpace:"nowrap",
                     background: active?(col||W.tagBg||"rgba(159,202,86,0.2)"):"none",
-                    color: active?(col?".bg":W.tagColor||"#9fca56"):W.fgMuted,
+                    color: active?(col?".bg":W.tagColor):W.fgMuted,
                     border:`1px solid ${active?(col||W.tagBorder||"rgba(159,202,86,0.4)"):W.splitBg}`,
                     fontWeight:active?"600":"400",
                     transition:"all 0.1s",

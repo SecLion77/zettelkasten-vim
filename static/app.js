@@ -112,19 +112,23 @@ const THEMES = {
     // Tekst — extra donker voor maximaal buiten-contrast
     fg:       "#120E08",   // bijna-zwart, warm (contrast >14:1 op bg)
     fgMuted:  "#4A3E2C",   // gedimde tekst — donkerbruin, NIET grijs (grijs wast uit)
-    fgDim:    "#6A5E4A",   // zeer gedimde tekst — nog steeds leesbaar buiten
+    fgDim:    "#544A3A",   // zeer gedimde tekst — nog steeds leesbaar buiten (AAA 7.2:1 op bg2)
     statusFg: "#0A0804",
     // Accentkleuren — krachtig en verzadigd voor leesbaarheid in zonlicht
-    // Getest: >4.5:1 op #FAF3E0 achtergrond
-    comment:  "#2A5E28",   // donker bosgroen (contrast ~7:1)
-    string:   "#2A5E28",
-    keyword:  "#1A3A6A",   // marineblauw (contrast ~9:1)
-    type:     "#5A2878",   // dieppaars (contrast ~8:1)
-    special:  "#8A2020",   // donkerrood (contrast ~6:1)
-    orange:   "#8A3E10",   // verbrand sienna — warm en zichtbaar
+    // Elke waarde ≥7:1 op zowel #FAF3E0 als #F2EAD0 (WCAG AAA, strengste van
+    // de twee achtergronden) — buiten in fel licht daalt de waargenomen
+    // contrastratio door omgevingslicht, dus AA (4.5:1) alleen is voor dit
+    // thema niet genoeg. Berekend met de officiële WCAG-relatieve-
+    // luminantie-formule, niet op het oog geschat.
+    comment:  "#275725",   // donker bosgroen (AAA 7.05:1 op bg2)
+    string:   "#275725",
+    keyword:  "#1A3A6A",   // marineblauw (AAA 9.4:1)
+    type:     "#5A2878",   // dieppaars (AAA 8.7:1)
+    special:  "#8A2020",   // donkerrood (AAA 7.6:1)
+    orange:   "#7C380E",   // verbrand sienna (AAA 7.19:1 op bg2)
     purple:   "#5A2878",
-    green:    "#2A5E28",
-    yellow:   "#8A6200",   // amberokker — niet geel (wast uit), wel warm
+    green:    "#275725",
+    yellow:   "#664800",   // amberokker — niet geel (wast uit), wel warm (AAA 7.0:1 op bg2)
     blue:     "#1A3A6A",
     // Tags: amberbruin voor leesbaarheid op crème
     tagColor: "#7A3A0A",              // verbrand sienna — warm & leesbaar
@@ -676,7 +680,7 @@ const renderMd = (text, notes=[]) => {
     "note":    { icon:"📝", color:"#eae788", bg:W.yellowBg, border:W.yellowBorder },
     "warning": { icon:"⚠",  color:"#e5786d", bg:"rgba(229,120,109,0.07)", border:"rgba(229,120,109,0.25)" },
     "idea":        { icon:"💡", color:"#9fca56", bg:"rgba(159,202,86,0.07)",  border:"rgba(159,202,86,0.25)"  },
-    "samenvatting":{ icon:"📋", color:W.keyword||"#8ac6f2", bg:W.dark?"rgba(138,198,242,0.07)":"rgba(138,198,242,0.10)", border:W.blueBorder  },
+    "samenvatting":{ icon:"📋", color:W.keyword, bg:W.dark?"rgba(138,198,242,0.07)":"rgba(138,198,242,0.10)", border:W.blueBorder  },
   };
   h = h.replace(/^(&gt;.*\n?)+/gm, block => {
     const lines = block.split("\n").filter(l => l.trim());
@@ -687,7 +691,7 @@ const renderMd = (text, notes=[]) => {
     if (calloutMatch) {
       const type  = calloutMatch[1].toLowerCase();
       const title = calloutMatch[2].trim();
-      const meta  = calloutMeta[type] || { icon:"💬", color:W.fgMuted||"#a0a8b0", bg:W.dark?"rgba(255,255,255,0.04)":"rgba(0,0,0,0.04)", border:W.splitBg||"rgba(255,255,255,0.12)" };
+      const meta  = calloutMeta[type] || { icon:"💬", color:W.fgMuted, bg:W.dark?"rgba(255,255,255,0.04)":"rgba(0,0,0,0.04)", border:W.splitBg||"rgba(255,255,255,0.12)" };
       // Saniteer body: verwijder CSS-rommel die lokale modellen soms toevoegen
       const rawBody = cleaned.slice(1).join("\n").replace(/^&gt;\s?/gm,"").trim();
       const body = rawBody
@@ -1683,14 +1687,14 @@ const App = () => {
             borderRadius:"20px",
             padding: isTablet ? "3px 8px" : "3px 11px",
             cursor:"pointer",
-            color: runningJobs.length>0 ? (W.blue||"#8ac6f2") : W.comment,
+            color: runningJobs.length>0 ? (W.blue) : W.comment,
             fontSize:"14px",
             animation: runningJobs.length>0 ? "ai-pulse 1.4s ease-in-out infinite" : "none",
           }
         },
           runningJobs.length>0
             ? React.createElement("span",{style:{display:"inline-block",width:"7px",height:"7px",
-                borderRadius:"50%",background:W.blue||"#8ac6f2",flexShrink:0,
+                borderRadius:"50%",background:W.blue,flexShrink:0,
                 animation:"ai-dot 1.4s ease-in-out infinite"}})
             : React.createElement("span",null,"✓"),
           // Op tablet: alleen getal, geen label
@@ -1772,7 +1776,7 @@ const App = () => {
         borderRadius:"6px",padding:"4px 10px"}},
         React.createElement("span",{style:{fontSize:"14px",fontWeight:"700",color:W.yellow,
           letterSpacing:"-0.5px",lineHeight:1}},notes.length),
-        React.createElement("span",{style:{fontSize:"9px",color:"rgba(229,192,123,0.7)",
+        React.createElement("span",{style:{fontSize:"9px",color:W.yellow,
           letterSpacing:"0.8px",textTransform:"uppercase"}},"zettels")
       ),
       !isTablet && React.createElement("div",{style:{display:"flex",alignItems:"baseline",gap:"3px",
@@ -1780,7 +1784,7 @@ const App = () => {
         borderRadius:"6px",padding:"4px 10px"}},
         React.createElement("span",{style:{fontSize:"14px",fontWeight:"700",color:W.comment,
           letterSpacing:"-0.5px",lineHeight:1}},allTags.length),
-        React.createElement("span",{style:{fontSize:"9px",color:"rgba(159,202,86,0.7)",
+        React.createElement("span",{style:{fontSize:"9px",color:W.comment,
           letterSpacing:"0.8px",textTransform:"uppercase"}},"tags")
       ),
     ),
@@ -1816,13 +1820,13 @@ const App = () => {
     },
       React.createElement("div", {style:{
         width:"7px", height:"7px", borderRadius:"50%", flexShrink:0,
-        background: serverOnline ? "#9fca56" : "#e5786d",
+        background: serverOnline ? W.comment : W.orange,
         boxShadow: serverOnline ? "0 0 6px rgba(159,202,86,0.6)" : "0 0 6px rgba(229,120,109,0.6)",
         animation: serverOnline ? "none" : "ai-pulse 1.4s ease-in-out infinite",
       }}),
       !isTablet && React.createElement("span", {style:{
         fontSize:"11px",
-        color: serverOnline ? "#9fca56" : "#e5786d",
+        color: serverOnline ? W.comment : W.orange,
         letterSpacing:"0.3px",
       }}, serverOnline ? "online" : "offline")
     ),

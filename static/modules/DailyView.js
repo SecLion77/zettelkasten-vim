@@ -80,7 +80,7 @@ const QuickEntryBar = ({ dayContent, onDayChange, W }) => {
     style:{display:"flex",gap:"6px",alignItems:"center",
       marginBottom:"10px",padding:"6px 8px",
       background:"rgba(255,255,255,0.03)",
-      borderRadius:"8px",border:`1px solid ${W.splitBg||"#333"}`}
+      borderRadius:"8px",border:`1px solid ${W.splitBg}`}
   },
     // Type-toggle knoppen — altijd een zichtbare rand/achtergrond (ook
     // inactief), zelfde stijlpatroon als filterBtn in TasksPanel.js, zodat
@@ -90,9 +90,9 @@ const QuickEntryBar = ({ dayContent, onDayChange, W }) => {
       key:t.id, onClick:()=>setQType(t.id), title:t.title,
       style:{
         background:qType===t.id?"rgba(138,198,242,0.18)":"rgba(255,255,255,0.03)",
-        border:`1px solid ${qType===t.id?(W.blue||"#7aa8c8"):(W.splitBg||"#444")}`,
+        border:`1px solid ${qType===t.id?(W.blue):(W.splitBg)}`,
         borderRadius:"5px",padding:"3px 8px",cursor:"pointer",
-        fontSize:"13px",color:qType===t.id?(W.blue||"#7aa8c8"):(W.fgMuted||"#999"),
+        fontSize:"13px",color:qType===t.id?(W.blue):(W.fgMuted),
         fontWeight:qType===t.id?"700":"400",
         transition:"all .12s",
       }
@@ -105,7 +105,7 @@ const QuickEntryBar = ({ dayContent, onDayChange, W }) => {
       placeholder:qType==="task"?"Nieuwe taak…":qType==="idea"?"Idee vastleggen…":"Gedachte, observatie…",
       style:{
         flex:1, background:"none", border:"none",
-        color:W.fg||"#d4d4d4", fontSize:"13px", outline:"none",
+        color:W.fg, fontSize:"13px", outline:"none",
         padding:"2px 0",
       }
     }),
@@ -114,9 +114,9 @@ const QuickEntryBar = ({ dayContent, onDayChange, W }) => {
       onClick:append,
       style:{
         background:`rgba(138,198,242,0.15)`,
-        border:`1px solid ${W.blue||"#7aa8c8"}`,
+        border:`1px solid ${W.blue}`,
         borderRadius:"5px",padding:"3px 10px",
-        cursor:"pointer",color:W.blue||"#7aa8c8",
+        cursor:"pointer",color:W.blue,
         fontSize:"12px",fontWeight:"600",flexShrink:0,
       }
     },"+ Voeg toe")
@@ -281,12 +281,12 @@ const InboxProcessor = ({ dayContent, onDayChange, onAddNote, viewDate, today, W
                 border: "1px solid transparent",
                 borderRadius: "5px", padding: "3px 6px",
                 cursor: "pointer", fontSize: "13px",
-                color: W.fgDim||"#666",
+                color: W.fgDim,
                 lineHeight: 1,
                 transition: "all .12s",
               },
               onMouseEnter: e => { e.currentTarget.style.color="#e5786d"; e.currentTarget.style.borderColor="rgba(229,120,109,0.4)"; e.currentTarget.style.background="rgba(229,120,109,0.08)"; },
-              onMouseLeave: e => { e.currentTarget.style.color=W.fgDim||"#666"; e.currentTarget.style.borderColor="transparent"; e.currentTarget.style.background="none"; },
+              onMouseLeave: e => { e.currentTarget.style.color=W.fgDim; e.currentTarget.style.borderColor="transparent"; e.currentTarget.style.background="none"; },
             }, "×")
           )
         )
@@ -311,33 +311,33 @@ const InboxProcessor = ({ dayContent, onDayChange, onAddNote, viewDate, today, W
           position: "fixed", top: "50%", left: "50%",
           transform: "translate(-50%,-50%)", zIndex: 2000,
           width: "min(520px,92vw)",
-          background: W.bg2||"#222",
-          border: `2px solid ${W.blue||"#7aa8c8"}`,
+          background: W.bg2,
+          border: `2px solid ${W.blue}`,
           borderRadius: "14px", padding: "24px 28px",
           boxShadow: "0 24px 80px rgba(0,0,0,0.8)",
         }
       },
       // Header
       React.createElement("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"14px"}},
-        React.createElement("div",{style:{fontSize:"16px",fontWeight:"800",color:W.fg||"#d4d4d4"}},
+        React.createElement("div",{style:{fontSize:"16px",fontWeight:"800",color:W.fg}},
           "📝 Inbox → Zettelkasten"),
         React.createElement("button",{onClick:()=>setPromoting(null),
-          style:{background:"none",border:"none",color:W.fgMuted||"#999",
+          style:{background:"none",border:"none",color:W.fgMuted,
             cursor:"pointer",fontSize:"18px",lineHeight:1,padding:"0 4px"}},"×")
       ),
       // Preview fragment
       React.createElement("div",{style:{
-        background:W.bg||"#1a1a1a", border:`1px solid ${W.splitBg||"#333"}`,
+        background:W.bg, border:`1px solid ${W.splitBg}`,
         borderRadius:"6px", padding:"8px 12px",
-        fontSize:"13px", color:W.fg||"#d4d4d4",
+        fontSize:"13px", color:W.fg,
         marginBottom:"16px", fontStyle:"italic", lineHeight:"1.5",
         maxHeight:"60px", overflow:"hidden",
-        borderLeft:`3px solid ${W.blue||"#7aa8c8"}`,
+        borderLeft:`3px solid ${W.blue}`,
       }},
         `"${promoting.clean.slice(0,140)}${promoting.clean.length>140?"…":""}"`
       ),
       // Titel
-      React.createElement("div",{style:{fontSize:"11px",color:W.blue||"#7aa8c8",
+      React.createElement("div",{style:{fontSize:"11px",color:W.blue,
         fontWeight:"700",letterSpacing:"1px",marginBottom:"6px"}},"TITEL"),
       React.createElement("input",{
         autoFocus:true,
@@ -346,15 +346,15 @@ const InboxProcessor = ({ dayContent, onDayChange, onAddNote, viewDate, today, W
         onKeyDown:e=>{if(e.key==="Enter"&&!e.shiftKey)promoteToZK();if(e.key==="Escape")setPromoting(null);},
         placeholder:"Geef de notitie een duidelijke titel…",
         style:{
-          width:"100%",background:W.bg||"#1a1a1a",
-          border:`2px solid ${W.blue||"#7aa8c8"}`,
+          width:"100%",background:W.bg,
+          border:`2px solid ${W.blue}`,
           borderRadius:"7px",padding:"9px 13px",
-          color:W.fg||"#d4d4d4",fontSize:"15px",fontWeight:"500",
+          color:W.fg,fontSize:"15px",fontWeight:"500",
           outline:"none",boxSizing:"border-box",marginBottom:"14px",
         }
       }),
       // Tags invoer
-      React.createElement("div",{style:{fontSize:"11px",color:W.blue||"#7aa8c8",
+      React.createElement("div",{style:{fontSize:"11px",color:W.blue,
         fontWeight:"700",letterSpacing:"1px",marginBottom:"6px"}},"TAGS"),
       React.createElement("div",{style:{position:"relative"}},
         React.createElement("input",{
@@ -363,16 +363,16 @@ const InboxProcessor = ({ dayContent, onDayChange, onAddNote, viewDate, today, W
           onKeyDown:e=>{if(e.key==="Enter")e.preventDefault();},
           placeholder:`${promoting.isTask?"taak":"dagnotitie"}, architectuur, ea …`,
           style:{
-            width:"100%",background:W.bg||"#1a1a1a",
-            border:`1px solid ${W.splitBg||"#444"}`,
+            width:"100%",background:W.bg,
+            border:`1px solid ${W.splitBg}`,
             borderRadius:"7px",padding:"7px 13px",
-            color:W.fg||"#d4d4d4",fontSize:"13px",
+            color:W.fg,fontSize:"13px",
             outline:"none",boxSizing:"border-box",
           }
         }),
-        React.createElement("div",{style:{fontSize:"11px",color:W.fgDim||"#666",marginTop:"4px"}},
+        React.createElement("div",{style:{fontSize:"11px",color:W.fgDim,marginTop:"4px"}},
           "Scheid tags met komma's. Automatisch toegevoegd: ",
-          React.createElement("span",{style:{color:W.fgMuted||"#999"}},
+          React.createElement("span",{style:{color:W.fgMuted}},
             promoting.isTask?"taak":promoting.isIdea?"idee":"dagnotitie")
         ),
         tagSuggestions.length > 0 && React.createElement("div",{
@@ -387,7 +387,7 @@ const InboxProcessor = ({ dayContent, onDayChange, onAddNote, viewDate, today, W
                 fontSize:"11px", padding:"2px 10px", borderRadius:"10px",
                 background:"rgba(138,198,242,0.08)",
                 border:`1px solid rgba(138,198,242,0.3)`,
-                color:W.blue||"#7aa8c8", cursor:"pointer",
+                color:W.blue, cursor:"pointer",
               }
             }, `+ ${tag}`)
           )
@@ -399,8 +399,8 @@ const InboxProcessor = ({ dayContent, onDayChange, onAddNote, viewDate, today, W
           onClick:()=>setPromoting(null),
           style:{
             background:"rgba(255,255,255,0.05)",
-            border:`1px solid ${W.splitBg||"#444"}`,
-            color:W.fg||"#d4d4d4",
+            border:`1px solid ${W.splitBg}`,
+            color:W.fg,
             borderRadius:"7px",padding:"8px 18px",
             cursor:"pointer",fontSize:"13px",fontWeight:"500",
           }
@@ -499,8 +499,8 @@ const OpenTasksPanel = ({ notes, onOpenNote, W }) => {
     key: id, onClick: () => setSortOrder(id),
     style: {
       background: sortOrder===id ? "rgba(138,198,242,0.15)" : "none",
-      border: `1px solid ${sortOrder===id ? (W.blue||"#7aa8c8") : W.splitBg||"#444"}`,
-      color: sortOrder===id ? (W.blue||"#7aa8c8") : W.fgMuted||"#999",
+      border: `1px solid ${sortOrder===id ? (W.blue) : W.splitBg}`,
+      color: sortOrder===id ? (W.blue) : W.fgMuted,
       borderRadius:"5px", padding:"3px 9px", cursor:"pointer",
       fontSize:"11px", fontWeight: sortOrder===id ? "700" : "400",
     }
@@ -509,7 +509,7 @@ const OpenTasksPanel = ({ notes, onOpenNote, W }) => {
   return React.createElement("div", {
     style: {
       marginTop:"12px",
-      border: `1px solid ${W.splitBg||"#444"}`,
+      border: `1px solid ${W.splitBg}`,
       borderRadius:"10px", overflow:"hidden",
       gridColumn:"1 / -1",
     }
@@ -520,21 +520,21 @@ const OpenTasksPanel = ({ notes, onOpenNote, W }) => {
         display:"flex", alignItems:"center", gap:"8px", flexWrap:"wrap",
         padding:"10px 14px",
         background:"rgba(255,255,255,0.03)",
-        borderBottom: collapsed ? "none" : `1px solid ${W.splitBg||"#444"}`,
+        borderBottom: collapsed ? "none" : `1px solid ${W.splitBg}`,
         cursor:"pointer",
       },
       onClick: () => setCollapsed(c => !c),
     },
-      React.createElement("span",{style:{fontSize:"13px",fontWeight:"700",color:W.fg||"#d4d4d4"}},
+      React.createElement("span",{style:{fontSize:"13px",fontWeight:"700",color:W.fg}},
         `✓ Openstaande taken (${filtered.length}${filterTag?` · ${filterTag}`:""})`),
-      React.createElement("span",{style:{fontSize:"11px",color:W.fgDim||"#666",marginLeft:"auto"}},
+      React.createElement("span",{style:{fontSize:"11px",color:W.fgDim,marginLeft:"auto"}},
         collapsed ? "▾ toon" : "▴ verberg"),
     ),
 
     // ── Filter + sort bar ───────────────────────────────────────────────────
     !collapsed && React.createElement("div",{
       style:{display:"flex",alignItems:"center",gap:"8px",padding:"8px 14px",
-        borderBottom:`1px solid ${W.splitBg||"#444"}`,flexWrap:"wrap"}},
+        borderBottom:`1px solid ${W.splitBg}`,flexWrap:"wrap"}},
       // Sortering
       React.createElement("div",{style:{display:"flex",gap:"4px"}},
         sortBtn("new","Nieuw → Oud"),
@@ -546,16 +546,16 @@ const OpenTasksPanel = ({ notes, onOpenNote, W }) => {
         onClick:e=>e.stopPropagation(),
         placeholder:"Filter op tag…",
         style:{
-          background:W.bg||"#1a1a1a", border:`1px solid ${W.splitBg||"#444"}`,
-          borderRadius:"5px", padding:"3px 10px", color:W.fg||"#d4d4d4",
+          background:W.bg, border:`1px solid ${W.splitBg}`,
+          borderRadius:"5px", padding:"3px 10px", color:W.fg,
           fontSize:"11px", outline:"none", width:"140px",
         }
       }),
       filterTag && React.createElement("button",{
         onClick:e=>{e.stopPropagation();setFilterTag("");},
-        style:{background:"none",border:"none",color:W.fgMuted||"#999",
+        style:{background:"none",border:"none",color:W.fgMuted,
           cursor:"pointer",fontSize:"13px",padding:"0 2px"}},"×"),
-      React.createElement("span",{style:{fontSize:"11px",color:W.fgDim||"#666",marginLeft:"auto"}},
+      React.createElement("span",{style:{fontSize:"11px",color:W.fgDim,marginLeft:"auto"}},
         `${filtered.length} van ${allTasks.length}`),
     ),
 
@@ -568,7 +568,7 @@ const OpenTasksPanel = ({ notes, onOpenNote, W }) => {
           style:{
             display:"flex", alignItems:"flex-start", gap:"10px",
             padding:"8px 14px",
-            borderBottom:`1px solid ${W.splitBg||"#333"}22`,
+            borderBottom:`1px solid ${W.splitBg}22`,
             transition:"all .3s",
             opacity: doneIds.has(task.id) ? 0.35 : 1,
             textDecoration: doneIds.has(task.id) ? "line-through" : "none",
@@ -585,7 +585,7 @@ const OpenTasksPanel = ({ notes, onOpenNote, W }) => {
               background:"none",border:"none",padding:"0 2px",
               cursor:doneIds.has(task.id)?"default":"pointer",
               fontSize:"16px",flexShrink:0,marginTop:"1px",
-              color:doneIds.has(task.id)?"#72b660":(W.fgMuted||"#999"),
+              color:doneIds.has(task.id)?"#72b660":(W.fgMuted),
               transition:"color .15s",
             }
           },
@@ -596,7 +596,7 @@ const OpenTasksPanel = ({ notes, onOpenNote, W }) => {
           // Taak tekst
           React.createElement("div",{style:{flex:1,minWidth:0}},
             React.createElement("div",{
-              style:{fontSize:"13px",color:W.fg||"#d4d4d4",lineHeight:"1.4",
+              style:{fontSize:"13px",color:W.fg,lineHeight:"1.4",
                 overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}
             },task.text.replace(/📅\s*\d{4}-\d{2}-\d{2}/,"").trim()),
             React.createElement("div",{
@@ -606,7 +606,7 @@ const OpenTasksPanel = ({ notes, onOpenNote, W }) => {
                 onClick:e=>{e.stopPropagation();onOpenNote?.(task.noteId);},
                 title:"Open notitie",
                 style:{
-                  fontSize:"10px",color:W.blue||"#7aa8c8",
+                  fontSize:"10px",color:W.blue,
                   cursor:"pointer",overflow:"hidden",textOverflow:"ellipsis",
                   whiteSpace:"nowrap",maxWidth:"160px",
                   textDecoration:"underline",textDecorationColor:"rgba(138,198,242,0.4)",
@@ -614,17 +614,17 @@ const OpenTasksPanel = ({ notes, onOpenNote, W }) => {
               },task.noteTitle),
               // Datum
               React.createElement("span",{
-                style:{fontSize:"10px",color:W.fgDim||"#666",flexShrink:0}
+                style:{fontSize:"10px",color:W.fgDim,flexShrink:0}
               }, task.dueDate
                 ? `📅 ${task.dueDate}`
                 : task.date ? task.date.slice(0,10) : ""),
               // Tags
               task.tags.slice(0,2).map(t=>
                 React.createElement("span",{key:t,
-                  style:{fontSize:"9px",background:W.bg2||"#222",
-                    border:`1px solid ${W.splitBg||"#444"}`,
+                  style:{fontSize:"9px",background:W.bg2,
+                    border:`1px solid ${W.splitBg}`,
                     borderRadius:"6px",padding:"1px 5px",
-                    color:W.fgMuted||"#999",cursor:"pointer",flexShrink:0},
+                    color:W.fgMuted,cursor:"pointer",flexShrink:0},
                   onClick:e=>{e.stopPropagation();setFilterTag(t);}
                 },t)
               ),
@@ -635,8 +635,8 @@ const OpenTasksPanel = ({ notes, onOpenNote, W }) => {
             onClick:e=>{e.stopPropagation();onOpenNote?.(task.noteId);},
             title:"Open notitie met deze taak",
             style:{
-              background:"none",border:`1px solid ${W.splitBg||"#444"}`,
-              color:W.fgMuted||"#999",borderRadius:"5px",
+              background:"none",border:`1px solid ${W.splitBg}`,
+              color:W.fgMuted,borderRadius:"5px",
               padding:"2px 7px",cursor:"pointer",
               fontSize:"11px",flexShrink:0,
             }
@@ -644,7 +644,7 @@ const OpenTasksPanel = ({ notes, onOpenNote, W }) => {
         )
       ),
       filtered.length > 50 && React.createElement("div",{
-        style:{padding:"8px 14px",fontSize:"11px",color:W.fgDim||"#666",textAlign:"center"}},
+        style:{padding:"8px 14px",fontSize:"11px",color:W.fgDim,textAlign:"center"}},
         `+ ${filtered.length-50} meer taken — gebruik filter om te verfijnen`)
     )
   );
@@ -836,8 +836,8 @@ const DailyView = ({ notes=[], onOpenNote, onAddNote, llmModel="" }) => {
         React.createElement("div",{style:{fontSize:"12px",color:W.fgMuted,marginBottom:"12px"}},"Hoe goed kon je de inhoud terugbrengen?"),
         React.createElement("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:"8px"}},
           [{label:"😕 Vergeten",r:1,col:"#e5786d",next:SM2.previewLabel(srData[note.id]||{},1)},
-           {label:"😐 Moeite",r:2,col:W.orange||"#d4b97c",next:SM2.previewLabel(srData[note.id]||{},2)},
-           {label:"🙂 Goed",r:3,col:W.blue||"#8ac6f2",next:SM2.previewLabel(srData[note.id]||{},3)},
+           {label:"😐 Moeite",r:2,col:W.orange,next:SM2.previewLabel(srData[note.id]||{},2)},
+           {label:"🙂 Goed",r:3,col:W.blue,next:SM2.previewLabel(srData[note.id]||{},3)},
            {label:"😄 Makkelijk",r:4,col:"#72b660",next:SM2.previewLabel(srData[note.id]||{},4)},
           ].map(({label,r,col,next})=>
             React.createElement("button",{key:r,onClick:()=>rateNote(note,r),
@@ -874,14 +874,14 @@ const DailyView = ({ notes=[], onOpenNote, onAddNote, llmModel="" }) => {
           React.createElement("button",{onClick:()=>goDay(-1),title:"Vorige dag",
             style:{
               background:"rgba(255,255,255,0.06)",
-              border:`1px solid ${W.splitBg||"#444"}`,
-              color:W.fg||"#d4d4d4",
+              border:`1px solid ${W.splitBg}`,
+              color:W.fg,
               borderRadius:"7px",width:"30px",height:"30px",
               cursor:"pointer",fontSize:"18px",lineHeight:1,
               display:"flex",alignItems:"center",justifyContent:"center",
               flexShrink:0,fontWeight:"300",
             }},"‹"),
-          React.createElement("h2",{style:{margin:0,fontSize:"20px",color:W.fg||"#d4d4d4",fontWeight:"700",
+          React.createElement("h2",{style:{margin:0,fontSize:"20px",color:W.fg,fontWeight:"700",
             textTransform:"capitalize",cursor:"pointer",userSelect:"none"},
             onClick:()=>setViewDate(today),title:"Klik voor vandaag"},
             viewDate===today ? dayLabel
@@ -892,8 +892,8 @@ const DailyView = ({ notes=[], onOpenNote, onAddNote, llmModel="" }) => {
             disabled:viewDate>=today,
             style:{
               background: viewDate>=today ? "none" : "rgba(255,255,255,0.06)",
-              border:`1px solid ${viewDate>=today ? "transparent" : W.splitBg||"#444"}`,
-              color: viewDate>=today ? "transparent" : W.fg||"#d4d4d4",
+              border:`1px solid ${viewDate>=today ? "transparent" : W.splitBg}`,
+              color: viewDate>=today ? "transparent" : W.fg,
               borderRadius:"7px",width:"30px",height:"30px",
               cursor: viewDate>=today ? "default" : "pointer",
               fontSize:"18px",lineHeight:1,
@@ -904,7 +904,7 @@ const DailyView = ({ notes=[], onOpenNote, onAddNote, llmModel="" }) => {
             style:{
               background:"rgba(138,198,242,0.12)",
               border:"1px solid rgba(138,198,242,0.4)",
-              color:W.blue||"#8ac6f2",
+              color:W.blue,
               borderRadius:"10px",padding:"3px 10px",
               cursor:"pointer",fontSize:"11px",fontWeight:"600",
             }},"vandaag")
@@ -915,15 +915,15 @@ const DailyView = ({ notes=[], onOpenNote, onAddNote, llmModel="" }) => {
       React.createElement("div",{style:{display:"flex",gap:"8px",flexWrap:"wrap"}},
         React.createElement("button",{onClick:()=>setQuickCapt(c=>!c),
           style:{background:quickCapt?"rgba(138,198,242,0.15)":"rgba(255,255,255,0.05)",
-            border:`1px solid ${quickCapt?"rgba(138,198,242,0.6)":W.splitBg||"#444"}`,
+            border:`1px solid ${quickCapt?"rgba(138,198,242,0.6)":W.splitBg}`,
             borderRadius:"6px",padding:"6px 14px",fontSize:"13px",cursor:"pointer",
-            color:quickCapt?W.blue||"#8ac6f2":(W.fg||"#d4d4d4"),
+            color:quickCapt?W.blue:(W.fg),
             fontWeight:"500"}},"✎ Snelle notitie"),
         React.createElement("button",{onClick:()=>setAdrOpen(a=>!a),
           style:{background:adrOpen?"rgba(114,182,96,0.15)":"rgba(255,255,255,0.05)",
-            border:`1px solid ${adrOpen?"rgba(114,182,96,0.6)":W.splitBg||"#444"}`,
+            border:`1px solid ${adrOpen?"rgba(114,182,96,0.6)":W.splitBg}`,
             borderRadius:"6px",padding:"6px 14px",fontSize:"13px",cursor:"pointer",
-            color:adrOpen?"#72b660":(W.fg||"#d4d4d4"),
+            color:adrOpen?"#72b660":(W.fg),
             fontWeight:"500"}},"📋 Nieuwe ADR")
       )
     ),
@@ -933,16 +933,16 @@ const DailyView = ({ notes=[], onOpenNote, onAddNote, llmModel="" }) => {
     // quickTitle/quickCapt-state), zonder knop die 'm opende — in
     // tegenstelling tot QuickEntryBar (die aan de dagnotitie toevoegt)
     // maakt dit een losse, zelfstandige notitie aan.
-    quickCapt && React.createElement("div",{style:{...card,borderLeft:"3px solid "+(W.blue||"#8ac6f2"),gridColumn:"1 / -1"}},
-      React.createElement("div",{style:{fontSize:"12px",color:W.blue||"#8ac6f2",letterSpacing:"1px",marginBottom:"10px"}},"NIEUWE LOSSE NOTITIE"),
+    quickCapt && React.createElement("div",{style:{...card,borderLeft:"3px solid "+(W.blue),gridColumn:"1 / -1"}},
+      React.createElement("div",{style:{fontSize:"12px",color:W.blue,letterSpacing:"1px",marginBottom:"10px"}},"NIEUWE LOSSE NOTITIE"),
       React.createElement("div",{style:{display:"flex",gap:"8px"}},
         React.createElement("input",{autoFocus:true,value:quickTitle,onChange:e=>setQuickTitle(e.target.value),
           onKeyDown:e=>{if(e.key==="Enter")doQuickCapture();if(e.key==="Escape")setQuickCapt(false);},
           placeholder:"Titel…",
-          style:{flex:1,background:W.bg,border:`1px solid ${W.blue||"#8ac6f2"}`,borderRadius:"6px",
+          style:{flex:1,background:W.bg,border:`1px solid ${W.blue}`,borderRadius:"6px",
             padding:"8px 12px",color:W.fg,fontSize:"13px",outline:"none"}}),
         React.createElement("button",{onClick:doQuickCapture,
-          style:{background:W.blue||"#8ac6f2",color:W.bg,border:"none",borderRadius:"6px",
+          style:{background:W.blue,color:W.bg,border:"none",borderRadius:"6px",
             padding:"8px 16px",cursor:"pointer",fontSize:"13px",fontWeight:"600"}},"Aanmaken")
       )
     ),
@@ -964,7 +964,7 @@ const DailyView = ({ notes=[], onOpenNote, onAddNote, llmModel="" }) => {
 
     // ── Dagnotitie ──────────────────────────── linker kolom (r3, span 2)
     React.createElement("div",{style:{...card,
-      borderLeft:`3px solid ${viewDate===today?"#72b660":W.blue||"#8ac6f2"}`,
+      borderLeft:`3px solid ${viewDate===today?"#72b660":W.blue}`,
       gridColumn:"1",gridRow:isWide?"3 / span 2":undefined}},
       // ── Parchment-stijl header: compact + quick-entry bar ──────────────────
       React.createElement("div",{style:{display:"flex",justifyContent:"space-between",
@@ -1011,7 +1011,7 @@ const DailyView = ({ notes=[], onOpenNote, onAddNote, llmModel="" }) => {
                 boxSizing:"border-box",fontFamily:"inherit"}}),
             fragment&&!fragDialog&&React.createElement("div",{style:{
               position:"fixed",left:`${fragPos.x}px`,top:`${fragPos.y+20}px`,zIndex:1000,
-              background:W.bg2,border:`1px solid ${W.blue||"#8ac6f2"}`,borderRadius:"7px",
+              background:W.bg2,border:`1px solid ${W.blue}`,borderRadius:"7px",
               padding:"6px",display:"flex",gap:"6px",boxShadow:"0 4px 16px rgba(0,0,0,0.3)"}},
               React.createElement("button",{onClick:()=>setFragDialog(true),
                 style:{background:"rgba(114,182,96,0.12)",border:"1px solid rgba(114,182,96,0.4)",
@@ -1036,7 +1036,7 @@ const DailyView = ({ notes=[], onOpenNote, onAddNote, llmModel="" }) => {
                 onChange:e=>setFragTitle(e.target.value),
                 onKeyDown:e=>{if(e.key==="Enter")createNoteFromFragment();if(e.key==="Escape")setFragDialog(false);},
                 placeholder:"Titel van de notitie…",
-                style:{width:"100%",background:W.bg,border:`1px solid ${W.blue||"#8ac6f2"}`,
+                style:{width:"100%",background:W.bg,border:`1px solid ${W.blue}`,
                   borderRadius:"6px",padding:"8px 12px",color:W.fg,fontSize:"14px",
                   outline:"none",boxSizing:"border-box"}}),
               React.createElement("div",{style:{display:"flex",gap:"8px",marginTop:"14px",justifyContent:"flex-end"}},
@@ -1082,9 +1082,9 @@ const DailyView = ({ notes=[], onOpenNote, onAddNote, llmModel="" }) => {
               :`${doneToday}/${totalDue} afgerond`)
         ),
         totalDue>0&&React.createElement("div",{style:{textAlign:"right"}},
-          React.createElement("div",{style:{fontSize:"22px",fontWeight:"700",color:W.blue||"#8ac6f2"}},`${pct}%`),
+          React.createElement("div",{style:{fontSize:"22px",fontWeight:"700",color:W.blue}},`${pct}%`),
           React.createElement("div",{style:{width:"60px",height:"4px",background:W.splitBg,borderRadius:"2px",marginTop:"4px",overflow:"hidden"}},
-            React.createElement("div",{style:{width:`${pct}%`,height:"100%",background:W.blue||"#8ac6f2",borderRadius:"2px",transition:"width .3s"}}))
+            React.createElement("div",{style:{width:`${pct}%`,height:"100%",background:W.blue,borderRadius:"2px",transition:"width .3s"}}))
         )
       ),
       dueNotes.slice(0,5).map(n=>{
@@ -1095,7 +1095,7 @@ const DailyView = ({ notes=[], onOpenNote, onAddNote, llmModel="" }) => {
             background:W.bg,borderRadius:"7px",border:`1px solid ${W.splitBg}`,
             cursor:"pointer",marginBottom:"6px",transition:"border-color .12s"},
           onClick:()=>startReview(n),
-          onMouseEnter:e=>e.currentTarget.style.borderColor=W.blue||"#8ac6f2",
+          onMouseEnter:e=>e.currentTarget.style.borderColor=W.blue,
           onMouseLeave:e=>e.currentTarget.style.borderColor=W.splitBg},
           React.createElement("div",{style:{flex:1,minWidth:0}},
             React.createElement("div",{style:{fontSize:"13px",color:W.fg,fontWeight:"500",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},n.title),
@@ -1105,7 +1105,7 @@ const DailyView = ({ notes=[], onOpenNote, onAddNote, llmModel="" }) => {
           days>0&&React.createElement("span",{style:{fontSize:"10px",background:"rgba(229,120,109,0.15)",
             color:"#e5786d",borderRadius:"8px",padding:"2px 6px",flexShrink:0}},`${days}d`),
           React.createElement("button",{onClick:e=>{e.stopPropagation();startReview(n);},
-            style:{background:W.blue||"#8ac6f2",color:W.bg,border:"none",borderRadius:"5px",
+            style:{background:W.blue,color:W.bg,border:"none",borderRadius:"5px",
               padding:"3px 10px",cursor:"pointer",fontSize:"11px",fontWeight:"600",flexShrink:0}},"→")
         );
       }),
@@ -1130,10 +1130,10 @@ const DailyView = ({ notes=[], onOpenNote, onAddNote, llmModel="" }) => {
 
     // ── Statistieken ──────────────────────────────────────────── volle breedte
     React.createElement("div",{style:{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(120px,1fr))",gap:"10px",gridColumn:"1 / -1"}},
-      [{label:"Notities",value:notes.length,icon:"📝",col:W.blue||"#8ac6f2"},
+      [{label:"Notities",value:notes.length,icon:"📝",col:W.blue},
        {label:"Reviews",value:totalDue,icon:"🔁",col:"#d4b97c"},
        {label:"SR-systeem",value:totalSR,icon:"🧠",col:"#72b660"},
-       {label:"Open taken",value:openTasks,icon:"✓",col:W.orange||"#d4b97c"},
+       {label:"Open taken",value:openTasks,icon:"✓",col:W.orange},
       ].map(({label,value,icon,col})=>
         React.createElement("div",{key:label,style:{
           background:W.bg2,border:`1px solid ${W.splitBg}`,
@@ -1175,7 +1175,7 @@ const DailyView = ({ notes=[], onOpenNote, onAddNote, llmModel="" }) => {
             (n.modified||n.created||"").slice(5)),
           !inSR&&React.createElement("button",{title:"Toevoegen aan SR",
             onClick:e=>{e.stopPropagation();addToSR(n.id);},
-            style:{background:`rgba(138,198,242,0.1)`,border:`1px solid ${W.blue||"#8ac6f2"}`,color:W.blue||"#8ac6f2",
+            style:{background:`rgba(138,198,242,0.1)`,border:`1px solid ${W.blue}`,color:W.blue,
               borderRadius:"4px",padding:"2px 7px",cursor:"pointer",fontSize:"10px",flexShrink:0,fontWeight:"600"}},"+SR"),
           inSR&&React.createElement("span",{style:{fontSize:"10px",color:"#72b660",flexShrink:0}},"🧠")
         );

@@ -13,6 +13,25 @@
     .textLayer, .textLayer * { touch-action: auto !important; }
     button { touch-action: manipulation; }
 
+    /* Globale appearance-reset: zonder dit kan de browser/het OS native
+       styling laten doorschemeren op knoppen/inputs — ongeacht wat de
+       JS-inline-stijl zegt (bv. een donkere systeem-achtergrond op een
+       <input> in een licht thema, of een bevel-rand op een <button>).
+       Eerder losgevonden en per-element gepatcht (datumknop) — nu in één
+       keer breed opgelost. Bewust NIET ook background/border/color hier
+       resetten: vrijwel elk element zet dat al zelf via inline style, en
+       een element dat dat toevallig niet doet zou anders onbedoeld
+       onzichtbaar/randloos kunnen worden. <select> bewust UITGESLOTEN:
+       verliest anders zijn dropdown-pijltje, en niet elke <select> in de
+       app tekent daar zelf een vervangende pijl voor.
+       font-family wél meenemen: inputs/textareas erven dat van zichzelf
+       niet automatisch mee van de body in de meeste browsers. */
+    button, input, textarea {
+      -webkit-appearance: none;
+      appearance: none;
+      font-family: inherit;
+    }
+
     html {
       height: 100%; width: 100%; overflow: hidden;
       /* iOS Safari: gebruik fill-available zodat de hoogte VAST is */

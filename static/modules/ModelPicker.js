@@ -83,7 +83,7 @@ const ModelPicker = ({llmModel, setLlmModel, compact=false}) => {
 
       // Online groepen
       ...groups.map(g => {
-        const gc = PROVIDER_COLOR[g.provider] || W.fg;
+        const gc = PROVIDER_COLOR(g.provider) || W.fg;
         return React.createElement("div", {key:g.label},
           React.createElement("div",{style:{padding:"8px 14px 3px",fontSize:"11px",
             color:gc, letterSpacing:"0.7px", opacity:0.8, fontWeight:"bold"}}, g.label.toUpperCase()),
@@ -175,7 +175,7 @@ const ModelPicker = ({llmModel, setLlmModel, compact=false}) => {
       // ── Jan.ai sectie ────────────────────────────────────────────────────
       React.createElement("div",{style:{height:"1px",background:W.splitBg,margin:"6px 0"}}),
       React.createElement("div",{style:{padding:"4px 14px 3px",fontSize:"11px",
-        color:"#e8a44a", letterSpacing:"0.7px", opacity:0.8, fontWeight:"bold"}},"JAN.AI (LOKAAL · POORT 1337)"),
+        color:(W.dark===false?"#644720":"#e8a44a"), letterSpacing:"0.7px", fontWeight:"bold"}},"JAN.AI (LOKAAL · POORT 1337)"),
       localModels
         .filter(m => m.startsWith("jan:"))
         .length === 0
@@ -189,7 +189,7 @@ const ModelPicker = ({llmModel, setLlmModel, compact=false}) => {
                 width:"100%", textAlign:"left",
                 background: llmModel===m ? "rgba(232,164,74,0.15)" : "none",
                 border:"none", padding:"5px 14px 5px 18px",
-                color: llmModel===m ? "#e8a44a" : W.fg,
+                color: llmModel===m ? (W.dark===false?"#644720":"#e8a44a") : W.fg,
                 fontSize:"14px", cursor:"pointer",
               }
             },
@@ -198,7 +198,7 @@ const ModelPicker = ({llmModel, setLlmModel, compact=false}) => {
                 React.createElement("div",null, m.replace("jan:","")),
                 React.createElement("div",{style:{fontSize:"10px",color:W.fgMuted,marginTop:"1px"}},"Jan.ai lokaal")
               ),
-              llmModel===m && React.createElement("span",{style:{marginLeft:"auto",fontSize:"11px",color:"#e8a44a"}},"✓")
+              llmModel===m && React.createElement("span",{style:{marginLeft:"auto",fontSize:"11px",color:(W.dark===false?"#644720":"#e8a44a")}},"✓")
             )
           ),
 
