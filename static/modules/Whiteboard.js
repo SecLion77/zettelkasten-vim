@@ -138,8 +138,24 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
     .replace(/\n{2,}/g, "\n")           // dubbele newlines
     .trim();
 
-  // Kleuren voor kaarten (Wombat-palette)
-  const COLORS = [
+  // Kleuren voor kaarten (Wombat-palette) — donkere variant voor donkere
+  // thema's (origineel), lichte variant voor lichte thema's. Border blijft
+  // per kleur herkenbaar, bg/tekst passen zich aan zodat contrast overal
+  // AAA (tekst) resp. ≥3:1 (rand) haalt.
+  const COLORS = W.dark === false ? [
+    { bg: "#FBF3D0", border: "#849438", text: "#5C4A00", name: "geel",
+      label: "Idee / vluchtig",    desc: "Nieuwe gedachten, vluchtige notities" },
+    { bg: "#DCEAFA", border: "#4A7FB5", text: "#1A3A6A", name: "blauw",
+      label: "Bron / notitie",     desc: "Literatuur, bronnen, gelinkte notities" },
+    { bg: "#FAE0DC", border: "#C0503E", text: "#8A2A1E", name: "rood",
+      label: "Vraag / spanning",   desc: "Openstaande vragen, tegenstrijdigheden" },
+    { bg: "#DFF2DC", border: "#56944D", text: "#2A5E28", name: "groen",
+      label: "Conclusie / inzicht", desc: "Eigen inzichten, permanente kennis" },
+    { bg: "#F0E3FA", border: "#8A5AA8", text: "#5A2878", name: "paars",
+      label: "Onbekend / onderzoek", desc: "Te onderzoeken, hypotheses" },
+    { bg: "#ECE6D6", border: "#7A7264", text: "#3A3428", name: "grijs",
+      label: "Neutraal / overig",  desc: "Structuur, containers, vrije kaarten" },
+  ] : [
     { bg: "#2a2a1e", border: "#9fca56", text: "#ffffd7", name: "geel",
       label: "Idee / vluchtig",    desc: "Nieuwe gedachten, vluchtige notities" },
     { bg: "#1e242a", border: "#8ac6f2", text: "#e3e0d7", name: "blauw",
@@ -333,7 +349,7 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
         const gridSize = 24 * v.scale;
         const offX = ((v.ox % gridSize) + gridSize) % gridSize;
         const offY = ((v.oy % gridSize) + gridSize) % gridSize;
-        ctx.strokeStyle = "rgba(255,255,255,0.04)";
+        ctx.strokeStyle = W.dark===false ? "rgba(0,0,0,0.05)" : "rgba(255,255,255,0.04)";
         ctx.lineWidth = 0.5;
         for (let x = offX; x < CW; x += gridSize) {
           ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, CH); ctx.stroke();
@@ -407,7 +423,7 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
             ctx.font = `${12 * v.scale}px 'DM Sans', sans-serif`;
             const tlw = ctx.measureText(con.label).width + 12*v.scale;
             // Achtergrond pill met border
-            ctx.fillStyle = "rgba(14,14,18,0.85)";
+            ctx.fillStyle = W.dark===false ? "rgba(242,234,208,0.92)" : "rgba(14,14,18,0.85)";
             ctx.beginPath();
             if (ctx.roundRect) ctx.roundRect(conMX-tlw/2,lbY-9*v.scale,tlw,17*v.scale,5*v.scale);
             else ctx.rect(conMX-tlw/2,lbY-9*v.scale,tlw,17*v.scale);
@@ -416,7 +432,7 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
             ctx.lineWidth = 0.8;
             ctx.stroke();
             // Tekst
-            ctx.fillStyle = "rgba(227,224,215,0.95)";
+            ctx.fillStyle = W.dark===false ? "rgba(28,24,16,0.95)" : "rgba(227,224,215,0.95)";
             ctx.fillText(con.label, conMX, lbY + 4*v.scale);
           }
         });
@@ -438,7 +454,7 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
             }
             const img = imgCache.current[c.imgUrl];
             const sw = c.w * v.scale, sh = c.h * v.scale;
-            ctx.strokeStyle = isSel ? "#7dd8c6" : "#2a3a40";
+            ctx.strokeStyle = isSel ? "#7dd8c6" : (W.dark===false ? "#C8BFA8" : "#2a3a40");
             ctx.lineWidth   = isSel ? 2.5 : 1;
             roundRect(ctx, sx.x, sx.y, sw, sh, 6 * v.scale); ctx.stroke();
             if (img) {
@@ -451,9 +467,9 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
               ctx.drawImage(img, sx.x + dx, sx.y + dy, dw, dh);
               ctx.restore();
             } else {
-              ctx.fillStyle = "#0f1518";
+              ctx.fillStyle = W.dark===false ? "#E4DBC0" : "#0f1518";
               roundRect(ctx, sx.x, sx.y, sw, sh, 6*v.scale); ctx.fill();
-              ctx.fillStyle = "#4e6a70"; ctx.font = `${14*v.scale}px sans-serif`;
+              ctx.fillStyle = W.dark===false ? "#8A7A5C" : "#4e6a70"; ctx.font = `${14*v.scale}px sans-serif`;
               ctx.textAlign = "center"; ctx.textBaseline = "middle";
               ctx.fillText("⏳", sx.x + sw/2, sx.y + sh/2);
             }
@@ -1236,8 +1252,8 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
               value: sidebarQuery,
               onChange: e => setSidebarQuery(e.target.value),
               style: {
-                width: "100%", background: "#1a1a1a",
-                border: `1px solid #2a2a2a`, borderRadius: "5px",
+                width: "100%", background: W.bg,
+                border: `1px solid ${W.splitBg}`, borderRadius: "5px",
                 color: W.fg, padding: "5px 8px 5px 26px", fontSize: "12px",
                 outline: "none", boxSizing: "border-box",
               }
@@ -1259,7 +1275,7 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
                 style: {
                   flex: 1, padding: "2px 0", fontSize: "10px", cursor: "pointer",
                   background: searchMode === mode ? "rgba(138,198,242,0.12)" : "transparent",
-                  border: `1px solid ${searchMode === mode ? "rgba(138,198,242,0.3)" : "#2a2a2a"}`,
+                  border: `1px solid ${searchMode === mode ? "rgba(138,198,242,0.3)" : W.splitBg}`,
                   borderRadius: "4px",
                   color: searchMode === mode ? W.blue : W.fgMuted,
                 }
@@ -1330,8 +1346,8 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
                   key: fname,
                   style: { position: "relative", cursor: "pointer",
                            borderRadius: "5px", overflow: "hidden",
-                           border: "1px solid #1a2428",
-                           aspectRatio: "4/3", background: "#0a0e10" },
+                           border: `1px solid ${W.splitBg}`,
+                           aspectRatio: "4/3", background: W.bg },
                   title: fname,
                   onClick: () => {
                     const cv = cvRef.current;
@@ -1462,9 +1478,9 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
         React.createElement("div", {
           style: {
             flexShrink: 0,
-            borderTop: `1px solid #2a2a2a`,
+            borderTop: `1px solid ${W.splitBg}`,
             padding: "10px 10px 8px",
-            background: "#161616",
+            background: W.bg3,
           }
         },
           React.createElement("div", {
@@ -1482,7 +1498,7 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
             }),
             React.createElement("div", { style: { display:"flex", flexDirection:"column", gap:"1px" } },
               React.createElement("span", {
-                style: { fontSize: "11px", color: W.fg || "#e3e0d7" }
+                style: { fontSize: "11px", color: W.fg }
               }, col.label),
               React.createElement("span", {
                 style: { fontSize: "9px", color: W.fgMuted, lineHeight: 1.3 }
@@ -1526,7 +1542,7 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
     // ── Hoofd canvas kolom ──────────────────────────────────────────────────
     React.createElement("div", {
       style: { flex: 1, display: "flex", flexDirection: "column",
-               overflow: "hidden", minHeight: 0, background: "#181818",
+               overflow: "hidden", minHeight: 0, background: W.bg,
                position: "relative" }
     },
 
@@ -1745,7 +1761,7 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
         )
       ),
 
-      React.createElement("div", { style: { width: "1px", height: "20px", background: "#2a2a2a" } }),
+      React.createElement("div", { style: { width: "1px", height: "20px", background: W.splitBg } }),
 
       // Tool knoppen
       ...[
@@ -1798,7 +1814,7 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
             }
           });
         }),
-        React.createElement("div", { style: { width: "1px", height: "16px", background: "#2a2a2a", margin: "0 2px" } })
+        React.createElement("div", { style: { width: "1px", height: "16px", background: W.splitBg, margin: "0 2px" } })
       ),
 
       // Geselecteerde kaart acties
@@ -1820,9 +1836,9 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
         selCard.noteId && onShowInGraph && React.createElement("button", {
           onClick: () => onShowInGraph(selCard.noteId),
           title: "Toon in kennisgraaf",
-          style: { background: W.blueBg||"rgba(122,168,200,0.15)",
-                   border: `1px solid ${W.blueBorder||"rgba(122,168,200,0.4)"}`,
-                   borderRadius: "5px", color: W.blue||"#7aa8c8",
+          style: { background: W.blueBg,
+                   border: `1px solid ${W.blueBorder}`,
+                   borderRadius: "5px", color: W.blue,
                    padding: "3px 9px", fontSize: "12px", cursor: "pointer",
                    fontWeight: "500" }
         }, "🕸 Graaf"),
@@ -1835,7 +1851,7 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
         }, "✕"),
       ),
 
-      React.createElement("div", { style: { width: "1px", height: "20px", background: "#2a2a2a" } }),
+      React.createElement("div", { style: { width: "1px", height: "20px", background: W.splitBg } }),
 
       // AI analyse knop
       llmModel && React.createElement("button", {
@@ -1932,7 +1948,7 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
         borderBottom:`1px solid ${W.splitBg}`,flexShrink:0,
       }},
         React.createElement("span",{style:{fontSize:"15px"}},"🤖"),
-        React.createElement("span",{style:{fontSize:"13px",fontWeight:"600",color:W.purple||"#d787ff",flex:1}},"AI Canvas Analyse"),
+        React.createElement("span",{style:{fontSize:"13px",fontWeight:"600",color:W.purple,flex:1}},"AI Canvas Analyse"),
         // Mode knoppen
         ["analyse","synthese","chat"].map(m=>
           React.createElement("button",{
@@ -1941,7 +1957,7 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
               padding:"2px 8px",borderRadius:"4px",fontSize:"11px",cursor:"pointer",
               background: aiMode===m ? "rgba(215,135,255,0.2)" : "none",
               border:`1px solid ${aiMode===m ? "rgba(215,135,255,0.5)" : W.splitBg}`,
-              color: aiMode===m ? (W.purple||"#d787ff") : W.fgMuted,
+              color: aiMode===m ? (W.purple) : W.fgMuted,
             }
           }, m)
         ),
@@ -1974,7 +1990,7 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
                     style:{padding:"4px 10px",borderRadius:"5px",fontSize:"12px",cursor:"pointer",
                       background:"rgba(215,135,255,0.1)",
                       border:"1px solid rgba(215,135,255,0.3)",
-                      color:W.purple||"#d787ff"}
+                      color:W.purple}
                   },"→ Opslaan als notitie")
                 )
               )
@@ -1998,7 +2014,7 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
             if(inp&&inp.value.trim()){runAiChat(inp.value.trim());inp.value="";}
           },
           style:{padding:"6px 12px",borderRadius:"6px",background:"rgba(215,135,255,0.1)",
-            border:"1px solid rgba(215,135,255,0.3)",color:W.purple||"#d787ff",
+            border:"1px solid rgba(215,135,255,0.3)",color:W.purple,
             cursor:"pointer",fontSize:"12px"}
         },"→")
       )
@@ -2113,8 +2129,8 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
           left: Math.max(8, editingCon.x - 130),
           top:  Math.max(8, editingCon.y - 22),
           zIndex: 9999,
-          background: W.bg2 || "#1a1a1a",
-          border: "1px solid " + (W.blue || "#8ac6f2"),
+          background: W.bg2,
+          border: "1px solid " + (W.blue),
           borderRadius: "10px",
           padding: "8px 12px",
           display: "flex",
@@ -2125,7 +2141,7 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
         }
       },
         React.createElement("span", {
-          style: { fontSize: "13px", color: W.fgMuted || "#857b6f", flexShrink: 0 }
+          style: { fontSize: "13px", color: W.fgMuted, flexShrink: 0 }
         }, "✏"),
         React.createElement("input", {
           autoFocus: true,
@@ -2153,8 +2169,8 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
             flex: 1,
             background: "transparent",
             border: "none",
-            borderBottom: "1px solid " + (W.splitBg || "#444"),
-            color: W.fg || "#e3e0d7",
+            borderBottom: "1px solid " + (W.splitBg),
+            color: W.fg,
             fontSize: "14px",
             outline: "none",
             fontFamily: "'DM Sans', sans-serif",
@@ -2174,7 +2190,7 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
           },
           style: {
             background: "transparent", border: "none",
-            color: W.blue || "#8ac6f2", fontSize: "16px", cursor: "pointer",
+            color: W.blue, fontSize: "16px", cursor: "pointer",
           }
         }, "✓"),
         editingCon.label && React.createElement("button", {
@@ -2191,7 +2207,7 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
           },
           style: {
             background: "transparent", border: "none",
-            color: W.fgMuted || "#857b6f", fontSize: "13px", cursor: "pointer",
+            color: W.fgMuted, fontSize: "13px", cursor: "pointer",
           }
         }, "✕")
       ),
@@ -2204,26 +2220,35 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
 
         // Thema-kleuren
         const isDark = W.dark !== false;
-        const bg0  = W.bg2  || "rgba(22,22,28,0.97)";
-        const sep = isDark
-          ? (W.splitBg || "rgba(255,255,255,0.10)")
-          : (W.splitBg || "rgba(0,0,0,0.15)");
-        const blue = W.blue || "#8ac6f2";
-        const green= W.tagColor || "#9fca56";
-        const orange=W.orange || "#e5786d";
-        const mut  = W.fgMuted || "#857b6f";
-        const fg   = W.fg || "#e3e0d7";
+        const bg0  = W.bg2;
+        const sep = W.splitBg;
+        const blue = W.blue;
+        const green= W.tagColor;
+        const orange=W.orange;
+        const mut  = W.fgMuted;
+        const fg   = W.fg;
         // RGB helpers voor rgba() constructie
         const _h2r = (hex) => { try {
           const h=(hex||"#8ac6f2").replace("#","");
           return `${parseInt(h.slice(0,2),16)},${parseInt(h.slice(2,4),16)},${parseInt(h.slice(4,6),16)}`;
         } catch{return "138,198,242";} };
+        // Voor TEKST/iconen/randen: donkere, thema-getinte kleuren (goed
+        // contrast tegen een lichte achtergrond).
         const blueRgb   = _h2r(blue);
         const greenRgb  = _h2r(green);
         const orangeRgb = _h2r(orange);
-        const purpleRgb = _h2r(W.purple || "#d787ff");
-        const ring0rgb  = blueRgb;
-        const ring1rgb  = greenRgb;
+        const purpleRgb = _h2r(W.purple);
+        // Voor SEGMENT-VULLING (achtergrond): een eigen, lichte pastelbasis
+        // op lichte thema's — de donkere tekst-kleuren hierboven geven als
+        // achtergrond gecombineerd met donkere labeltekst onvoldoende
+        // contrast (gemeten 3.46–3.84:1, onder de tekst-minimum van 4.5:1).
+        // Zelfde herkenbare kleurtoon, alleen omgekeerde helderheid.
+        const segBlueRgb   = isDark ? blueRgb   : _h2r("#8FB8E0");
+        const segGreenRgb  = isDark ? greenRgb  : _h2r("#A8CC7A");
+        const segOrangeRgb = isDark ? orangeRgb : _h2r("#E0A868");
+        const segPurpleRgb = isDark ? purpleRgb : _h2r("#C79BE0");
+        const ring0rgb  = segBlueRgb;
+        const ring1rgb  = segGreenRgb;
 
         // ── Arc-pad helpers ───────────────────────────────────────────────
         const arc = (r1, r2, a0d, a1d, gap=2.8) => {
@@ -2241,28 +2266,29 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
         // ── Binnenring acties ─────────────────────────────────────────────
         const innerItems = card ? [
           {key:"edit", icon:"✎",label:"Bewerken",
-           bg:isDark?`rgba(${blueRgb},0.18)`:`rgba(${blueRgb},0.22)`,
-           hbg:isDark?`rgba(${blueRgb},0.38)`:`rgba(${blueRgb},0.45)`,ic:blue,
+           bg:`rgba(${segBlueRgb},${isDark?0.18:0.30})`,
+           hbg:`rgba(${segBlueRgb},${isDark?0.38:0.55})`,ic:blue,
            action:()=>{setEditingId(card.id);setSelected(card.id);setCtxMenu(null);}},
           {key:"conn", icon:"⤳",label:"Verbinden",
-           bg:isDark?`rgba(${blueRgb},0.12)`:`rgba(${blueRgb},0.16)`,
-           hbg:isDark?`rgba(${blueRgb},0.28)`:`rgba(${blueRgb},0.38)`,ic:blue,
+           bg:`rgba(${segBlueRgb},${isDark?0.12:0.22})`,
+           hbg:`rgba(${segBlueRgb},${isDark?0.28:0.45})`,ic:blue,
            action:()=>{setTool("connect");setConnectFrom(card.id);setCtxMenu(null);}},
           {key:"note", icon:"⬡",label:card.noteId?"Notitie":"→ Notitie",
-           bg:isDark?"rgba(159,202,86,0.15)":"rgba(42,94,40,0.14)",
-           hbg:isDark?"rgba(159,202,86,0.32)":"rgba(42,94,40,0.30)",ic:green,
+           bg:`rgba(${segGreenRgb},${isDark?0.15:0.32})`,
+           hbg:`rgba(${segGreenRgb},${isDark?0.32:0.55})`,ic:green,
            action:()=>{card.noteId?setPeekNoteId(card.noteId):cardToNote(card);setCtxMenu(null);}},
           {key:"graph",icon:"🕸",label:"Graaf",
-           bg:isDark?"rgba(138,198,242,0.12)":"rgba(26,58,106,0.12)",
-           hbg:isDark?"rgba(138,198,242,0.28)":"rgba(26,58,106,0.28)",ic:blue,
+           bg:`rgba(${segBlueRgb},${isDark?0.12:0.22})`,
+           hbg:`rgba(${segBlueRgb},${isDark?0.28:0.45})`,ic:blue,
            hidden:!card.noteId,
            action:()=>{if(card.noteId&&onShowInGraph)onShowInGraph(card.noteId);setCtxMenu(null);}},
           {key:"dup",  icon:"⊞",label:"Dupliceer",
-           bg:isDark?"rgba(159,202,86,0.10)":"rgba(42,94,40,0.10)",
-           hbg:isDark?"rgba(159,202,86,0.22)":"rgba(42,94,40,0.24)",ic:green,
+           bg:`rgba(${segGreenRgb},${isDark?0.10:0.20})`,
+           hbg:`rgba(${segGreenRgb},${isDark?0.22:0.40})`,ic:green,
            action:()=>{const{x,y}=toWorld(cx+20,cy+20);addCard(x+20,y+20,card.text,card.colorIdx,null);setCtxMenu(null);}},
           {key:"del",  icon:"✕",label:"Verwijder",
-           bg:"rgba(229,120,109,0.18)",hbg:"rgba(229,120,109,0.38)",ic:orange,
+           bg:`rgba(${segOrangeRgb},${isDark?0.18:0.26})`,
+           hbg:`rgba(${segOrangeRgb},${isDark?0.38:0.50})`,ic:orange,
            action:()=>{deleteCard(card.id);setCtxMenu(null);}},
         ].filter(x=>!x.hidden) : [
           {key:"new",icon:"+",label:"Nieuwe kaart",
@@ -2278,17 +2304,17 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
         // ── Ring-data (4 niveaus) ─────────────────────────────────────────
         const MAX_DEPTH = 4;
         const RING_RADII = [[125,205],[210,285],[290,365],[370,445]];
-        const RING_COLORS = isDark ? [
-          [`rgba(${blueRgb},`,  `rgba(${blueRgb},`],
-          [`rgba(${greenRgb},`, `rgba(${greenRgb},`],
-          [`rgba(${orangeRgb},`,`rgba(${orangeRgb},`],
-          [`rgba(${purpleRgb},`,`rgba(${purpleRgb},`],
-        ] : [
-          // Lichte thema: hogere opacity zodat slices zichtbaar zijn op crème
-          [`rgba(${blueRgb},`,  `rgba(${blueRgb},`],
-          [`rgba(${greenRgb},`, `rgba(${greenRgb},`],
-          [`rgba(${orangeRgb},`,`rgba(${orangeRgb},`],
-          [`rgba(${purpleRgb},`,`rgba(${purpleRgb},`],
+        // Was: een isDark-vertakking die in beide takken identieke waarden
+        // teruggaf (dode branch) — gebruikte bovendien de donkere,
+        // tekst-geoptimaliseerde kleuren als segment-achtergrond, wat samen
+        // met de donkere labeltekst een contrast van 3.46–3.84:1 gaf (onder
+        // de 4.5:1-tekstminimum). Nu een echte lichte pastelbasis op lichte
+        // thema's (seg*Rgb), geverifieerd ≥6.4:1 over het hele alpha-bereik.
+        const RING_COLORS = [
+          [`rgba(${segBlueRgb},`,  `rgba(${segBlueRgb},`],
+          [`rgba(${segGreenRgb},`, `rgba(${segGreenRgb},`],
+          [`rgba(${segOrangeRgb},`,`rgba(${segOrangeRgb},`],
+          [`rgba(${segPurpleRgb},`,`rgba(${segPurpleRgb},`],
         ];
 
         // Bouw de nodes per ring op basis van ringPath
@@ -2336,7 +2362,9 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
         const half    = svgSize/2;
 
         const typeColorIdx2 = {fleeting:0,literature:1,permanent:3,index:4};
-        const typeColorMap2 = {fleeting:"#e8a44a",literature:"#8ac6f2",permanent:"#9fca56",index:"#d7a0ff"};
+        const typeColorMap2 = W.dark===false
+          ? {fleeting:"#644720",literature:"#374F61",permanent:"#405122",index:"#564066"}
+          : {fleeting:"#e8a44a",literature:"#8ac6f2",permanent:"#9fca56",index:"#d7a0ff"};
         const typeLabels2   = {fleeting:"Vluchtig",literature:"Literatuur",permanent:"Permanent",index:"Index"};
 
         const addNeighbor = (nb, weight, fromCardId) => {
@@ -2377,8 +2405,8 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
             return React.createElement("div",{
               style:{
                 position:"absolute", left:showRight?-(300+20):svgSize+8, top:half-160,
-                width:"298px", background:W.bg2||"#1e1e24",
-                border:`1px solid ${W.splitBg||"#2a2a2a"}`,
+                width:"298px", background:W.bg2,
+                border:`1px solid ${W.splitBg}`,
                 borderRadius:"10px", boxShadow:"0 8px 32px rgba(0,0,0,0.75)",
                 overflow:"hidden", pointerEvents:"none",
                 animation:"fadeIn .15s ease-out", zIndex:260,
@@ -2389,7 +2417,7 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
                 ?`linear-gradient(90deg,${tCol},${tCol}44)`
                 :`linear-gradient(90deg,${blue},transparent)`}}),
               // Header
-              React.createElement("div",{style:{padding:"10px 12px 6px",borderBottom:`1px solid ${W.splitBg||"#2a2a2a"}`}},
+              React.createElement("div",{style:{padding:"10px 12px 6px",borderBottom:`1px solid ${W.splitBg}`}},
                 tCol&&React.createElement("div",{style:{display:"inline-flex",alignItems:"center",gap:"4px",
                   fontSize:"11px",color:tCol,background:`${tCol}18`,border:`1px solid ${tCol}40`,
                   borderRadius:"3px",padding:"1px 6px",marginBottom:"5px"}},
@@ -2402,7 +2430,7 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
               ),
               preview&&React.createElement("div",{style:{padding:"8px 12px",fontSize:"12.5px",color:mut,
                 lineHeight:1.7,overflow:"hidden",display:"-webkit-box",WebkitLineClamp:5,WebkitBoxOrient:"vertical",
-                borderBottom:tags.length?`1px solid ${W.splitBg||"#2a2a2a"}`:"none"}},
+                borderBottom:tags.length?`1px solid ${W.splitBg}`:"none"}},
                 preview+(nb.content?.length>200?"…":"")),
               tags.length>0&&React.createElement("div",{style:{padding:"6px 10px",display:"flex",flexWrap:"wrap",gap:"4px"}},
                 ...tags.map(t=>React.createElement("span",{key:t,style:{fontSize:"11px",padding:"2px 7px",
@@ -2562,7 +2590,7 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
                     React.createElement("text",{
                       x:m.x,y:m.y,textAnchor:"middle",dominantBaseline:"middle",
                       fontSize:isHovered?13:11,fontWeight:"700",
-                      fill:isHovered?"#ffffd7":fg,
+                      fill:isHovered?(W.dark===false?fg:"#ffffd7"):fg,
                       fontFamily:"'DM Sans',sans-serif",
                       style:{pointerEvents:"none",transition:"font-size .18s"}
                     },weight),
@@ -2572,7 +2600,7 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
                       y:m.y*(1+24/Math.max(1,Math.hypot(m.x,m.y)))+12,
                       textAnchor:m.x>15?"start":m.x<-15?"end":"middle",
                       fontSize:isHovered?11:10,fontWeight:isHovered?"600":"400",
-                      fill:isHovered?"#ffffd7":`${mut}cc`,
+                      fill:isHovered?(W.dark===false?fg:"#ffffd7"):(W.dark===false?mut:`${mut}cc`),
                       fontFamily:"'DM Sans',sans-serif",
                       style:{pointerEvents:"none",transition:"all .18s"}
                     },(nb.title||nb.id).slice(0,14)+((nb.title||nb.id).length>14?"…":""))
@@ -2601,11 +2629,11 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
                     fill:"url(#zk-rg-in)",style:{pointerEvents:"none"}}),
                   // Icoon ring
                   React.createElement("circle",{cx:m.x,cy:m.y,r:isH?18:15,
-                    fill:isH?`${item.ic}28`:"rgba(255,255,255,0.07)",
+                    fill:isH?`${item.ic}28`:(W.dark===false?"rgba(0,0,0,0.05)":"rgba(255,255,255,0.07)"),
                     stroke:item.ic,strokeWidth:isH?2:1,
                     style:{transition:"all .18s"}}),
                   React.createElement("text",{x:m.x,y:m.y,textAnchor:"middle",
-                    dominantBaseline:"middle",fontSize:isH?16:14,fill:isH?"#fff":item.ic,
+                    dominantBaseline:"middle",fontSize:isH?16:14,fill:isH?(W.dark===false?W.fg:"#fff"):item.ic,
                     fontFamily:"'DM Sans',sans-serif",
                     style:{pointerEvents:"none",userSelect:"none",transition:"font-size .18s"}},
                     item.icon),
@@ -2615,7 +2643,7 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
                     y:m.y*(1+28/Math.max(1,Math.hypot(m.x,m.y)))+(m.y>0?10:-10),
                     textAnchor:m.x>12?"start":m.x<-12?"end":"middle",
                     fontSize:isH?10.5:9.5,fontWeight:isH?"600":"400",
-                    fill:isH?"#ffffd7":`${mut}dd`,
+                    fill:isH?(W.dark===false?W.fg:"#ffffd7"):(W.dark===false?mut:`${mut}dd`),
                     fontFamily:"'DM Sans',sans-serif",style:{pointerEvents:"none",transition:"all .18s"}},
                     item.label)
                 );
@@ -2628,8 +2656,8 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
                 style:{pointerEvents:"none"}}),
               // Hoofd cirkel
               React.createElement("circle",{cx:0,cy:0,r:50,
-                fill:W.dark?"rgba(10,10,14,0.90)":`${W.bg2||"rgba(240,234,220,0.96)"}`,
-                stroke:W.splitBg||"rgba(255,255,255,0.14)",strokeWidth:1.5,
+                fill:W.dark?"rgba(10,10,14,0.90)":`${W.bg2}`,
+                stroke:W.splitBg,strokeWidth:1.5,
                 filter:"url(#zk-shadow)",
                 style:{pointerEvents:"all",cursor:"pointer"},
                 onClick:e=>{e.stopPropagation();setCtxMenu(null);setRingPath([]);setHoverPreview(null);}}),

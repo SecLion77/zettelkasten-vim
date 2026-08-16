@@ -1589,3 +1589,235 @@ gevonden: de 4 beoordelingsknoppen tijdens een actieve review-sessie
 ### Wat te kopiëren
 
 Alleen `DailyView.js`.
+
+---
+
+## Update: donkere popups in de Graaf gefixt voor zomerlicht (en alle lichte thema's)
+
+**Gewijzigd:** alleen `Graph.js`.
+
+### De oorzaak
+
+Het hoofd-canvas van de Graaf gebruikte al correct `W.bg` (thema-bewust) —
+dit was dus geen bewuste "altijd donker"-keuze. Maar een hele reeks
+**overlay-elementen** (rechtsklik-menu, hover-tooltip, minimap, focus-
+filter-badge, de "verrassende verbinding"-banner, en een aantal subtiele
+hover-highlights/scheidingslijnen) hadden hun achtergrond hardgecodeerd op
+bijna-zwart (`rgba(22,22,22,0.9x)` e.d.), terwijl hun tekst al wél
+`W.fg`/`W.statusFg` gebruikte — in het zomerlicht-thema is dat bijna-zwarte
+tekst. Zwart-op-zwart dus: het rechtsklik-menu had daardoor een gemeten
+contrast van **1.06:1** (WCAG-minimum is 4.5:1).
+
+In totaal ~15 plekken gevonden en gefixt:
+- Rechtsklik-menu (achtergrond, rand, divider, hover-highlight)
+- Hover-tooltip op canvas-nodes
+- Minimap-achtergrond
+- Focus-filter-badge
+- "Verrassende verbinding"-banner (incl. de losse reden-items daarbinnen)
+- Diverse subtiele scheidingslijnen/hover-highlights in het instellingen-
+  paneel, plus de scrollbar-kleur
+- 11 stuks van hetzelfde `W.xxx||"rgba(...)"`-risicopatroon dat de vorige
+  opschoonronde miste (die zocht alleen naar `||"#hex"`, niet naar
+  `||"rgba(...)"`)
+
+Voor canvas-elementen (tooltip, minimap) gebruikt via de nieuwe `W.bg3`
+(solide, altijd gedefinieerd). Voor subtiele hover-tinten die zowel in
+donkere als lichte thema's moeten werken: `W.dark===false ? "rgba(0,0,0,x)" : "rgba(255,255,255,x)"`.
+
+### Getest
+
+- Rechtsklik-menu-contrast concreet doorgerekend: van 1.06:1 (oud, bijna
+  onleesbaar) naar 14.45:1 (nieuw, ruim boven AAA) op het zomerlicht-thema.
+- `node --check` geslaagd.
+
+### Wat te kopiëren
+
+Alleen `Graph.js`.
+
+---
+
+## Update: Canvas (Whiteboard) donker in zomerlicht — zelfde patroon, andere plek
+
+**Gewijzigd:** alleen `Whiteboard.js`.
+
+### De oorzaak
+
+De **hoofd-canvas-kolom** zelf had een hardgecodeerde donkere achtergrond
+(`background:"#181818"`) — dit is de kernoorzaak van het gemelde probleem.
+Net als bij de graaf: de tekst erbovenop gebruikte al wél `W.fg`
+(thema-bewust, dus bijna-zwart in zomerlicht), op een achtergrond die dat
+nooit meekreeg. Contrast: **1.08:1** — vrijwel onleesbaar.
+
+Daarnaast dezelfde ronde bugs als bij de graaf gevonden: 30 stuks van het
+`W.xxx||"..."`-risicopatroon, plus losse hardgecodeerde donkere
+UI-elementen (een zoekveld, een kleurlegenda-paneel, meerdere
+toolbar-scheidingslijnen, een afbeeldingstegel-achtergrond, de
+labelbadge/tekst op canvas-verbindingslijnen, en de fijne rasterlijnen van
+het canvas zelf).
+
+**Bewust ongewijzigd gelaten:** het kaartkleur-palet (5 selecteerbare
+kaartkleuren: geel/blauw/rood/groen/paars/grijs) — dat is inhoud-kleur
+(zoals fysieke sticky notes in vaste kleuren), geen UI-chrome die met het
+thema moet meebewegen. Ook alle `boxShadow`-waarden en de fotobijschrift-
+overlay (donkere sluier + lichte tekst bovenop een foto — universeel
+patroon, ongeacht app-thema) blijven ongemoeid.
+
+### Getest
+
+- Canvas-achtergrond-contrast concreet doorgerekend: van 1.08:1 (oud,
+  vrijwel onleesbaar) naar 17.36:1 (nieuw) op het zomerlicht-thema.
+- `node --check` geslaagd.
+- Handmatige eindinventarisatie van alle resterende donkere hex/rgba-
+  waarden — elk beoordeeld en bewust behouden (kaartkleuren, schaduwen,
+  foto-overlay) of gefixt.
+
+### Wat te kopiëren
+
+Alleen `Whiteboard.js`.
+
+---
+
+## Update: kaartkleuren + radiaal popup-menu in Canvas nu écht thema-bewust
+
+**Gewijzigd:** alleen `Whiteboard.js`.
+
+### 1. Kaartkleuren (het probleem uit de screenshot)
+
+Mijn vorige beoordeling was fout: ik dacht dat het 6-kleurenpalet voor
+kaarten (geel/blauw/rood/groen/paars/grijs) "inhoud-kleur" was zoals
+fysieke sticky notes, en liet het bewust ongewijzigd. Bij nader onderzoek
+bleken alle zes achtergrondkleuren zeer donkere, subtiel getinte
+varianten te zijn — specifiek afgestemd op de oude, altijd-donkere canvas,
+niet op "vaste papierkleur". Notitie-gekoppelde kaarten (zoals in de
+screenshot) krijgen bovendien standaard kleur-index 1 ("blauw").
+
+**Fix:** het palet is nu een `W.dark===false`-vertakking: dezelfde zes
+herkenbare kleurtonen, maar met een lichte, pastelachtige achtergrond +
+donkere tekst voor lichte thema's, en de originele donkere variant voor
+donkere thema's. Randkleuren zijn zo gekozen dat ze op beide varianten
+minimaal 3:1 zichtbaar blijven (niet-tekstuele WCAG-eis).
+
+### 2. Het radiale popup-menu ("verken meer info")
+
+Dit is het booggebaseerde pie-menu dat opent bij een rechtsklik op een
+kaart — grotendeels al thema-bewust opgezet, maar met een paar
+**hardgecodeerde hover-kleuren** die nooit meebewogen: zodra je over een
+menu-item of een gerelateerde-notitie-node hovert (= precies het moment
+waarop je "verkent wat er nog meer aan info is"), sprong de tekstkleur
+naar een vast lichtgeel/wit (`#ffffd7`/`#fff`) — leesbaar op de oude
+donkere achtergrond, maar op een licht thema vrijwel onzichtbaar. Vandaar
+"lastig ongeacht het kleurthema": dit ene detail bewoog al die tijd nooit
+mee, wat je ook instelde.
+
+Drie plekken gefixt (binnenring-iconen, binnenring-labels,
+buitenring-node-labels): bij hover nu `W.fg` op lichte thema's i.p.v.
+het hardgecodeerde lichtgeel/wit.
+
+### Getest
+
+- Alle zes lichte kaartkleuren: tekst-op-achtergrond-contrast 6.55–9.91:1
+  (ruim AA, meeste ook AAA).
+- Hover-tekst in het pie-menu: van 1.21:1 (oud, onleesbaar) naar 15.5:1
+  (nieuw) op een licht-getinte hover-achtergrond.
+- `node --check` geslaagd.
+
+### Wat te kopiëren
+
+Alleen `Whiteboard.js`.
+
+---
+
+## Update: popup-menu — resterende tekst-leesbaarheid gefixt
+
+**Gewijzigd:** alleen `Whiteboard.js`.
+
+Vervolg op de vorige ronde (die de hover-status al fixte). Twee resterende
+plekken gevonden waar tekst nog steeds te weinig contrast had, ditmaal in
+de **standaard (niet-hover) status** en op een apart, nog niet eerder
+bekeken onderdeel:
+
+1. **Ring-labels rondom de ring** (bv. "Hoofd EA - Chi...", "Capabilities
+   I..."): gebruikten `W.fgMuted` met een alpha-transparantie-suffix
+   (bedoeld als subtiel "gloei-effect" op de oude donkere achtergrond).
+   Die transparantie drukte het toch al zorgvuldig afgestemde contrast
+   van 9.4:1 terug naar 5.4:1 op het lichte thema. Nu: geen
+   alpha-verzwakking meer op lichte thema's, puur het thema-getinte
+   `W.fgMuted` — terug naar 9.4:1.
+
+2. **Notitietype-badge in het info-kaartje** (het kleine label met stipje
+   dat aangeeft of een notitie "vluchtig"/"literatuur"/"permanent"/"index"
+   is): gebruikte de rauwe, lichte pastelkleur rechtstreeks als tekstkleur
+   op een bijna-crème badge-achtergrond — contrast rond de **1.5–1.8:1**,
+   voor alle vier de types. Nu een aparte, donkere variant per type
+   specifiek voor lichte thema's, elk geverifieerd ≥7:1 (AAA).
+
+### Getest
+
+- Beide fixes concreet doorgerekend: ring-labels van 5.4:1 naar 9.4:1;
+  notitietype-badges van ~1.5-1.8:1 naar 7.08–7.52:1 voor alle vier de
+  types.
+- Bredere eindcontrole op het hele popup-menu-codeblok: geen overgebleven
+  hardgecodeerde tekstkleuren meer gevonden — alles gebruikt nu direct de
+  thema-variabelen of een expliciete licht/donker-vertakking.
+- `node --check` geslaagd.
+
+### Wat te kopiëren
+
+Alleen `Whiteboard.js`.
+
+---
+
+## Update: popup-menu — segment-achtergronden zelf waren de kern van het probleem
+
+**Gewijzigd:** alleen `Whiteboard.js`.
+
+### Onderzoek
+
+Kort literatuuronderzoek naar radiale-menu/pie-chart-leesbaarheid bevestigt
+de kernregel: labeltekst moet minimaal 4.5:1 contrast hebben tegen **het
+segment waar hij op staat** — niet (alleen) tegen de paginaeachtergrond.
+Dat bleek precies waar de vorige twee rondes nog niet aan toekwamen.
+
+### De echte oorzaak
+
+De ring-segmenten (alle niveaus: binnenring-knoppen én de buitenste
+diepte-ringen) gebruikten als vulkleur de **donkere, tekst-geoptimaliseerde**
+thema-kleuren (`W.blue`, `W.tagColor`, `W.orange`, `W.purple` — bewust
+donker gemaakt in een eerdere ronde, specifiek zodat ze als tekst goed
+lezen op een lichte achtergrond). Diezelfde donkere kleuren als
+**achtergrond** gebruiken, met de al even donkere labeltekst (`W.fgMuted`)
+erbovenop, gaf donker-op-donker: gemeten **3.46–3.84:1**, onder de
+tekst-minimum van 4.5:1. Vandaar dat het "in alle uitklap-niveaus" bleef
+terugkomen, ongeacht welke eerdere tekst-fix ik al had toegepast — het echte
+probleem zat in de achtergrond, niet (alleen) in de tekst.
+
+Ook een dode `isDark`-vertakking gevonden bij `RING_COLORS` die in beide
+takken identieke waarden teruggaf — leek een eerdere, nooit afgemaakte
+poging tot precies deze fix.
+
+### De fix
+
+Twee gescheiden kleursets geïntroduceerd: de bestaande donkere kleuren
+blijven gebruikt voor tekst/iconen/randen (ongewijzigd, correct), en een
+**nieuwe, aparte lichte pastelbasis** (`segBlueRgb`/`segGreenRgb`/
+`segOrangeRgb`/`segPurpleRgb`) specifiek voor segment-achtergronden op
+lichte thema's — dezelfde herkenbare kleurtoon, alleen omgekeerde
+helderheid. Toegepast op alle binnenring-knoppen (Bewerken, Verbinden,
+Notitie, Graaf, Dupliceer, Verwijder) én de vier buitenste diepte-ringen.
+
+De losse "ring 0"-verbindingstype-kleuren (blauw/geel/groen voor
+inkomende/uitgaande/geen link) bleken toevallig al licht genoeg gekozen —
+6.45–8.91:1, geen aanpassing nodig.
+
+### Getest
+
+- Slechtste-geval-doorrekening over alle 4 segmentkleuren × het volledige
+  gewicht-afhankelijke alpha-bereik (0.20–0.62): minimaal 6.07:1 — ruim
+  boven de 4.5:1-tekstminimum, ook in het zwaarste geval.
+- Volledige herscan van het hele menu-codeblok op resterende
+  hardgecodeerde rgba-patronen — niets onbeoordeeld overgebleven.
+- `node --check` geslaagd.
+
+### Wat te kopiëren
+
+Alleen `Whiteboard.js`.

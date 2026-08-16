@@ -1000,7 +1000,7 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
           const mx = (na.x+nb.x)/2, my = (na.y+nb.y)/2;
           ctx.setLineDash([]);
           ctx.beginPath();ctx.arc(mx,my,10/v.scale,0,Math.PI*2);
-          ctx.fillStyle="rgba(18,22,26,0.9)";ctx.fill();
+          ctx.fillStyle=W.bg3;ctx.fill();
           ctx.strokeStyle="rgba(232,200,122,0.7)";ctx.lineWidth=1.5/v.scale;ctx.stroke();
           ctx.fillStyle="rgba(232,200,122,0.9)";
           ctx.font=`bold ${12/v.scale}px sans-serif`;
@@ -1082,7 +1082,7 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
         }
         if(hov&&!sel){
           ctx.beginPath();ctx.arc(n.x,n.y,r+6,0,Math.PI*2);
-          ctx.fillStyle="rgba(255,255,255,0.06)";ctx.fill();
+          ctx.fillStyle=(W.dark===false?"rgba(0,0,0,0.06)":"rgba(255,255,255,0.06)");ctx.fill();
         }
 
         // Kleur
@@ -1151,13 +1151,13 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
           let tx=ts.x-ttW/2, ty=ts.y-r*v.scale-ttH-8;
           // Tooltip in screen space
           ctx.restore(); // tijdelijk buiten world transform
-          ctx.fillStyle="rgba(22,22,22,0.94)";
+          ctx.fillStyle=W.bg3;
           ctx.beginPath();
           if(ctx.roundRect) ctx.roundRect(tx,ty,ttW,ttH,4); else ctx.rect(tx,ty,ttW,ttH);
           ctx.fill();
-          ctx.strokeStyle="rgba(255,255,255,0.1)";ctx.lineWidth=0.5;ctx.stroke();
+          ctx.strokeStyle=W.splitBg;ctx.lineWidth=0.5;ctx.stroke();
           lines.forEach((line,i)=>{
-            ctx.fillStyle=i===0?W.statusFg:i===1?"#a8d8f0":W.fgDim;
+            ctx.fillStyle=i===0?W.statusFg:i===1?W.blue:W.fgDim;
             ctx.font=`${i===0?"600 ":""}11px 'DM Sans', system-ui, sans-serif`;
             ctx.textAlign="center";
             ctx.fillText(line,tx+ttW/2,ty+14+i*16);
@@ -1171,8 +1171,8 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
 
       // ── Minimap ────────────────────────────────────────────────────────
       const mmW=130,mmH=80,mmX=CW()-mmW-10,mmY=CH()-mmH-10;
-      ctx.fillStyle="rgba(20,20,20,0.88)";
-      ctx.strokeStyle="rgba(255,255,255,0.08)";ctx.lineWidth=1;
+      ctx.fillStyle=W.bg3;
+      ctx.strokeStyle=W.splitBg;ctx.lineWidth=1;
       ctx.beginPath();ctx.roundRect?ctx.roundRect(mmX,mmY,mmW,mmH,4):ctx.rect(mmX,mmY,mmW,mmH);
       ctx.fill();ctx.stroke();
 
@@ -1316,16 +1316,16 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
       zIndex:10,
       width:"260px",
       display:"flex", flexDirection:"column",
-      background:W.dark?"rgba(28,28,28,0.92)":W.bg2||"rgba(245,240,228,0.95)",
+      background:W.dark?"rgba(28,28,28,0.92)":W.bg2,
       borderRadius:"8px",
-      border:`1px solid ${W.splitBg||"rgba(255,255,255,0.1)"}`,
+      border:`1px solid ${W.splitBg}`,
       WebkitBackdropFilter:"blur(6px)",backdropFilter:"blur(6px)",
       // overflow op het element zelf — top+bottom geeft Safari de hoogte-context
       overflowY:"auto",
       WebkitOverflowScrolling:"touch",
       // Verberg de scrollbar maar behoud functie
       scrollbarWidth:"thin",
-      scrollbarColor:"rgba(255,255,255,0.15) transparent",
+      scrollbarColor:`${W.splitBg} transparent`,
     }},
     // Inner wrapper met padding — buiten overflow element zodat padding niet mee-scrollt
     React.createElement("div",{style:{
@@ -1340,7 +1340,7 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
           onChange:e=>setSearchQ(e.target.value),
           onKeyDown:e=>{ if(e.key==="Enter") jumpToSearch(); if(e.key==="Escape"){ setSearchQ(""); setPeekNoteId(null); } },
           placeholder:"Zoek node…",
-          style:{flex:1,background:W.dark?"rgba(0,0,0,0.4)":W.bg3||"rgba(232,224,210,0.8)",border:`1px solid ${W.splitBg||"rgba(255,255,255,0.12)"}`,
+          style:{flex:1,background:W.dark?"rgba(0,0,0,0.4)":W.bg3,border:`1px solid ${W.splitBg}`,
                  borderRadius:"4px",padding:"4px 8px",color:W.fg,fontSize:"12px",outline:"none"}
         }),
         searchQ&&React.createElement("button",{
@@ -1388,7 +1388,7 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
         ),
       ),
 
-      React.createElement("div",{style:{height:"1px",background:W.splitBg||"rgba(255,255,255,0.06)",margin:"2px 0"}}),
+      React.createElement("div",{style:{height:"1px",background:W.splitBg,margin:"2px 0"}}),
 
       // Graaf-statistieken
       React.createElement("div",{style:{fontSize:"10px",color:W.fgMuted,
@@ -1417,7 +1417,7 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
         })()
       ),
 
-      React.createElement("div",{style:{height:"1px",background:W.splitBg||"rgba(255,255,255,0.06)",margin:"2px 0"}}),
+      React.createElement("div",{style:{height:"1px",background:W.splitBg,margin:"2px 0"}}),
 
       // Weergave toggles
       React.createElement("div",{style:{fontSize:"11px",fontWeight:"600",
@@ -1432,7 +1432,7 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
          {label:"✨ verrass", val:false, set:()=>findSurpriseConnection(), col:W.yellow, btn:true},
         ].map(({label,val,set,col,btn})=>React.createElement("button",{
           key:label, onClick: btn ? ()=>set() : ()=>set(!val),
-          style:{background: btn ? "rgba(232,200,122,0.12)" : val?`${col||"#8ac6f2"}22`:(W.dark?"rgba(0,0,0,0.4)":W.bg3||"rgba(232,224,210,0.8)"),
+          style:{background: btn ? "rgba(232,200,122,0.12)" : val?`${col||"#8ac6f2"}22`:(W.dark?"rgba(0,0,0,0.4)":W.bg3),
                  border:`1px solid ${btn ? "rgba(232,200,122,0.35)" : val?(col||"rgba(138,198,242,0.5)"):"rgba(255,255,255,0.1)"}`,
                  color: btn ? W.yellow : val?(col||"#a8d8f0"):W.fgMuted,
                  borderRadius:"4px",padding:"3px 9px",fontSize:"13px",cursor:"pointer",fontWeight:val||btn?"600":"400"}
@@ -1459,7 +1459,7 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
               requestAnimationFrame(()=>{ dirtyRef.current=true; });
             },
           title:"Reset zoom naar 1:1",
-          style:{background:"rgba(255,255,255,0.05)",border:"1px solid rgba(255,255,255,0.1)",
+          style:{background:(W.dark===false?"rgba(0,0,0,0.04)":"rgba(255,255,255,0.05)"),border:`1px solid ${W.splitBg}`,
                  color:W.fgMuted,borderRadius:"4px",padding:"3px 9px",fontSize:"12px",cursor:"pointer"}
         },"1:1"),
         React.createElement("span",{style:{fontSize:"11px",color:W.fgDim,alignSelf:"center",paddingLeft:"2px"}},
@@ -1524,7 +1524,7 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
         "scroll = zoom · alt+drag = pan · Shift+sleep = lasso · 2× klik = pin · rechtsklik = menu"
       ),
 
-      React.createElement("div",{style:{height:"1px",background:W.splitBg||"rgba(255,255,255,0.06)",margin:"4px 0"}}),
+      React.createElement("div",{style:{height:"1px",background:W.splitBg,margin:"4px 0"}}),
 
       // ── Opschonen ────────────────────────────────────────────────────────
       // Was eerder volledig losgekoppeld van de UI: de functies bestonden en
@@ -1560,14 +1560,14 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
       ),
 
       // Pad-finder
-      pathMode&&React.createElement("div",{style:{marginTop:"6px",borderTop:"1px solid rgba(255,255,255,0.08)",paddingTop:"8px"}},
+      pathMode&&React.createElement("div",{style:{marginTop:"6px",borderTop:`1px solid ${W.splitBg}`,paddingTop:"8px"}},
         React.createElement("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"6px"}},
           React.createElement("div",{style:{fontSize:"11px",fontWeight:"600",color:W.yellow,letterSpacing:"0.8px"}},"PAD-FINDER — klik 2 nodes"),
           pathResult?.length>0&&React.createElement("button",{
             onClick:()=>setPathOnly(p=>!p),
             title:pathOnly?"Toon alle nodes":"Toon alleen het pad",
             style:{fontSize:"10px",padding:"2px 7px",borderRadius:"4px",cursor:"pointer",border:"none",
-                   background:pathOnly?"rgba(234,231,136,0.25)":"rgba(255,255,255,0.07)",
+                   background:pathOnly?"rgba(234,231,136,0.25)":(W.dark===false?"rgba(0,0,0,0.05)":"rgba(255,255,255,0.07)"),
                    color:pathOnly?W.yellow:W.fgMuted,fontWeight:pathOnly?"700":"400"}
           },pathOnly?"● alleen pad":"◎ toon alles")
         ),
@@ -1607,7 +1607,7 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
       ),
 
       // Hub top-5
-      hubMode&&!pathMode&&React.createElement("div",{style:{marginTop:"6px",borderTop:"1px solid rgba(255,255,255,0.08)",paddingTop:"8px"}},
+      hubMode&&!pathMode&&React.createElement("div",{style:{marginTop:"6px",borderTop:`1px solid ${W.splitBg}`,paddingTop:"8px"}},
         React.createElement("div",{style:{fontSize:"9px",color:"#e5786d",letterSpacing:"1px",marginBottom:"4px"}},"TOP HUBS"),
         [...nodesRef.current].filter(n=>n.type==="note")
           .sort((a,b)=>(b.hubScore||0)-(a.hubScore||0)).slice(0,5)
@@ -1622,7 +1622,7 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
       ),
 
       // Community legenda
-      communityMode&&!pathMode&&React.createElement("div",{style:{marginTop:"6px",borderTop:"1px solid rgba(255,255,255,0.08)",paddingTop:"8px"}},
+      communityMode&&!pathMode&&React.createElement("div",{style:{marginTop:"6px",borderTop:`1px solid ${W.splitBg}`,paddingTop:"8px"}},
         React.createElement("div",{style:{fontSize:"9px",color:"#d787ff",letterSpacing:"1px",marginBottom:"4px"}},"COMMUNITIES"),
         (()=>{
           const pal=["#8ac6f2","#9fca56","#e5786d","#d787ff","#eae788","#cae682","#e99a5a","#92b5dc","#5fd7ff","#87d787"];
@@ -1647,7 +1647,7 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
       ),
 
       // Semantisch
-      semanticMode&&React.createElement("div",{style:{marginTop:"6px",borderTop:"1px solid rgba(255,255,255,0.08)",paddingTop:"8px"}},
+      semanticMode&&React.createElement("div",{style:{marginTop:"6px",borderTop:`1px solid ${W.splitBg}`,paddingTop:"8px"}},
         React.createElement("div",{style:{fontSize:"9px",color:"#d787ff",letterSpacing:"1px",marginBottom:"6px"}},"SEMANTISCH VERWANT"),
         semLoading
           ?React.createElement("div",{style:{fontSize:"12px",color:W.fgDim}},"berekenen…")
@@ -1789,8 +1789,8 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
     // ── Context menu ──────────────────────────────────────────────────────
     ctxMenu&&React.createElement("div",{
       style:{position:"absolute",left:ctxMenu.x,top:ctxMenu.y,zIndex:30,
-             background:"rgba(22,22,22,0.97)",border:"1px solid rgba(255,255,255,0.12)",
-             borderRadius:"6px",boxShadow:"0 8px 32px rgba(0,0,0,0.7)",
+             background:W.bg3,border:`1px solid ${W.splitBg}`,
+             borderRadius:"6px",boxShadow:"0 8px 32px rgba(0,0,0,0.5)",
              minWidth:"170px",overflow:"hidden"},
       onClick:e=>e.stopPropagation(),
     },
@@ -1841,18 +1841,18 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
       ].filter(Boolean).map((item,i)=>{
         if(item.divider) return React.createElement("div",{
           key:"div"+i,
-          style:{height:"1px",background:"rgba(255,255,255,0.08)",margin:"3px 0"}
+          style:{height:"1px",background:W.splitBg,margin:"3px 0"}
         });
         const {label,action,disabled,highlight}=item;
         return React.createElement("div",{
           key:label,onClick:disabled?undefined:action,
           style:{padding:"9px 14px",fontSize:"13px",cursor:disabled?"default":"pointer",
                  color:disabled?W.fgDim:highlight?W.orange:W.fg,
-                 borderBottom:"1px solid rgba(255,255,255,0.05)",
+                 borderBottom:`1px solid ${W.splitBg}`,
                  background:"transparent",
                  transition:"background 0.1s",
                  userSelect:"none"},
-          onMouseEnter:e=>{ if(!disabled)e.target.style.background="rgba(255,255,255,0.07)"; },
+          onMouseEnter:e=>{ if(!disabled)e.target.style.background=(W.dark===false?"rgba(0,0,0,0.05)":"rgba(255,255,255,0.07)"); },
           onMouseLeave:e=>{ e.target.style.background="transparent"; },
         },label);
       })
@@ -1861,7 +1861,7 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
     // ── Focus-filter badge ────────────────────────────────────────────────
     focusNode && React.createElement("div",{style:{
       position:"absolute", top:"12px", left:"50%", transform:"translateX(-50%)",
-      background:"rgba(22,22,22,0.92)", border:`1px solid rgba(125,216,198,0.35)`,
+      background:W.bg3, border:`1px solid rgba(125,216,198,0.35)`,
       borderRadius:"20px", padding:"5px 14px 5px 10px",
       display:"flex", alignItems:"center", gap:"8px",
       fontSize:"12px", color:W.blue, zIndex:25,
@@ -1885,7 +1885,7 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
       style: {
         position: "absolute", bottom: "52px", left: "50%",
         transform: "translateX(-50%)",
-        background: "rgba(18,22,26,0.97)",
+        background: W.bg3,
         border: `1px solid rgba(232,200,122,0.4)`,
         borderRadius: "10px", padding: "12px 18px",
         zIndex: 25, maxWidth: "420px", width: "calc(100% - 40px)",
@@ -1930,7 +1930,7 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
                       style: {
                         display: "flex", alignItems: "flex-start", gap: "8px",
                         padding: "5px 8px", marginBottom: "4px",
-                        background: "rgba(255,255,255,0.04)",
+                        background: (W.dark===false?"rgba(0,0,0,0.03)":"rgba(255,255,255,0.04)"),
                         borderRadius: "5px",
                         borderLeft: "2px solid rgba(232,200,122,0.4)",
                       }
@@ -2034,9 +2034,9 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
               peekNoteId && React.createElement("button", {
                 onClick: () => { if(window._sendToCanvas) window._sendToCanvas([peekNoteId]); },
                 style:{fontSize:"12px",padding:"5px 10px",borderRadius:"5px",
-                       background: W.tagBg||"rgba(159,202,86,0.12)",
+                       background: W.tagBg,
                        color: W.tagColor,
-                       border:`1px solid ${W.tagBorder||"rgba(159,202,86,0.3)"}`,
+                       border:`1px solid ${W.tagBorder}`,
                        cursor:"pointer", fontWeight:"500"}
               }, "📋 → Canvas")
             )
@@ -2231,7 +2231,7 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
     // ── Legenda onderaan ──────────────────────────────────────────────────
     React.createElement("div",{style:{
       position:"absolute",bottom:"12px",left:"50%",transform:"translateX(-50%)",
-      background:W.dark?"rgba(28,28,28,0.92)":W.bg2||"rgba(245,240,228,0.95)",
+      background:W.dark?"rgba(28,28,28,0.92)":W.bg2,
       border:`1px solid ${W.splitBg}`,
       borderRadius:"6px",padding:"5px 14px",fontSize:"13px",color:W.fgMuted,
       display:"flex",gap:"12px",backdropFilter:"blur(8px)",
