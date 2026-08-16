@@ -32,7 +32,6 @@ const ImagesGallery = ({serverImages, onRefresh, llmModel, taskLlmModel="", onAd
   const [quickTags,     setQuickTags]    = useState([]);
   const [activeColor,   setActiveColor]  = useState(HCOLORS[0]);
   const [editingId,     setEditingId]    = useState(null);
-  const [showAnnotPanel,setShowAnnotPanel] = useState(true);
   const [filterTag,     setFilterTag]   = useState(null);
 
   const fileRef   = useRef(null);
@@ -150,7 +149,6 @@ const ImagesGallery = ({serverImages, onRefresh, llmModel, taskLlmModel="", onAd
     const y = (e.clientY - rect.top)  / rect.height;
     setPendingPin({x, y});
     setQuickNote(""); setQuickTags([]);
-    setShowAnnotPanel(true);  // sidebar altijd zichtbaar bij nieuwe pin
   }, [activeImg]);
 
   const upload = useCallback((files) => {
@@ -553,19 +551,79 @@ const ImagesGallery = ({serverImages, onRefresh, llmModel, taskLlmModel="", onAd
             );
           }),
 
-          // Pending pin: visuele indicator op de afbeelding (invoer loopt via sidebar)
+          // Pending pin: visuele indicator + invoer-popup (was: "invoer loopt
+          // via sidebar" — die zijbalk bestond niet, addAnnotation werd
+          // nergens aangeroepen. Nu een floating popup, zelfde stijl als de
+          // bewerk-popup van bestaande pins hierboven.)
           pendingPin && React.createElement("div",{
             style:{position:"absolute",
                    left:`calc(${pendingPin.x*100}% - 10px)`,
                    top:`calc(${pendingPin.y*100}% - 20px)`,
-                   zIndex:30, pointerEvents:"none"}
+                   zIndex:30}
           },
             React.createElement("div",{style:{
               width:"20px",height:"20px",borderRadius:"50% 50% 50% 0",
               background:activeColor.border,border:"2px solid white",
               transform:"rotate(-45deg)",
               animation:"ai-pulse 0.8s ease-in-out infinite",
-            }})
+              pointerEvents:"none",
+            }}),
+            // Invoer-popup — zelfde positionering/stijl als de bewerk-popup
+            // van bestaande pins
+            React.createElement("div",{
+              onClick:e=>e.stopPropagation(),
+              style:{position:"absolute",bottom:"28px",left:"-160px",
+                     width:"300px",background:W.bg3,
+                     border:`2px solid ${activeColor.border}`,borderRadius:"8px",
+                     padding:"12px 14px",zIndex:500,
+                     boxShadow:"0 8px 32px rgba(0,0,0,0.8)"}
+            },
+              React.createElement("div",{style:{fontSize:"9px",color:W.fgMuted,
+                marginBottom:"4px",letterSpacing:"1px"}},"NIEUWE PIN"),
+              // Notitie
+              React.createElement("textarea",{
+                value:quickNote,
+                onChange:e=>setQuickNote(e.target.value),
+                onKeyDown:e=>{
+                  if(e.key==="Escape"){ setPendingPin(null); setQuickNote(""); setQuickTags([]); }
+                  if(e.key==="Enter" && (e.metaKey||e.ctrlKey)) addAnnotation();
+                },
+                rows:2, autoFocus:true,
+                placeholder:"Notitie bij deze pin…",
+                style:{width:"100%",background:W.bg,border:`1px solid ${W.splitBg}`,
+                       borderRadius:"4px",padding:"6px 8px",color:W.fg,
+                       fontSize:"14px",outline:"none",resize:"none",marginBottom:"6px",
+                       boxSizing:"border-box"}
+              }),
+              // Tags
+              React.createElement("div",{style:{fontSize:"9px",color:W.fgMuted,
+                marginBottom:"4px",letterSpacing:"1px"}},"TAGS"),
+              React.createElement(SmartTagEditor,{tags:quickTags,
+                onChange:setQuickTags,
+                allTags:[...(allTags||[]),...allAnnotTags]}),
+              // Kleur
+              React.createElement("div",{style:{display:"flex",gap:"5px",margin:"8px 0"}},
+                ...HCOLORS.map(c=>React.createElement("button",{key:c.id,
+                  onClick:()=>setActiveColor(c),
+                  style:{width:"18px",height:"18px",borderRadius:"3px",background:c.bg,
+                         border:`2px solid ${activeColor.id===c.id?c.border:W.splitBg}`,
+                         cursor:"pointer",padding:0}}))
+              ),
+              // Acties
+              React.createElement("div",{style:{display:"flex",gap:"6px",marginTop:"4px"}},
+                React.createElement("button",{
+                  onClick:addAnnotation,
+                  style:{background:W.comment,color:W.bg,border:"none",borderRadius:"3px",
+                         padding:"3px 10px",fontSize:"14px",cursor:"pointer",fontWeight:"bold"}
+                },"✓ opslaan"),
+                React.createElement("button",{
+                  onClick:()=>{ setPendingPin(null); setQuickNote(""); setQuickTags([]); },
+                  style:{background:"none",color:W.fgMuted,
+                         border:`1px solid ${W.splitBg}`,
+                         borderRadius:"3px",padding:"3px 8px",fontSize:"14px",cursor:"pointer"}
+                },"× annuleren")
+              )
+            )
           )
         ),
 

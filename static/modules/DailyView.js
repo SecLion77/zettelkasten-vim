@@ -913,6 +913,12 @@ const DailyView = ({ notes=[], onOpenNote, onAddNote, llmModel="" }) => {
           `${notes.length} notities · ${totalSR} in SR · ${openTasks} taken`)
       ),
       React.createElement("div",{style:{display:"flex",gap:"8px",flexWrap:"wrap"}},
+        React.createElement("button",{onClick:()=>setQuickCapt(c=>!c),
+          style:{background:quickCapt?"rgba(138,198,242,0.15)":"rgba(255,255,255,0.05)",
+            border:`1px solid ${quickCapt?"rgba(138,198,242,0.6)":W.splitBg||"#444"}`,
+            borderRadius:"6px",padding:"6px 14px",fontSize:"13px",cursor:"pointer",
+            color:quickCapt?W.blue||"#8ac6f2":(W.fg||"#d4d4d4"),
+            fontWeight:"500"}},"✎ Snelle notitie"),
         React.createElement("button",{onClick:()=>setAdrOpen(a=>!a),
           style:{background:adrOpen?"rgba(114,182,96,0.15)":"rgba(255,255,255,0.05)",
             border:`1px solid ${adrOpen?"rgba(114,182,96,0.6)":W.splitBg||"#444"}`,
@@ -922,6 +928,24 @@ const DailyView = ({ notes=[], onOpenNote, onAddNote, llmModel="" }) => {
       )
     ),
 
+    // ── Snelle notitie aanmaken ────────────────────────────────── volle breedte
+    // Was voorheen alleen als functie aanwezig (doQuickCapture, incl.
+    // quickTitle/quickCapt-state), zonder knop die 'm opende — in
+    // tegenstelling tot QuickEntryBar (die aan de dagnotitie toevoegt)
+    // maakt dit een losse, zelfstandige notitie aan.
+    quickCapt && React.createElement("div",{style:{...card,borderLeft:"3px solid "+(W.blue||"#8ac6f2"),gridColumn:"1 / -1"}},
+      React.createElement("div",{style:{fontSize:"12px",color:W.blue||"#8ac6f2",letterSpacing:"1px",marginBottom:"10px"}},"NIEUWE LOSSE NOTITIE"),
+      React.createElement("div",{style:{display:"flex",gap:"8px"}},
+        React.createElement("input",{autoFocus:true,value:quickTitle,onChange:e=>setQuickTitle(e.target.value),
+          onKeyDown:e=>{if(e.key==="Enter")doQuickCapture();if(e.key==="Escape")setQuickCapt(false);},
+          placeholder:"Titel…",
+          style:{flex:1,background:W.bg,border:`1px solid ${W.blue||"#8ac6f2"}`,borderRadius:"6px",
+            padding:"8px 12px",color:W.fg,fontSize:"13px",outline:"none"}}),
+        React.createElement("button",{onClick:doQuickCapture,
+          style:{background:W.blue||"#8ac6f2",color:W.bg,border:"none",borderRadius:"6px",
+            padding:"8px 16px",cursor:"pointer",fontSize:"13px",fontWeight:"600"}},"Aanmaken")
+      )
+    ),
 
     // ── ADR aanmaken ─────────────────────────────────────────── volle breedte
     adrOpen && React.createElement("div",{style:{...card,borderLeft:"3px solid #72b660",gridColumn:"1 / -1"}},

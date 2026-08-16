@@ -2068,13 +2068,23 @@ const MindMap = ({notes, allTags, onSelectNote, aiMindmap, onAddNote, serverPdfs
       // Rij 2: acties
       React.createElement("div",{style:{
         display:"flex", gap:"4px", padding:"6px 8px",
-        borderBottom:`1px solid ${W.splitBg}`,
+        borderBottom:`1px solid ${W.splitBg}`, flexWrap:"wrap",
       }},
         React.createElement("button",{
           onClick:()=>{ setMmView("mermaid"); setEditMermaid(null); },
           className:"btn-wombat",
+          title:"Start een lege Mermaid-tekening",
           style:{fontSize:"12px",padding:"4px 8px"},
         }, "✦ Nieuw"),
+        // Was voorheen alleen als functie aanwezig (nodesToMermaid), zonder
+        // knop die 'm aanriep — de huidige mindmap kon dus niet als Mermaid
+        // bekeken/geëxporteerd worden, ondanks dat de conversie al bestond.
+        React.createElement("button",{
+          onClick:()=>{ setEditMermaid(nodesToMermaid()); setMmView("mermaid"); },
+          className:"btn-wombat",
+          title:"Bekijk/exporteer de huidige mindmap als Mermaid-code",
+          style:{fontSize:"12px",padding:"4px 8px"},
+        }, "📐 Als Mermaid"),
         React.createElement("button",{
           onClick:()=>{
             if(!window._sendToCanvas) return;
@@ -2086,6 +2096,23 @@ const MindMap = ({notes, allTags, onSelectNote, aiMindmap, onAddNote, serverPdfs
           title:"Stuur zichtbare notities naar canvas",
           style:{fontSize:"12px",padding:"4px 8px",flex:1,justifyContent:"center"},
         }, "📋 Canvas"),
+        // Was voorheen alleen als functie aanwezig (saveAsNote), zonder knop
+        // die 'm aanriep — de hele mindmap kon dus niet als notitie bewaard
+        // worden, ondanks dat de opslaglogica (incl. foutafhandeling) al bestond.
+        onAddNote && React.createElement("button",{
+          onClick:saveAsNote,
+          disabled:saving,
+          className:"btn-wombat",
+          title:"Sla de volledige mindmap op als notitie (Markdown-lijst)",
+          style:{fontSize:"12px",padding:"4px 8px",width:"100%",
+                 justifyContent:"center",opacity:saving?0.6:1,
+                 cursor:saving?"wait":"pointer"},
+        }, saving?"⏳ opslaan…":"💾 Opslaan als notitie"),
+        saveMsg && React.createElement("div",{style:{
+          width:"100%", textAlign:"center", fontSize:"11px",
+          color: saveMsg.startsWith("✓") ? W.comment : W.orange,
+          padding:"2px 0",
+        }}, saveMsg),
       ),
       // Tag filter met zoekbalk
       React.createElement("div",{style:{display:"flex",flexDirection:"column",flex:1,minHeight:0}},
