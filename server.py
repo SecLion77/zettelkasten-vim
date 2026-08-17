@@ -2736,7 +2736,7 @@ class ZKHandler(BaseHTTPRequestHandler):
             body=self._body()
             allowed={"pdf_personal_use","pdf_personal_email","review_data",
                      "custom_models","pins","sr_data",
-                     "image_llm_model","semantic_llm_model"}
+                     "image_llm_model","semantic_llm_model","text_improve_llm_model"}
             update = {}
             for k, v in body.items():
                 if k in allowed:
@@ -2908,19 +2908,37 @@ class ZKHandler(BaseHTTPRequestHandler):
         return {"path": str(p), "parent": parent, "items": items}
 
     def _llm_improve_text(self):
-        """Stuur tekst naar LLM voor taalverbetering."""
-        body  = self._body()
-        text  = body.get("text", "").strip()
-        lang  = body.get("lang", "nl")
-        model = body.get("model", "")
+        """Stuur tekst naar LLM voor taalverbetering. Ondersteunt presets
+        (verbeter/korter/langer/toon) en een vrije, aangepaste instructie —
+        voor zowel het hele document als een losse selectie."""
+        body        = self._body()
+        text        = body.get("text", "").strip()
+        lang        = body.get("lang", "nl")
+        model       = body.get("model", "")
+        mode        = body.get("mode", "verbeter")   # verbeter|korter|langer|toon|custom
+        tone        = body.get("tone", "")            # bij mode=toon: formeel/casual/vriendelijk/zakelijk
+        instruction = body.get("instruction", "").strip()  # bij mode=custom
         if not text or not model:
             return self._send(400, {"error": "text en model zijn vereist"})
         lang_label = "Nederlands" if lang == "nl" else "English"
+
+        directives = {
+            "verbeter": f"Verbeter de volgende tekst in het {lang_label} — grammatica, "
+                        f"zinsbouw en woordkeus, zonder de betekenis te veranderen.",
+            "korter":   f"Maak de volgende tekst in het {lang_label} beknopter, zonder de "
+                        f"kernboodschap te verliezen.",
+            "langer":   f"Werk de volgende tekst in het {lang_label} verder uit met meer "
+                        f"detail en toelichting, passend bij de bestaande toon.",
+            "toon":     f"Herschrijf de volgende tekst in het {lang_label} in een "
+                        f"{tone or 'neutrale'} toon, zonder de kernboodschap te veranderen.",
+            "custom":   instruction or f"Verbeter de volgende tekst in het {lang_label}.",
+        }
+        directive = directives.get(mode, directives["verbeter"])
         prompt = (
-            f"Je bent een taalkundige redacteur. Verbeter de volgende tekst in het {lang_label}. "
-            f"Geef ALLEEN de verbeterde tekst terug, zonder uitleg, zonder commentaar, "
+            f"Je bent een taalkundige redacteur. {directive} "
+            f"Geef ALLEEN de resulterende tekst terug, zonder uitleg, zonder commentaar, "
             f"zonder markdown-opmaak rondom de tekst zelf. "
-            f"Behoud de oorspronkelijke structuur en alinea-indeling.\n\n"
+            f"Behoud de oorspronkelijke structuur en alinea-indeling waar mogelijk.\n\n"
             f"Originele tekst:\n{text}"
         )
         try:

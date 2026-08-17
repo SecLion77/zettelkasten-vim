@@ -1821,3 +1821,235 @@ inkomende/uitgaande/geen link) bleken toevallig al licht genoeg gekozen —
 ### Wat te kopiëren
 
 Alleen `Whiteboard.js`.
+
+---
+
+## Update: cursor met de muis positioneren — font-load-race-condition gefixt
+
+**Gewijzigd:** alleen `VimEditor.js`.
+
+### De oorzaak
+
+Klik-naar-cursor-positionering was al volledig geïmplementeerd (rij/kolom
+correct berekend, cursor gezet, scroll gecorrigeerd) — het probleem zat
+in de **tekenbreedte-meting** waar die berekening op leunt. "Hack" is een
+webfont die asynchroon laadt; de meting (`ctx.measureText("M").width`)
+gebeurde één keer bij het opstarten, mogelijk vóórdat het lettertype klaar
+was — dan meet de browser de fallback-breedte (Courier New), die net
+anders is dan Hack. Die verkeerde breedte werd daarna nooit meer
+herberekend, ook niet nadat Hack alsnog geladen was en de tekst daar
+correct mee ging renderen. Gevolg: de berekende kolom bij een klik wijkt
+steeds verder af naarmate je verder naar rechts klikt — voelt aan als
+"de cursor gaat niet naar waar ik klik".
+
+### De fix
+
+`document.fonts.ready` toegevoegd: zodra het lettertype daadwerkelijk
+klaar is, wordt de tekenbreedte opnieuw gemeten en (als die afwijkt)
+direct bijgewerkt plus een her-render getriggerd — geen wachten op een
+toevallige volgende render meer nodig.
+
+### Getest
+
+- Gesimuleerd scenario met een verkeerde (fallback-)breedte: een klik die
+  eigenlijk op kolom 30 hoort te landen, kwam uit op kolom 25 — na
+  correctie via de gesimuleerde `fonts.ready`-afhandeling weer exact op 30.
+- `node --check` geslaagd.
+
+### Wat te kopiëren
+
+Alleen `VimEditor.js`.
+
+---
+
+## Update: AI-tekstverbetering — "model per taak" afgerond (Tekstverbetering-slot)
+
+**Gewijzigd:** `server.py`, `app.js`, `NotesTab.js`, `NoteEditor.js`,
+`VimEditor.js`, `VaultSettings.js`.
+
+Vervolg op de vorige levering (de kernfunctie AI-tekstverbetering + de
+cursor-positionering-fix waren toen al klaar). Dit rondt het optionele
+"model per taak"-onderdeel af: een derde, losse modelkeuze specifiek voor
+tekstverbetering, naast Afbeeldingen en Semantisch zoeken.
+
+### De hele keten
+
+`server.py` (nieuwe config-sleutel `text_improve_llm_model`) → `app.js`
+(state, laden bij opstarten, doorgeven aan drie renderplekken van
+`NotesTab`) → `NotesTab.js` (ontvangt `taskLlmModels`, geeft door aan
+`NoteEditor`) → `NoteEditor.js` (pakt er `.textImprove` uit, geeft door als
+`taskLlmModel`) → `VimEditor.js` (val-terug-logica:
+`modelOverride || taskLlmModel || llmModel`) → `VaultSettings.js` (de
+instellingen-UI zelf, derde rij in "Model per taak").
+
+**Bewust andere val-terug-tekst dan bij Afbeeldingen/Semantisch zoeken**:
+die twee vallen NIET terug op het hoofdmodel (om goede redenen, eerder
+toegelicht). Tekstverbetering valt wél terug op het hoofdmodel — logisch,
+want elk chat-model kan tekst herschrijven, in tegenstelling tot
+vision-taken of embeddings. De instellingen-UI toont daarom
+"— Automatisch (hoofdmodel) —" i.p.v. een specifiek lokaal standaardmodel.
+
+### Bijgevangen tijdens het doortrekken van de keten
+
+Twee keer per ongeluk een prop weggehaald bij een `str_replace`
+(`isMobile`/`isDesktop`/`isTablet`/`splitMode` in zowel `app.js` als
+`NotesTab.js`) — beide direct opgemerkt en hersteld.
+
+### Getest
+
+- Volledige keten-verificatie: elke schakel (config-sleutel → state →
+  doorgeven → ontvangen → val-terug-logica → UI-rij) expliciet nagelopen
+  met `grep`, klopt op elk niveau.
+- `node --check`/`py_compile` op alle zes bestanden geslaagd.
+- Regelaantal-vergelijking met de originele bestanden: alle verschillen
+  positief en verklaarbaar (nieuwe code), geen tekenen van onbedoeld
+  verwijderde stukken.
+
+### Wat te kopiëren
+
+Alle zes: `server.py`, `app.js`, `NotesTab.js`, `NoteEditor.js`,
+`VimEditor.js`, `VaultSettings.js`.
+
+---
+
+## Update: AI-tekstverbetering werkt nu ook in INSERT-mode
+
+**Gewijzigd:** alleen `VimEditor.js`.
+
+### Bevestigd probleem
+
+`\a` bleek inderdaad alleen te werken in NORMAL/VISUAL-mode — INSERT-mode
+heeft een eigen, apart afgehandeld toetsenbord-blok dat altijd eerder
+`return`t, en `\` moet daar natuurlijk gewoon een letterlijk backslash-teken
+kunnen typen (kan dus nooit een commando-toets zijn zolang je aan het typen
+bent).
+
+### De fix
+
+Nieuwe sneltoets **Cmd/Ctrl+I** ("Improve"), afgehandeld nog vóór de
+mode-specifieke blokken — werkt dus in NORMAL, VISUAL én INSERT.
+- Met een actieve selectie: gebruikt die.
+- Zonder selectie: valt automatisch terug op de **huidige alinea**
+  (contiguë niet-lege regels rond de cursor) — zodat je gewoon kunt
+  doortypen en meteen AI-hulp kunt vragen zonder eerst naar VISUAL-mode te
+  hoeven.
+
+`\a` blijft gewoon bestaan als alternatief voor wie liever vanuit
+NORMAL/VISUAL werkt.
+
+**Onderweg gevonden en vermeden:** de aanvankelijk voorgestelde combinatie
+Cmd/Ctrl+K bleek al bezet (split-scherm-navigatie, "focus-left") — had
+die functie stilzwijgend gebroken. Volledige inventarisatie van alle
+bestaande Ctrl-toetscombinaties gedaan voor ik een echt vrije koos.
+
+**Bijgevangen:** de sectie-header in het hulpscherm gebruikte nog een
+hardgecodeerde lichte kleur (`#a8d8f0`) — hetzelfde categorie contrast-bug
+die ik eerder dit gesprek in andere bestanden fixte. Nu `W.blue`
+(thema-bewust).
+
+### Getest
+
+- `getCurrentParagraphRange`: 6 scenario's (midden van een alinea,
+  enkele-regel-alinea, document-begin, document-einde, lege regel) — alle
+  grenzen kloppen exact.
+- Volledige inventarisatie van bestaande Ctrl/Cmd-toetscombinaties in het
+  bestand — bevestigd dat Cmd/Ctrl+I nergens anders gebruikt wordt.
+- `node --check` geslaagd.
+
+### Wat te kopiëren
+
+Alleen `VimEditor.js`.
+
+---
+
+## Update: AI-menu-contrast gefixt + muis-sleep-selectie toegevoegd
+
+**Gewijzigd:** alleen `VimEditor.js`.
+
+### 1. Lichtblauw contrast in het AI-actiemenu
+
+Zelfde categorie bug als eerder deze sessie in `Graph.js`/`Whiteboard.js`
+gevonden, maar hier nog niet toegepast op de nieuw gebouwde AI-menu-UI.
+Concreet nagerekend: de tekstkleur `#a8d8f0` gaf op de popup-achtergrond
+maar **1.07–1.21:1** contrast (de achtergrond zelf was prima licht genoeg
+— dat was dus niet het probleem). Alle 5 instanties vervangen door
+`W.blue` (thema-bewuste donkere tint) → nu **7.94–8.96:1**.
+
+Ook de randen van het menu waren te vaag (1.14–1.18:1 tegen de norm van
+3:1 voor niet-tekstuele elementen) — nu een gedeelde, thema-bewuste
+`aiBorder`/`aiBorderSoft` ingevoerd en overal in het AI-menu + de
+onderste AI-balk toegepast (6.9:1+ op crème).
+
+### 2. Muis-sleep-selectie (nieuw)
+
+Bevestigd: deze editor had inderdaad geen enkele vorm van sleep-om-te-
+selecteren — alleen `v` + toetsenbord-bewegingen in NORMAL-mode. Nu
+toegevoegd: sleep met de muis (in élke mode, ook INSERT) start automatisch
+een VISUAL-mode-selectie, die live meebeweegt terwijl je sleept. Een kleine
+bewegingsdrempel (4px) voorkomt dat een gewone, licht trillende klik al
+per ongeluk een selectie start. Na het loslaten blijft de selectie actief
+— meteen te gebruiken voor Cmd/Ctrl+I (AI-hulp), `\a`, kopiëren, etc.,
+want het hergebruikt volledig de al bestaande VISUAL-mode-infrastructuur.
+
+**Over "cursor plaatsen werkt niet in INSERT-mode":** de code bevestigt dat
+dit onvoorwaardelijk werkt, ongeacht mode (geen wijziging nodig). Vermoeden:
+dit werd getest terwijl het AI-menu nog open stond — de full-screen
+achtergrond daarvan onderschept dan een klik om het menu te sluiten (bedoeld
+gedrag voor een modal), niet om de cursor te verplaatsen. Laat het weten als
+het probleem zich ook vóórdoet met het menu dicht.
+
+### Getest
+
+- Contrastberekening vóór/na voor zowel tekst (1.07→8.96:1) als rand
+  (1.18→3.36:1 bij 60% dekking).
+- Sleep-drempel-logica: 4 scenario's (kleine trilling, bewuste sleep, exact
+  op de grens, ruim eronder) — allemaal correct.
+- `node --check` geslaagd.
+
+### Wat te kopiëren
+
+Alleen `VimEditor.js`.
+
+---
+
+## Update: muisklikken werkten helemaal niet in de editor — écht gevonden
+
+**Gewijzigd:** alleen `VimEditor.js`.
+
+### De oorzaak — een ontwerp-conflict, geen toevallige bug
+
+De diagnose-logging bevestigde het meteen: **elke** klik landde op een
+`<input>`-element, nooit op de canvas — ongeacht de kliklocatie. Dat
+onzichtbare invoerveld (vangt toetsaanslagen af, want een canvas kan geen
+native toetsenbord-focus krijgen) ligt met opzet **bovenop de volledige
+canvas** (`width:100%, height:100%, position:absolute, zIndex:1,
+pointerEvents:"auto"`) — de code-comment zegt letterlijk waarom: *"boven de
+canvas zodat taps de input bereiken"*. Dit is een bewuste iOS-workaround
+(sommige mobiele browsers tonen het toetsenbord alleen bij een groot,
+daadwerkelijk tikbaar invoerveld) — maar op desktop betekent het dat dit
+veld **elke muisklik onderschept** vóór die de canvas kan bereiken. Muis-
+cursor-positionering en de net gebouwde sleep-selectie waren dus al deze
+hele tijd structureel onbereikbaar, los van alle eerdere fixes.
+
+### De fix
+
+Dezelfde klik-afhandeling nu **ook** rechtstreeks op het invoerveld zelf
+gekoppeld — niet als vervanging, als aanvulling. Werkt correct ongeacht
+welk van de twee overlappende elementen de klik daadwerkelijk ontvangt: de
+positieberekening gebruikt toch al `canvas.getBoundingClientRect()`, en
+canvas + invoerveld beslaan exact hetzelfde vlak. Canvas en invoerveld zijn
+bovendien broers/zussen (geen ouder-kind-relatie), dus er is geen risico op
+dubbele afvuring van dezelfde klik.
+
+### Getest
+
+- Diagnose-logging (nu weer verwijderd) bevestigde exact de oorzaak: elke
+  klik consequent op `INPUT`, nooit op de canvas.
+- DOM-structuur nagelopen: canvas en invoerveld zijn directe kinderen van
+  dezelfde wrapper — bevestigd geen ouder-kind-relatie, dus geen dubbele
+  afvuring mogelijk.
+- `node --check` geslaagd.
+
+### Wat te kopiëren
+
+Alleen `VimEditor.js`.

@@ -10,6 +10,7 @@ const NoteEditor = ({
   allTags = [],
   allNotesText = "",
   llmModel = "",
+  taskLlmModels = {},
   isMobile = false,
   goyoMode = false,
   onSave,
@@ -307,6 +308,7 @@ const NoteEditor = ({
         onEditorRef?.(ref);
       },
       llmModel,
+      taskLlmModel: taskLlmModels?.textImprove || "",
       allNotesText,
       onSplitCmd,
       noteId:       note?.id,

@@ -94,6 +94,7 @@ const VaultSettings = ({vaultPath, onChangeVault, onClose, onTaskModelsChange=nu
   // Model per taak — "" betekent: val terug op het standaardmodel voor die taak
   const [imageLlmModel,    setImageLlmModel]    = useState("");
   const [semanticLlmModel, setSemanticLlmModel] = useState("");
+  const [textImproveLlmModel, setTextImproveLlmModel] = useState("");
   const [taskModelsMsg,    setTaskModelsMsg]    = useState("");
   // Welke modellen zijn daadwerkelijk lokaal geïnstalleerd (Ollama) — om de
   // standaardwaarden (llama3.2-vision / nomic-embed-text) als beschikbaar
@@ -118,6 +119,7 @@ const VaultSettings = ({vaultPath, onChangeVault, onClose, onTaskModelsChange=nu
       setJanUrl(cfg.jan_url || "http://127.0.0.1:1337");
       setImageLlmModel(cfg.image_llm_model || "");
       setSemanticLlmModel(cfg.semantic_llm_model || "");
+      setTextImproveLlmModel(cfg.text_improve_llm_model || "");
     }).catch(()=>{});
     // Lokaal geïnstalleerde Ollama-modellen — voor de beschikbaarheids-
     // indicator bij "Model per taak" hieronder.
@@ -814,14 +816,17 @@ const VaultSettings = ({vaultPath, onChangeVault, onClose, onTaskModelsChange=nu
               { key:"semantic_llm_model", label:"Semantisch zoeken",   value:semanticLlmModel, setValue:setSemanticLlmModel,
                 defaultModel:"nomic-embed-text",
                 hint:"Gebruikt voor de embeddings bij semantisch zoeken (Ontdekken-tab) — bewust niet het hoofdmodel, want dat is meestal een chat-model en geen embedding-model." },
+              { key:"text_improve_llm_model", label:"Tekstverbetering", value:textImproveLlmModel, setValue:setTextImproveLlmModel,
+                defaultModel:null,
+                hint:"Gebruikt bij AI-tekstverbetering in de notitie-editor (selecteer tekst → \\a, of \"✨ verbeter\" onderaan). Valt terug op het hoofdmodel — hier alleen invullen als je bewust een ander (bv. sneller of specifieker) model wilt voor deze taak." },
             ].map(row => {
               // Staat het standaardmodel voor deze taak lokaal geïnstalleerd?
               // Zo ja: toon 'm automatisch geselecteerd i.p.v. een lege
               // placeholder — precies het model dat er anders toch gebruikt
               // wordt als je hier niets kiest.
-              const defaultInstalled = installedModels?.some(
+              const defaultInstalled = row.defaultModel ? installedModels?.some(
                 m => m === row.defaultModel || m.startsWith(row.defaultModel + ":")
-              );
+              ) : false;
               const effectiveValue = row.value || (defaultInstalled ? row.defaultModel : "");
               return React.createElement("div", {
                 key: row.key, style:{ marginBottom:"12px" }
@@ -842,9 +847,9 @@ const VaultSettings = ({vaultPath, onChangeVault, onClose, onTaskModelsChange=nu
                   }
                 },
                   React.createElement("option", { value:"" },
-                    defaultInstalled
-                      ? `— Automatisch (${row.defaultModel}) —`
-                      : "— Automatisch —"),
+                    row.defaultModel
+                      ? (defaultInstalled ? `— Automatisch (${row.defaultModel}) —` : "— Automatisch —")
+                      : "— Automatisch (hoofdmodel) —"),
                   React.createElement("optgroup", { label:"Online" },
                     ...ONLINE_MODELS.map(m => React.createElement("option", { key:m.id, value:m.id }, m.label))
                   ),

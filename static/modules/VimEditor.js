@@ -4,7 +4,7 @@
 
 const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange,
                     allTags=[], goyoMode=false, onToggleGoyo, onEditorRef, onModeChange=()=>{},
-                    llmModel="", allNotesText="",
+                    llmModel="", taskLlmModel="", allNotesText="",
                     onSplitCmd=null,
                     onPasteBlock=null,
                     hideTagStrip=false,
@@ -55,9 +55,13 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
   const [aiLoading,  setAiLoading] = useState(false);
 
   // AI taalverbetering state
-  const [aiImprove,    setAiImprove]    = useState(null);   // {original, improved} of null
+  const [aiImprove,    setAiImprove]    = useState(null);   // {original, improved, range, mode} of null
   const [aiImproving,  setAiImproving]  = useState(false);  // bezig met verbeteren
   const [aiImproveLang,setAiImproveLang]= useState("nl");  // "nl"|"en"|"auto"
+  // Selectie-gebaseerde AI-acties (Copilot-achtig): \a in VISUAL-mode opent
+  // een klein actiemenu bij de cursor met presets + een vrij invoerveld.
+  const [aiActionMenu, setAiActionMenu] = useState(null);   // {x,y, range} of null
+  const [aiCustomText, setAiCustomText] = useState("");
   const compRef    = useRef({list:[], idx:0, open:false});
 
   // Spell check state — set van {row, col, len} fout-posities
@@ -206,6 +210,27 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
     ctx.font  = `${FONT_SIZE}px 'Hack','Courier New',monospace`;
     S.current.charW = ctx.measureText("M").width;
 
+    // Hack is een webfont die asynchroon laadt — als deze meting vóór het
+    // laden gebeurt, meet measureText() de fallback-breedte (Courier New),
+    // die net iets anders is dan Hack. Klik-naar-kolom-berekeningen
+    // (onMouseDown hieronder) gebruiken deze charW — bij een mismatch komt
+    // de cursor dan steeds iets naast waar je klikt, erger naarmate je
+    // verder naar rechts klikt. Zodra het lettertype écht klaar is: opnieuw
+    // meten en herberekenen.
+    if (document.fonts?.ready) {
+      document.fonts.ready.then(() => {
+        if (!cvRef.current) return;
+        const ctx2 = cvRef.current.getContext("2d");
+        ctx2.font = `${FONT_SIZE}px 'Hack','Courier New',monospace`;
+        const freshW = ctx2.measureText("M").width;
+        if (Math.abs(freshW - S.current.charW) > 0.01) {
+          S.current.charW = freshW;
+          S.current.numCols = String(S.current.lines.length).length + 1;
+          draw();
+        }
+      });
+    }
+
     const resize = () => {
       const dpr = window.devicePixelRatio || 1;
       const p   = cv.parentElement;
@@ -238,20 +263,32 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
       draw();
     }, 530);
 
-    // Muisklik → cursor plaatsen
-    // Single click: cursor plaatsen in NORMAL mode
+    // Muisklik → cursor plaatsen, of slepen → VISUAL-mode selectie
+    // Single click: cursor plaatsen in huidige mode (blijft INSERT/NORMAL)
     // Double click: cursor plaatsen + INSERT mode
+    // Slepen (muisknop ingedrukt + beweging > kleine drempel): start een
+    // char-wise VISUAL-selectie vanaf het punt waar de sleep begon, en
+    // breidt die live uit terwijl je sleept — net als in de meeste editors.
     let _clickTimer = null;
-    const onMouseDown = (e) => {
+    const posFromEvent = (e, s) => {
       const r   = cv.getBoundingClientRect();
-      const s   = S.current;
       const cw  = s.charW;
       const nw  = (s.numCols + 1) * cw + PAD_LEFT;
       const row = Math.min(s.lines.length - 1,
                   Math.max(0, Math.floor((e.clientY - r.top) / LINE_H) + s.scroll));
       const col = Math.min(s.lines[row].length,
                   Math.max(0, Math.round((e.clientX - r.left - nw + s.scrollX) / cw)));
-      s.cur = {row, col};
+      return { row, col };
+    };
+    const dragRef = { down: false, dragging: false, startX: 0, startY: 0, startPos: null };
+    const onMouseDown = (e) => {
+      if (e.button !== 0) return; // alleen linkermuisknop
+      const s = S.current;
+      const pos = posFromEvent(e, s);
+      dragRef.down = true; dragRef.dragging = false;
+      dragRef.startX = e.clientX; dragRef.startY = e.clientY;
+      dragRef.startPos = pos;
+      s.cur = pos;
       scrollToCursor(s);
       inp.focus();
       if (e.detail === 2) {
@@ -263,6 +300,41 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
       draw();
     };
     cv.addEventListener("mousedown", onMouseDown);
+    // Het onzichtbare invoerveld (inp) ligt met opzet met een hogere z-index
+    // BOVENOP de volledige canvas (nodig voor iOS: taps moeten de input
+    // bereiken om het toetsenbord te triggeren — zie de input-styling
+    // verderop). Daardoor onderschept dat veld op desktop élke muisklik vóór
+    // die de canvas bereikt. Fix: dezelfde handler ook op de input zelf
+    // koppelen — posFromEvent() gebruikt toch cv.getBoundingClientRect(),
+    // en input+canvas beslaan exact hetzelfde vlak, dus de berekende
+    // rij/kolom blijft kloppen ongeacht welk van de twee de klik ontvangt.
+    if (inp) inp.addEventListener("mousedown", onMouseDown);
+
+    const onMouseMoveDrag = (e) => {
+      if (!dragRef.down) return;
+      const s = S.current;
+      if (!dragRef.dragging) {
+        // Pas als "slepen" beschouwen na een kleine beweging — voorkomt dat
+        // een doodgewone, licht trillende klik al een selectie start
+        const dx = e.clientX - dragRef.startX, dy = e.clientY - dragRef.startY;
+        if (Math.hypot(dx, dy) < 4) return;
+        dragRef.dragging = true;
+        s.visual = true; s.visualLine = false;
+        s.visualStart = dragRef.startPos;
+        if (s.mode !== "VISUAL") setMode("VISUAL");
+      }
+      s.cur = posFromEvent(e, s);
+      scrollToCursor(s);
+      draw();
+    };
+    const onMouseUpDrag = () => {
+      dragRef.down = false; dragRef.dragging = false;
+      // Bij een echte sleep-selectie: VISUAL-mode blijft actief met de
+      // uiteindelijke selectie, zodat je 'm meteen kunt gebruiken (bv.
+      // Cmd/Ctrl+I voor AI-hulp, y om te kopiëren, \a, etc.)
+    };
+    document.addEventListener("mousemove", onMouseMoveDrag);
+    document.addEventListener("mouseup", onMouseUpDrag);
 
     // Touch support (iPad/iPhone)
     const onTouchStart = (e) => {
@@ -293,7 +365,10 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
       clearInterval(blinkRef.current);
       cancelAnimationFrame(rafRef.current);
       cv.removeEventListener("mousedown", onMouseDown);
+      if (inp) inp.removeEventListener("mousedown", onMouseDown);
       cv.removeEventListener("touchstart", onTouchStart);
+      document.removeEventListener("mousemove", onMouseMoveDrag);
+      document.removeEventListener("mouseup", onMouseUpDrag);
     };
   }, []);
 
@@ -423,6 +498,14 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
 
   const getVisualText = (s) => {
     const r = getVisualRange(s); if (!r) return "";
+    return getTextInRange(s, r);
+  };
+
+  // Zelfde als getVisualText, maar voor een EXPLICIET meegegeven bereik i.p.v.
+  // de actuele s.visual-status — nodig omdat de gebruiker vaak alweer VISUAL-
+  // mode verlaten heeft tegen de tijd dat een AI-suggestie klaar is.
+  const getTextInRange = (s, r) => {
+    if (!r) return "";
     if (r.line) {
       return s.lines.slice(r.startRow, r.endRow + 1).join("\n");
     }
@@ -465,6 +548,61 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
   const exitVisual = (s) => {
     s.visual = false; s.visualLine = false;
     setVisualSel(null);
+  };
+
+  // ── Vervang een eerder vastgelegd bereik door nieuwe tekst ──────────────
+  // Anders dan deleteVisualRange: werkt op een EXPLICIET meegegeven range
+  // (niet s.visual, want die is vaak alweer verlaten tegen de tijd dat de
+  // gebruiker een AI-voorstel accepteert) en voegt nieuwe regels in i.p.v.
+  // alleen te verwijderen. Gebruikt voor het toepassen van AI-tekstverbetering
+  // op een selectie.
+  const replaceRange = (s, r, newText) => {
+    if (!r) return;
+    pushUndo(s);
+    const newLines = newText.split("\n");
+    if (r.line) {
+      s.lines.splice(r.startRow, r.endRow - r.startRow + 1, ...newLines);
+      s.cur.row = Math.min(r.startRow + newLines.length - 1, s.lines.length - 1);
+      s.cur.col = 0;
+    } else if (r.startRow === r.endRow) {
+      const before = s.lines[r.startRow].slice(0, r.startCol);
+      const after  = s.lines[r.startRow].slice(r.endCol + 1);
+      if (newLines.length === 1) {
+        s.lines[r.startRow] = before + newLines[0] + after;
+        s.cur.row = r.startRow; s.cur.col = (before + newLines[0]).length;
+      } else {
+        const spliced = [before + newLines[0], ...newLines.slice(1, -1), newLines[newLines.length-1] + after];
+        s.lines.splice(r.startRow, 1, ...spliced);
+        s.cur.row = r.startRow + newLines.length - 1;
+        s.cur.col = newLines[newLines.length-1].length;
+      }
+    } else {
+      const before = s.lines[r.startRow].slice(0, r.startCol);
+      const after  = s.lines[r.endRow].slice(r.endCol + 1);
+      const spliced = newLines.length === 1
+        ? [before + newLines[0] + after]
+        : [before + newLines[0], ...newLines.slice(1, -1), newLines[newLines.length-1] + after];
+      s.lines.splice(r.startRow, r.endRow - r.startRow + 1, ...spliced);
+      s.cur.row = r.startRow + spliced.length - 1;
+      s.cur.col = 0;
+    }
+    emit(s);
+  };
+
+  // ── Huidige alinea bepalen (voor Cmd/Ctrl+K zonder actieve selectie) ────
+  // Contiguë niet-lege regels rond de cursor, begrensd door lege regels of
+  // start/einde van het document — het "vanzelfsprekende" bereik als je
+  // gewoon aan het doortypen bent zonder formeel iets te selecteren.
+  const getCurrentParagraphRange = (s) => {
+    const row = s.cur.row;
+    if (!s.lines[row] || !s.lines[row].trim()) {
+      // Cursor staat op een lege regel — niets zinnigs om te verbeteren
+      return { startRow: row, endRow: row, startCol: 0, endCol: 0, line: true };
+    }
+    let start = row, end = row;
+    while (start > 0 && s.lines[start - 1].trim()) start--;
+    while (end < s.lines.length - 1 && s.lines[end + 1].trim()) end++;
+    return { startRow: start, endRow: end, startCol: 0, endCol: s.lines[end].length, line: true };
   };
 
   // ── Dot repeat ───────────────────────────────────────────────────────────
@@ -1111,25 +1249,31 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
   }, [llmModel]);
 
   // ── AI taalverbetering ────────────────────────────────────────────────────
-  const triggerImprove = React.useCallback(async () => {
-    if (!llmModel) { setStatus("Geen AI model — stel in via Notebook tab"); return; }
+  // Werkt op de hele tekst (bestaand gedrag, via de "✨ verbeter"-knop
+  // onderaan) of op een specifieke selectie (nieuw, via \a in VISUAL-mode —
+  // range wordt dan meegegeven zodat alleen dat stuk vervangen wordt).
+  const triggerImprove = React.useCallback(async (opts = {}) => {
+    const { range = null, mode = "verbeter", tone = "", instruction = "", modelOverride = "" } = opts;
+    const model = modelOverride || taskLlmModel || llmModel;
+    if (!model) { setStatus("Geen AI model — stel in via Notebook tab"); return; }
     const s = S.current;
-    const text = s.lines.join("\n").trim();
+    const text = (range ? getTextInRange(s, range) : s.lines.join("\n")).trim();
     if (!text) { setStatus("Geen tekst om te verbeteren"); return; }
     const lang = aiImproveLang === "auto"
       ? (/\b(de|het|een|en|van|in|is|dat|dit|met|ik|je|we)\b/i.test(text) ? "nl" : "en")
       : aiImproveLang;
     setAiImproving(true);
-    setStatus("\u{1F916} AI taalverbetering\u2026");
+    setAiActionMenu(null);
+    setStatus("\u{1F916} AI " + (range ? "bewerkt selectie" : "taalverbetering") + "\u2026");
     try {
       const resp = await fetch("/api/llm/improve-text", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({ text, lang, model: llmModel }),
+        body: JSON.stringify({ text, lang, model, mode, tone, instruction }),
       });
       const data = await resp.json();
       if (data.improved) {
-        setAiImprove({ original: text, improved: data.improved });
+        setAiImprove({ original: text, improved: data.improved, range, mode });
         setStatus("\u2713 AI suggestie klaar \u2014 bekijk onderaan");
       } else {
         setStatus("AI fout: " + (data.error || "onbekend"));
@@ -1138,16 +1282,23 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
       setStatus("AI fout: " + e.message.slice(0, 50));
     }
     setAiImproving(false);
-  }, [llmModel, aiImproveLang]);
+  }, [llmModel, taskLlmModel, aiImproveLang]);
 
   const acceptImprove = React.useCallback(() => {
     if (!aiImprove) return;
     const s = S.current;
-    pushUndo(s);
-    s.lines = aiImprove.improved.split("\n");
+    if (aiImprove.range) {
+      // Selectie-scope: vervang alleen dat bereik
+      replaceRange(s, aiImprove.range, aiImprove.improved);
+      setStatus("\u2713 Selectie vervangen door AI-suggestie");
+    } else {
+      // Hele-document-scope: bestaand gedrag
+      pushUndo(s);
+      s.lines = aiImprove.improved.split("\n");
+      setStatus("\u2713 Tekst vervangen door AI-verbetering");
+    }
     clamp(); emit(s); draw();
     setAiImprove(null);
-    setStatus("\u2713 Tekst vervangen door AI-verbetering");
   }, [aiImprove]);
 
 
@@ -1192,6 +1343,26 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
     const s = S.current;
     const m = s.mode;
 
+    // ── Cmd/Ctrl+I: AI-actiemenu — werkt in ELKE mode, ook INSERT ───────────
+    // ("I" voor "Improve" — Ctrl+K bleek al bezet door split-navigatie)
+    // \a (verderop) doet hetzelfde maar alleen in NORMAL/VISUAL (\ typt in
+    // INSERT gewoon een backslash — kan daar dus geen commando zijn). Zonder
+    // actieve selectie valt dit terug op de huidige alinea, zodat je gewoon
+    // kunt doortypen en meteen AI-hulp kunt vragen op wat je net schreef.
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "i") {
+      e.preventDefault();
+      const r = s.visual ? getVisualRange(s) : getCurrentParagraphRange(s);
+      const cv = cvRef.current;
+      if (cv && r) {
+        const rectK = cv.getBoundingClientRect();
+        const nwK   = numColsWidth(s);
+        const xK = rectK.left + nwK + s.cur.col * s.charW - s.scrollX;
+        const yK = rectK.top  + (s.cur.row - s.scroll + 1) * LINE_H + 4;
+        setAiActionMenu({ x: Math.min(xK, window.innerWidth - 300), y: yK, range: r });
+      }
+      return;
+    }
+
     // ────────────────────────── INSERT ──────────────────────────────────────
     if (m === "INSERT") {
       // Completion popup navigatie — heeft prioriteit
@@ -1225,6 +1396,7 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
       if (e.key === "Escape") {
         e.preventDefault();
         if (helpOpen) { setHelpOpen(false); draw(); return; }
+        if (aiActionMenu) { setAiActionMenu(null); draw(); return; }
         closeCompletion();
         // Sla ingevoegde tekst op voor dot repeat
         if (s._insertStart !== undefined) {
@@ -1605,12 +1777,26 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
       } else { setStatus(''); }
       clamp(); draw(); return;
     }
-    // ── Leader key (\) — laag-annotaties ────────────────────────────────────
+    // ── Leader key (\) — laag-annotaties + AI-acties ────────────────────────
     if (s._leaderPending) {
       s._leaderPending = false;
       if (e.key === 'b') { insertLayerMark('bron');     clamp(); return; }
       if (e.key === 'k') { insertLayerMark('kritisch');  clamp(); return; }
       if (e.key === 'e') { insertLayerMark('eigen');     clamp(); return; }
+      if (e.key === 'a') {
+        // AI-actiemenu bij de cursor — alleen zinvol met een actieve selectie
+        const r = getVisualRange(s);
+        if (!r) { setStatus("\\a werkt op een selectie — ga eerst naar VISUAL-mode (v)"); draw(); return; }
+        const cv = cvRef.current;
+        if (cv) {
+          const rectA = cv.getBoundingClientRect();
+          const nwA   = numColsWidth(s);
+          const xA = rectA.left + nwA + s.cur.col * s.charW - s.scrollX;
+          const yA = rectA.top  + (s.cur.row - s.scroll + 1) * LINE_H + 4;
+          setAiActionMenu({ x: Math.min(xA, window.innerWidth - 300), y: yA, range: r });
+        }
+        setStatus(''); draw(); return;
+      }
       setStatus(''); draw(); return;
     }
 
@@ -1847,7 +2033,7 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
       case "m":
         s._markPending = true; setStatus("m..."); break;
       case "\\": // Leader key → laag-annotatie
-        s._leaderPending = true; setStatus("\\bron  \\kritisch  \\eigen"); break;
+        s._leaderPending = true; setStatus("\\bron  \\kritisch  \\eigen  \\a=AI-actie (selectie)"); break;
       case "'":
       case "`":
         s._jumpMarkPending = true; setStatus(`${e.key}...`); break;
@@ -2314,6 +2500,14 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
 
   // ── Render ────────────────────────────────────────────────────────────────
   const modeColor = mode==="INSERT" ? W.comment : mode==="COMMAND" ? W.orange : mode==="SEARCH" ? W.purple : W.blue;
+  // Gedeelde accentkleuren voor het AI-actiemenu + de onderste AI-balk —
+  // op donkere thema's blijft de bekende lichtblauwe rgba-tint (goed
+  // zichtbaar op donker), op lichte thema's een aparte, donkerder
+  // W.blue-gebaseerde rand zodat het menu-kader ook daar zichtbaar blijft
+  // (gemeten: de lichte tint als rand gaf maar 1.14–1.18:1, ruim onder de
+  // 3:1-norm voor niet-tekstuele UI-elementen).
+  const aiBorder = W.dark===false ? "rgba(26,58,106,0.6)" : "rgba(138,198,242,0.4)";
+  const aiBorderSoft = W.dark===false ? "rgba(26,58,106,0.35)" : "rgba(138,198,242,0.3)";
 
   // Bereken cursor-pixelpositie voor de completion popup
   const getCursorPx = () => {
@@ -2373,6 +2567,15 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
           ["\\  k",          "Markeer woord/selectie als kritische noot"],
           ["\\  e",          "Markeer woord/selectie als eigen gedachte"],
         ], "Wrapt de tekst als [tekst]{.bron} e.d. — deze laag-markering wordt herkend bij het exporteren van PDF-highlights, zodat bron/kritiek/eigen-gedachte later ook visueel te onderscheiden zijn."],
+        ["MUIS", W.blue, [
+          ["klik",          "Plaats cursor (blijft in huidige mode)"],
+          ["dubbelklik",    "Plaats cursor + start INSERT-mode"],
+          ["sleep",         "Selecteer tekst (start automatisch VISUAL-mode)"],
+        ]],
+        ["AI-TEKSTVERBETERING", W.blue, [
+          ["Cmd/Ctrl+I",     "AI-actiemenu — werkt in élke mode, ook INSERT"],
+          ["v ... \\  a",    "Zelfde, maar dan vanuit NORMAL/VISUAL na een selectie"],
+        ], "Zonder actieve selectie valt Cmd/Ctrl+I terug op de huidige alinea. Toont presets (Verbeteren/Korter/Uitgebreider/Toon) plus een vrij invoerveld. Het voorstel wordt altijd eerst getoond — nooit automatisch toegepast. \"✨ verbeter\" onderaan werkt zonder selectie op het hele document."],
         ["NAVIGATIE", W.blue, [
           ["h j k l",      "Beweeg cursor"],
           ["w / b",         "Woord voor/achteruit"],
@@ -2448,10 +2651,101 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
     )
   );
 
+  // ── AI-actiemenu (bij selectie, via \a) ──────────────────────────────────
+  const aiActionOverlay = aiActionMenu && React.createElement("div", {
+    onClick: () => setAiActionMenu(null),
+    style: { position:"fixed", inset:0, zIndex:399 },
+  },
+    React.createElement("div", {
+      style: {
+        position: "fixed", left: aiActionMenu.x, top: aiActionMenu.y, zIndex: 400,
+        background: W.bg2, border: `1px solid ${aiBorder}`,
+        borderRadius: "8px", padding: "8px", width: "280px",
+        boxShadow: "0 8px 32px rgba(0,0,0,0.5)",
+      },
+      onClick: e => e.stopPropagation(),
+    },
+    React.createElement("div", {
+      style: {fontSize:"10px", color:W.blue, letterSpacing:"0.5px", marginBottom:"6px",
+              display:"flex", justifyContent:"space-between", alignItems:"center"}
+    },
+      "AI-ACTIE OP SELECTIE",
+      React.createElement("span", {
+        onClick: () => setAiActionMenu(null),
+        style: {cursor:"pointer", color:W.fgMuted, fontSize:"13px", lineHeight:1}
+      }, "×")
+    ),
+    // Presets
+    React.createElement("div", {style:{display:"flex", flexWrap:"wrap", gap:"4px", marginBottom:"6px"}},
+      ...[
+        {mode:"verbeter", label:"✨ Verbeteren"},
+        {mode:"korter",   label:"↓ Korter"},
+        {mode:"langer",   label:"↑ Uitgebreider"},
+      ].map(p => React.createElement("button", {
+        key: p.mode,
+        onClick: () => triggerImprove({ range: aiActionMenu.range, mode: p.mode }),
+        style: {
+          background: "rgba(138,198,242,0.12)", border: `1px solid ${aiBorderSoft}`,
+          borderRadius:"4px", padding:"4px 9px", color:W.blue,
+          fontSize:"12px", cursor:"pointer",
+        }
+      }, p.label))
+    ),
+    // Toon-varianten
+    React.createElement("div", {style:{fontSize:"10px", color:W.fgDim, marginBottom:"3px"}}, "Andere toon:"),
+    React.createElement("div", {style:{display:"flex", flexWrap:"wrap", gap:"4px", marginBottom:"8px"}},
+      ...["formeel","zakelijk","vriendelijk","casual"].map(t => React.createElement("button", {
+        key: t,
+        onClick: () => triggerImprove({ range: aiActionMenu.range, mode: "toon", tone: t }),
+        style: {
+          background: "none", border: `1px solid ${W.splitBg}`,
+          borderRadius:"4px", padding:"3px 8px", color:W.fgMuted,
+          fontSize:"11px", cursor:"pointer",
+        }
+      }, t))
+    ),
+    // Vrije instructie
+    React.createElement("div", {style:{fontSize:"10px", color:W.fgDim, marginBottom:"3px"}}, "Of eigen instructie:"),
+    React.createElement("div", {style:{display:"flex", gap:"4px"}},
+      React.createElement("input", {
+        value: aiCustomText,
+        onChange: e => setAiCustomText(e.target.value),
+        onKeyDown: e => {
+          e.stopPropagation();
+          if (e.key === "Enter" && aiCustomText.trim()) {
+            triggerImprove({ range: aiActionMenu.range, mode: "custom", instruction: aiCustomText.trim() });
+            setAiCustomText("");
+          }
+          if (e.key === "Escape") setAiActionMenu(null);
+        },
+        placeholder: "bv. \"maak dit een vraag\"",
+        autoFocus: true,
+        style: {
+          flex:1, background:W.bg, border:`1px solid ${W.splitBg}`, borderRadius:"4px",
+          padding:"4px 7px", color:W.fg, fontSize:"12px", outline:"none",
+        }
+      }),
+      React.createElement("button", {
+        onClick: () => {
+          if (!aiCustomText.trim()) return;
+          triggerImprove({ range: aiActionMenu.range, mode: "custom", instruction: aiCustomText.trim() });
+          setAiCustomText("");
+        },
+        style: {
+          background:"rgba(138,198,242,0.15)", border:`1px solid ${aiBorder}`,
+          borderRadius:"4px", padding:"4px 10px", color:W.blue,
+          fontSize:"12px", cursor:"pointer",
+        }
+      }, "→")
+    )
+    )
+  );
+
   return React.createElement("div", {
     style: {display:"flex", flexDirection:"column", flex:1, minHeight:0, background:W.bg}
   },
     helpOverlay,
+    aiActionOverlay,
     // Tags strip (verborgen als SmartTagEditor al zichtbaar is boven de editor)
     !hideTagStrip && noteTags.length > 0 && React.createElement("div", {
       style: {padding:"4px 10px", background:W.lineNrBg,
@@ -2689,9 +2983,9 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
         disabled: aiImproving,
         style: {
           background: aiImproving ? "none" : "rgba(138,198,242,0.12)",
-          border: `1px solid ${aiImproving ? W.splitBg : "rgba(138,198,242,0.4)"}`,
+          border: `1px solid ${aiImproving ? W.splitBg : aiBorder}`,
           borderRadius: "4px", padding: "2px 10px",
-          color: aiImproving ? W.fgMuted : "#a8d8f0",
+          color: aiImproving ? W.fgMuted : W.blue,
           fontSize: "11px", cursor: aiImproving ? "not-allowed" : "pointer",
         }
       }, aiImproving ? "⏳ bezig…" : "✨ verbeter"),
@@ -2713,7 +3007,7 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
           bottom: "100%",        // direkt boven de balk
           left: 0, right: 0,
           background: W.bg2,
-          border: `1px solid rgba(138,198,242,0.35)`,
+          border: `1px solid ${aiBorderSoft}`,
           borderBottom: "none",
           borderRadius: "6px 6px 0 0",
           boxShadow: "0 -4px 16px rgba(0,0,0,0.4)",
@@ -2734,8 +3028,8 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
           }
         },
           React.createElement("span", {
-            style:{fontSize:"11px", color:"#a8d8f0", letterSpacing:"0.5px"}
-          }, "AI SUGGESTIE — verbeterde versie"),
+            style:{fontSize:"11px", color:W.blue, letterSpacing:"0.5px"}
+          }, aiImprove?.range ? "AI SUGGESTIE — voor de selectie" : "AI SUGGESTIE — hele document"),
           React.createElement("div", {style:{display:"flex", gap:"6px"}},
             React.createElement("button", {
               onClick: acceptImprove,

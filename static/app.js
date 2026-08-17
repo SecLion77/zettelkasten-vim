@@ -1118,11 +1118,13 @@ const App = () => {
   // ingesteld via VaultSettings → tab "Modellen".
   const [imageLlmModel,    setImageLlmModel]    = useState("");
   const [semanticLlmModel, setSemanticLlmModel] = useState("");
+  const [textImproveLlmModel, setTextImproveLlmModel] = useState("");
   React.useEffect(() => {
     fetch("/api/config").then(r=>r.json()).then(d=>{
       const cfg = d.config || {};
       setImageLlmModel(cfg.image_llm_model || "");
       setSemanticLlmModel(cfg.semantic_llm_model || "");
+      setTextImproveLlmModel(cfg.text_improve_llm_model || "");
     }).catch(()=>{});
   }, []);
   const [aiMindmap,    setAiMindmap]   = useState(null);
@@ -1522,6 +1524,7 @@ const App = () => {
     serverPdfs,
     serverImages,
     llmModel,
+    taskLlmModels: { textImprove: textImproveLlmModel },
     isMobile,
     isDesktop,
     isTablet,
@@ -1586,6 +1589,7 @@ const App = () => {
         onSelectNote:   id => setSelId(id),
         onNotesChange:  async (updated) => { if(updated?.length) { for(const n of updated) await NoteStore.save(n); } setNotes([...NoteStore.getAll()]); },
         serverPdfs, serverImages, llmModel,
+        taskLlmModels: { textImprove: textImproveLlmModel },
         isMobile: true, isDesktop: false, isTablet: false,
         sidebarOpen: true,
         onSidebarToggle: () => setSidebarOpen(false),
@@ -1965,8 +1969,9 @@ const App = () => {
     showSettings && React.createElement(VaultSettings, {
       vaultPath, onChangeVault:setVaultPath, onClose:()=>setShowSettings(false),
       onTaskModelsChange: (patch) => {
-        if ("image_llm_model"    in patch) setImageLlmModel(patch.image_llm_model);
-        if ("semantic_llm_model" in patch) setSemanticLlmModel(patch.semantic_llm_model);
+        if ("image_llm_model"        in patch) setImageLlmModel(patch.image_llm_model);
+        if ("semantic_llm_model"     in patch) setSemanticLlmModel(patch.semantic_llm_model);
+        if ("text_improve_llm_model" in patch) setTextImproveLlmModel(patch.text_improve_llm_model);
       },
     }),
     sidebarOverlay,
@@ -2316,6 +2321,7 @@ const App = () => {
                 else { setSelId(id); }
               },
               llmModel, isTablet, isDesktop,
+              taskLlmModels: { textImprove: textImproveLlmModel },
               onAddNote: async note => {
                 const saved = await NoteStore.save(note);
                 setNotes([...NoteStore.getAll()]);
