@@ -2053,3 +2053,135 @@ dubbele afvuring van dezelfde klik.
 ### Wat te kopiëren
 
 Alleen `VimEditor.js`.
+
+---
+
+## Update: semantisch zoeken in PDF's (onderzoek + implementatie, deel 1 van het voorstel)
+
+**Gewijzigd:** `server.py`, `app.js`, `SemanticSearch.js`, `PDFViewer.js`.
+
+Bouwt voort op de onderzoeksfase (chunking-strategieën nagezocht — o.a.
+NVIDIA's 2024-benchmark, die pagina-niveau-chunking als sterke default
+voor gepagineerde documenten aanwijst). Hergebruikt bewust de al bestaande
+PDF-tekst-extractie (`pdf_indexer.py` → `.zettelkasten_pdf_index.json`) en
+de al bestaande embedding-infrastructuur (Ollama `/api/embeddings`,
+hybride cosine+BM25+RRF-fusie) — geen nieuwe extractie-pijplijn nodig.
+
+### Server (`server.py`)
+
+- Nieuwe opslag: `.zettelkasten_pdf_embeddings.json`, los van notitie-
+  embeddings (andere sleutelvorm: `bestand::pagina::chunk-index`)
+- `_chunk_pdf_page()` — pagina-niveau als basis, alleen ongebruikelijk
+  lange pagina's verder gesplitst (recursief op regelgrenzen, met overlap)
+- `_iter_pdf_chunks()` — gedeelde helper zodat opbouwen én doorzoeken
+  exact dezelfde chunk-indeling gebruiken
+- Nieuwe endpoint `/api/semantic/embed-pdfs` — batch-gewijs, server bepaalt
+  zelf wat ontbreekt (client hoeft niks bij te houden)
+- `/api/semantic/search` uitgebreid met hetzelfde hybride cosine+BM25+RRF-
+  patroon over PDF-chunks, met deduplicatie per pagina
+- `/api/semantic/status` uitgebreid met PDF-indexeringscijfers
+
+### Client (`SemanticSearch.js`, `app.js`, `PDFViewer.js`)
+
+- Nieuwe "📄 PDF's indexeren"-sectie naast de bestaande notitie-index-UI
+- Zoekresultaten tonen nu een aparte PDF-sectie (bestandsnaam + pagina +
+  fragment), naast de bestaande notitie-resultaten
+- Klikken op een PDF-resultaat opent het PDF direct op de juiste pagina —
+  hergebruikt het bestaande `pendingScrollRef`-scroll-mechanisme
+  (`openPdfName`/`openPdfPage` als nieuwe, parallelle state in `app.js`)
+
+### Bijgevangen (niet stilzwijgend meegefixt, hier gemeld)
+
+- **Bestaande bug in de notitie-indexering**: `buildIndex()` in
+  `SemanticSearch.js` leest `status.ids`, maar `/api/semantic/status`
+  stuurt dat veld nooit mee — "alleen ontbrekende indexeren" werkt
+  daardoor in de praktijk niet (behandelt alles als ontbrekend). De nieuwe
+  PDF-indexering heeft dit probleem niet (server bepaalt het verschil
+  zelf), maar de bestaande notitie-versie is dus nog steeds gebrekkig.
+- **Bestaande bug in `ReadingList`'s `onOpenPdf`**: navigeert naar tab-id
+  `"pdfs"` (meervoud), terwijl de daadwerkelijke tab-id `"pdf"` is
+  (enkelvoud, bevestigd bij de tab-definitie) — "PDF openen" vanuit de
+  Leeslijst doet vermoedelijk niets.
+
+### Getest
+
+- `_chunk_pdf_page()`: 4 scenario's (normale/lege/lange pagina met
+  overlap-check, geen regels)
+- RRF-fusie + per-pagina-deduplicatie: los gesimuleerd, correcte
+  volgorde en geen dubbele pagina's
+- Page-key-type-consistentie gefixt (str vs int bij niet-geëmbedde chunks)
+- Volledige end-to-end-simulatie: chunk-detectie → todo-bepaling voor de
+  index-opbouw, inclusief het correct overslaan van lege pagina's
+- Keten-verificatie door alle vier bestanden (prop-doorgifte van
+  `SemanticSearch` tot in `PDFViewer`'s `loadPdf`)
+- `py_compile`/`node --check` op alle vier bestanden geslaagd
+
+### Wat te kopiëren
+
+Alle vier: `server.py`, `app.js`, `SemanticSearch.js`, `PDFViewer.js`.
+
+---
+
+## Update: ReadingList's "PDF openen"-bug gefixt
+
+**Gewijzigd:** alleen `app.js`.
+
+De eerder gemelde bug bleek dubbel gebroken: `onOpenPdf: name=>{ setTab("pdfs"); }`
+navigeerde niet alleen naar een niet-bestaande tab-id (`"pdfs"`, moet
+`"pdf"` zijn), maar gebruikte de meegegeven `name` (welk PDF-bestand)
+ook helemaal niet — er werd alleen van tab gewisseld, zonder ooit het
+specifieke PDF te openen.
+
+**Fix:** hergebruikt hetzelfde `openPdfName`-mechanisme dat al voor
+BookLibrary en de nieuwe semantische-PDF-zoekresultaten gebruikt wordt —
+`onOpenPdf: name=>{ setOpenPdfName(name); setTab("pdf"); }`. Lost beide
+problemen in één keer op: juiste tab-id, én het aangeklikte PDF wordt ook
+daadwerkelijk geopend.
+
+### Getest
+
+- Bevestigd dat `setOpenPdfName` binnen dezelfde `App`-component valt als
+  waar de fix staat (closure-toegang correct).
+- Nagegaan dat `openPdfPage` hierbij bewust niet wordt aangeraakt — zelfde
+  patroon als de al bestaande, werkende BookLibrary-aanroep; `onOpenPdfConsumed`
+  zet die waarde na elke PDF-opening altijd terug naar `null`, dus geen
+  risico op een verouderde paginawaarde vanuit een eerder semantisch-
+  zoeken-resultaat.
+- `node --check` geslaagd.
+
+### Wat te kopiëren
+
+Alleen `app.js`.
+
+---
+
+## Update: laatste openstaande bug gefixt — "Index bijwerken" indexeerde altijd alles
+
+**Gewijzigd:** alleen `server.py`.
+
+De client-code (`SemanticSearch.js`) was hier zelf al correct geschreven —
+`const indexed = new Set(Object.keys(status.ids || {}))` filtert prima
+áls het veld er is. Het probleem zat puur aan de serverkant:
+`/api/semantic/status` stuurde `ids` nooit mee, dus dat veld was altijd
+`undefined` → lege Set → elke notitie werd als "ontbrekend" gezien, ook
+notities die al lang geïndexeerd waren.
+
+**Fix:** `ids` toegevoegd aan de status-respons, als **object** (niet als
+lijst) — `{k: 1 for k in store}` — belangrijk, want de client leest dit
+met `Object.keys()`, wat op een JSON-array de indices (0,1,2…) zou
+teruggeven in plaats van de echte notitie-ID's.
+
+### Getest
+
+- Concreet gesimuleerd: vóór de fix gaf een 5-notities-vault met 3 al
+  geïndexeerd altijd "5 te indexeren" terug; na de fix correct "2 te
+  indexeren" (alleen de echt nieuwe).
+- `py_compile` geslaagd.
+
+### Wat te kopiëren
+
+Alleen `server.py`.
+
+---
+
+**Status: alle in deze sessie gevonden bugs zijn nu opgelost.**

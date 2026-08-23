@@ -442,7 +442,7 @@ const PdfToolbarDivider = ({ W }) => React.createElement("span", {
   style: { width: "1px", alignSelf: "stretch", background: W.splitBg, flexShrink: 0, margin: "0 2px" }
 });
 
-const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, onAutoSummarize, onDeletePdf, onPasteToNote=null, onAddNote=null, onSaveNote=null, onOpenNote=null, notes=[], isTablet=false, onTogglePdfRead=null, pdfAnnotations=[], openPdfName=null, onOpenPdfConsumed=null}) => {
+const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, onAutoSummarize, onDeletePdf, onPasteToNote=null, onAddNote=null, onSaveNote=null, onOpenNote=null, notes=[], isTablet=false, onTogglePdfRead=null, pdfAnnotations=[], openPdfName=null, openPdfPage=null, onOpenPdfConsumed=null}) => {
   const [pdfDoc,     setPdfDoc]     = useState(null);
   const [pdfFile,    setPdfFile]    = useState(null);
   const [pageNum,    setPageNum]    = useState(1);   // huidige zichtbare pagina (voor annotaties)
@@ -479,9 +479,9 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
   // dit tabblad niet steeds hetzelfde bestand heropent.
   useEffect(() => {
     if (!openPdfName) return;
-    openFromServer(openPdfName);
+    openFromServer(openPdfName, openPdfPage);
     onOpenPdfConsumed?.();
-  }, [openPdfName]);
+  }, [openPdfName, openPdfPage]);
 
   const [floatBar,   setFloatBar]   = useState(null);  // {x,y,text,above} zwevende toolbar
   const [floatNote,  setFloatNote]  = useState("");    // inline notitie in toolbar
@@ -880,7 +880,7 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
     return () => obs.disconnect();
   }, [renderedPages]);
 
-  const loadPdf=async(arrayBuffer,name)=>{
+  const loadPdf=async(arrayBuffer,name,targetPage=null)=>{
     setIsLoading(true);
     setRenderedPages([]);          // wis oude pagina's bij nieuw PDF
     renderingRef.current = false;
@@ -895,8 +895,13 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
       const savedPage = loadPdfPage(name);
       setPdfDoc(doc); setNumPages(doc.numPages);
       setPdfFile({name});
-      // Herstel opgeslagen pagina
-      if (savedPage > 1) {
+      // Een expliciet meegegeven doelpagina (bv. vanuit een semantisch-
+      // zoeken-resultaat) krijgt voorrang boven "waar was ik gebleven" —
+      // je klikte bewust op een specifieke pagina, dus die wil je zien.
+      if (targetPage && targetPage >= 1 && targetPage <= doc.numPages) {
+        pendingScrollRef.current = targetPage;
+        setPageNum(targetPage);
+      } else if (savedPage > 1) {
         pendingScrollRef.current = savedPage; // renderer scrollt zodra pagina in DOM is
         setPageNum(savedPage);
       } else {
@@ -955,11 +960,11 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
     }
   };
 
-  const openFromServer=async(name)=>{
+  const openFromServer=async(name,targetPage=null)=>{
     setShowLibrary(false); setIsLoading(true);
     try{
       const ab=await PDFService.fetchPdfBlob(name);
-      await loadPdf(ab,name);
+      await loadPdf(ab,name,targetPage);
     }catch(err){console.error(err);}
     setIsLoading(false);
   };
@@ -2180,6 +2185,38 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
                              color: W.blue, borderRadius: "5px", padding: "4px 0",
                              fontSize: "12px", cursor: "pointer", fontWeight: "600" }
                   }, "📖 Openen"),
+                  (() => {
+                    const isOfl = offlinePdfs.has(p.name);
+                    return React.createElement("button", {
+                      title: isOfl ? "Verwijder offline kopie" : "Bewaar voor offline gebruik (iPad zonder verbinding)",
+                      onClick: async e => {
+                        e.stopPropagation();
+                        const btn = e.currentTarget;
+                        btn.disabled = true;
+                        const oldTxt = btn.textContent;
+                        btn.textContent = "⏳";
+                        try {
+                          if (isOfl) {
+                            await removePdfOffline(p.name);
+                            setOfflinePdfs(s => { const n = new Set(s); n.delete(p.name); return n; });
+                          } else {
+                            await cachePdfOffline(p.name);
+                            setOfflinePdfs(s => new Set([...s, p.name]));
+                          }
+                        } catch (err) {
+                          btn.title = err.message || "Fout bij offline opslaan";
+                          btn.textContent = "⚠";
+                          btn.disabled = false;
+                          return;
+                        }
+                        btn.disabled = false;
+                      },
+                      style: { background: isOfl ? "rgba(114,182,96,0.12)" : "none",
+                               border: `1px solid ${isOfl ? "rgba(114,182,96,0.5)" : W.splitBg}`,
+                               color: isOfl ? "#72b660" : W.fgDim, borderRadius: "5px", padding: "4px 8px",
+                               fontSize: "12px", cursor: "pointer" }
+                    }, isOfl ? "✓" : "⬇");
+                  })(),
                   React.createElement("button", {
                     title: "Verwijder PDF + annotaties",
                     onClick: async e => {
@@ -2269,6 +2306,37 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
                              color: W.blue, borderRadius: "5px", padding: "4px 12px",
                              fontSize: "12px", cursor: "pointer", fontWeight: "600" }
                   }, "📖 Open"),
+                  (() => {
+                    const isOfl = offlinePdfs.has(p.name);
+                    return React.createElement("button", {
+                      title: isOfl ? "Verwijder offline kopie" : "Bewaar voor offline gebruik (iPad zonder verbinding)",
+                      onClick: async e => {
+                        e.stopPropagation();
+                        const btn = e.currentTarget;
+                        btn.disabled = true;
+                        btn.textContent = "⏳";
+                        try {
+                          if (isOfl) {
+                            await removePdfOffline(p.name);
+                            setOfflinePdfs(s => { const n = new Set(s); n.delete(p.name); return n; });
+                          } else {
+                            await cachePdfOffline(p.name);
+                            setOfflinePdfs(s => new Set([...s, p.name]));
+                          }
+                        } catch (err) {
+                          btn.title = err.message || "Fout bij offline opslaan";
+                          btn.textContent = "⚠";
+                          btn.disabled = false;
+                          return;
+                        }
+                        btn.disabled = false;
+                      },
+                      style: { background: isOfl ? "rgba(114,182,96,0.12)" : "none",
+                               border: `1px solid ${isOfl ? "rgba(114,182,96,0.5)" : W.splitBg}`,
+                               color: isOfl ? "#72b660" : W.fgDim, borderRadius: "5px", padding: "4px 8px",
+                               fontSize: "12px", cursor: "pointer" }
+                    }, isOfl ? "✓ Offline" : "⬇ Offline");
+                  })(),
                   React.createElement("button", {
                     title: "Verwijder",
                     onClick: async e => {

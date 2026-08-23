@@ -42,8 +42,8 @@ zettelkasten-vim/
 ├── static/
 │   ├── index.html         # App shell — laadt React + alle modules
 │   ├── app.js             # Hoofd-app: state, routing, navigatie
-│   ├── service-worker.js  # PWA offline caching (zk-sw-v22)
-│   └── modules/           # 35 React-componenten
+│   ├── service-worker.js  # PWA offline caching
+│   └── modules/           # React-componenten
 └── vault/                 # Alle gebruikersdata (Markdown-bestanden)
     ├── notes/             # Zettelkasten-notities (*.md)
     ├── pdfs/              # Geüploade PDF-bestanden
@@ -55,7 +55,7 @@ zettelkasten-vim/
 **Technische stack:**
 - **Backend:** Python 3.14, standaardbibliotheek only
 - **Frontend:** React 18 (UMD), vanilla JS modules
-- **AI:** Ollama (lokaal) + cloud-modellen (OpenAI, Anthropic, Mistral, Jan)
+- **AI:** Ollama (lokaal) + cloud-modellen (OpenAI, Anthropic, Mistral, Jan) — met per-taak modelkeuze (zie [Instellingen](#-instellingen))
 - **PDF:** PDF.js 3.11
 - **Opslag:** Markdown-bestanden — direct bewerkbaar in elke editor
 
@@ -72,10 +72,10 @@ Het startscherm dat elke sessie richting geeft:
 - **Auto-save** — dagnotitie wordt automatisch bewaard na 1,5 seconden stilte
 - **Markdown preview** — dagnotitie gerenderd als rijke tekst, klik om te bewerken
 - **Fragment → Zettelkasten** — selecteer tekst in de dagnotitie → popup → maak er een permanente notitie van; fragment wordt in de dagnotitie gemarkeerd als `~~tekst~~ ([[Notitietitel]])`
+- **✎ Snelle notitie** — maak in één stap een losstaande, zelfstandige notitie aan (titel + Enter) — anders dan de bullets hieronder, die aan de dagnotitie zelf toevoegen
 - **SR-reviews** — overzicht notities die vandaag herhaald moeten worden (rechterkolom op brede schermen)
-- **Twee-kolom layout** — dagnotitie links, SR-reviews rechts op schermen ≥ 900px
+- **Responsieve twee-kolom layout** — dagnotitie links, SR-reviews rechts op bredere schermen; past zich live aan bij het draaien van de iPad of in/uit split-view-multitasking
 - **Statistieken** — notities totaal, reviews vandaag, in SR-systeem, openstaande taken
-- **⚡ Snel vastleggen** — maak direct een capture-notitie aan
 - **📋 Nieuwe ADR** — Architecture Decision Record met vooraf ingevuld sjabloon (context, beslissing, alternatieven, consequenties, betrokkenen, status-geschiedenis)
 - **Recente activiteit** — notities van de afgelopen 7 dagen met +SR knop
 
@@ -84,14 +84,18 @@ Het startscherm dat elke sessie richting geeft:
 ### 📝 Schrijven — Notitie-editor
 
 - **VIM-editor** — volledige VIM-keybindings (normaal/insert/visual mode, `:w` opslaan)
+  - **Muisondersteuning** — klik om de cursor te positioneren (werkt in élke mode), sleep om tekst te selecteren (start automatisch VISUAL-mode)
+  - **Regelnummers** — relatieve nummering standaard aan (`:set nornu` om uit te zetten)
+  - **Uitgebreid hulpscherm** (`?`) — overzicht van alle sneltoetsen: navigatie, bewerken, text objects, visual, folds, marks/macro's, links (`[[`), bron-markering (`\b`/`\k`/`\e`), AI-tekstverbetering en muisacties
+  - **AI-tekstverbetering** (Cmd/Ctrl+I, of `\a` na een selectie) — selecteer tekst (of laat leeg voor de huidige alinea) en kies Verbeteren / Korter / Uitgebreider / Andere toon / een eigen instructie. Het voorstel wordt altijd eerst getoond — nooit automatisch toegepast
 - **Markdown-editor** — rijke teksteditor met syntaxmarkering
 - **Live preview** — split-view editor + gerenderde preview
-- **Outline-editor** — hiërarchische bullets voor notulen en plannen
+- **Outline-editor** — hiërarchische bullets voor notulen en plannen; standaard actief op touch-apparaten, met een altijd-zichtbare toggle naar VIM-mode
 - **Bionic Reading** — vetgedrukte fixatiepunten per woord (toggle in toolbar, opgeslagen voorkeur)
 - **Spellcheck** — Nederlandse en Engelse spellingcontrole
 - **Slimme links** — automatische backlink-suggesties naar verwante notities
 - **Object Fields** — gestructureerde YAML-velden per notitie
-- **Tags** — vrije tagging met autocomplete
+- **Tags** — vrije tagging met autocomplete, multi-select filteren waar van toepassing
 - **Notitietypen** — fleeting, literature, permanent, structure, ADR, boek
 - **AI-samenvatting** — samenvatting via gekozen Ollama-model
 - **Leestijd** — geschatte leestijd in de toolbar
@@ -101,7 +105,8 @@ Het startscherm dat elke sessie richting geeft:
 ### 🎨 Canvas — Whiteboard
 
 - Vrij tekenen (pen, markeerstift, gum, vormen)
-- Notities als sticky notes op het canvas
+- Notities als sticky notes op het canvas, in zes herkenbare kleuren (geel/blauw/rood/groen/paars/grijs)
+- **Radiaal actiemenu** — rechtsklik op een kaart voor Bewerken/Verbinden/Notitie/Graaf/Dupliceren/Verwijderen, en een verkenmenu naar gerelateerde notities
 - Mermaid-diagrammen en mindmaps inbedden
 - Exporteren als PNG
 
@@ -113,28 +118,32 @@ Het startscherm dat elke sessie richting geeft:
 
 - **Gecombineerd overzicht** — alle PDFs op één plek (upload, lezen, annoteren, status)
 - **Filter-pills** — Alle / Ongelezen / Gelezen / Offline
-- **Annotaties** — markeer tekst, voeg notities toe per pagina, vijf annotatieklassen
+- **Herziene toolbar** — gegroepeerd (navigatie · markeren · panelen · bestand), met consistente iconen; op smallere schermen (iPad) blijven alleen de knoppen zichtbaar die je tijdens het lezen steeds nodig hebt, de rest verhuist naar een "meer"-menu met grotere tikdoelen
+- **Markeren** — drie modi (Markeer / Markeer+notitie / Notitie) als duidelijke segmented control, vijf kleuren met elk hun eigen laag-betekenis (bron/kritisch/eigen)
+- **Betrouwbare meerdere-regels-selectie** — tekst selecteren over meerdere regels breekt niet meer af tijdens het lezen
+- **Nette highlight-markeringen** — doorlopende regel-balken in plaats van gefragmenteerde stukjes
+- **Verwante notities tijdens het lezen** — zijpaneel toont relevante notities op basis van je actieve selectie, zonder dat je naar Notebook hoeft te wisselen
 - **Annotatieteller** — gele badge (✦ n) per PDF in de lijstweergave
 - **Gelezen-status** — toggle per PDF, zichtbaar in de lijst
 - **Offline caching** — sla PDF op voor gebruik zonder server (⬇ Offline)
-- **AI-samenvatting** — automatische samenvatting van de PDF-inhoud
+- **AI-samenvatting** — automatische samenvatting van de PDF-inhoud (optioneel eigen model, zie Instellingen)
 
 #### 🖼 Plaatjes
 
 - Galerie van alle afbeeldingen in de vault
-- Annotaties op afbeeldingen
+- **Pin-annotaties** — klik op een afbeelding om een pin te plaatsen, met notitie, tags en kleur
+- AI-beeldherkenning (optioneel eigen model, zie Instellingen)
 
 #### 📖 Leeslijst
 
 - Geïmporteerde web-artikelen met leestijd, status en samenvatting
 - Filter ongelezen/gelezen/duplicaten
 
-#### 🔁 Review — Spaced Repetition (SM-2)
+#### 🔁 Review — Spaced Repetition (FSRS)
 
-- **SuperMemo-2 algoritme** — wiskundig optimale herhaalschema's
+- **FSRS-algoritme** — modern, wiskundig optimaal herhaalschema, opvolger van SM-2
 - **4 beoordelingsniveaus** — 😕 Vergeten / 😐 Moeite / 🙂 Goed / 😄 Gemakkelijk
 - **Interval-preview** — volgende reviewdatum per knop zichtbaar vóór beoordeling
-- **Ease-factor** — individuele moeilijkheidsgraad per notitie
 - **AI recall-vraag** — Ollama genereert een contextgerichte vraag voor actief ophalen
 - **Integratie Vandaag** — geplande reviews verschijnen automatisch in het dagscherm
 
@@ -142,6 +151,7 @@ Het startscherm dat elke sessie richting geeft:
 
 - `- [ ]` checkboxen over alle notities verzameld in één paneel
 - Afvinken zonder de notitie te openen
+- Filter op tag, sorteren nieuw→oud of oud→nieuw
 
 #### ✦ Annotaties
 
@@ -151,6 +161,7 @@ Het startscherm dat elke sessie richting geeft:
 #### 📚 Boeken
 
 - Boekencatalogus met auteur, status, rating
+- **"📖 Lees"-knop** — springt direct naar het gekoppelde PDF om verder te lezen/highlighten (automatisch gekoppeld op titelovereenkomst)
 - Leesnotities per boek koppelen aan Zettelkasten
 
 ---
@@ -164,26 +175,32 @@ Het startscherm dat elke sessie richting geeft:
 
 #### 🧠 Semantisch zoeken
 
-- **Lokale embeddings** via Ollama (`nomic-embed-text`, 84MB)
+- **Lokale embeddings** via Ollama (`nomic-embed-text`, 84MB) — of een eigen embedding-model, zie Instellingen
 - Vindt notities op *betekenis* — ook zonder exacte trefwoorden
 - **Index bouwen** — indexeer notities in batches; index opgeslagen in `.zettelkasten_embeddings.json`
+- **Hybride zoeken** — combineert BM25-tekstzoeken met embeddings
 - **Score-weergave** — resultaten met % overeenkomst
 - Beschikbaar in het hoofd-scherm én in de split-balk
 
 #### 🕸 Graaf
 
 - Interactief kennisnetwerk van alle notities en verbindingen
-- Zoom, filter op tag of notitietype
+- Zoom, filter op tag (multi-select) of notitietype
+- **Typed links** — verbindingen met een betekenis (inspireert, weerlegt, bouwt-voort-op, zie-ook, verwijst-naar), zichtbaar als kleur in de graaf
+- **Opschonen** — gebroken links opruimen, lege of "wees"-notities (zonder enige link) verwijderen, vault-opschoning — alles vanuit het zijpaneel
 
 #### 🗺 Mindmap
 
 - Automatisch gegenereerde mindmap vanuit notitie-inhoud
+- **Als Mermaid** — bekijk/exporteer de huidige mindmap als Mermaid-code
+- **Opslaan als notitie** — bewaar de volledige mindmap als Markdown-notitie
 
 #### 🧠 Notebook — AI-assistent
 
 - Vrije chat met gekozen model over de kennisbase
 - **GraphRAG** — antwoorden op basis van de graafstructuur
-- Contextvenster: selecteer welke notities meegestuurd worden
+- Contextvenster: selecteer welke notities meegestuurd worden, met multi-tag-filter
+- **Gesprek blijft behouden** bij het wisselen tussen tabs — ook binnen split-scherm
 - **Modelselectie** — lokaal (Ollama) of cloud (OpenAI, Anthropic, Mistral, Jan)
 - Embedding-modellen automatisch gefilterd uit de selectie
 
@@ -216,9 +233,11 @@ Het startscherm dat elke sessie richting geeft:
 ### ⚙ Instellingen
 
 - **Vault** — pad instellen, structuuroverzicht
-- **Thema** — Dark, Gruvbox, Zomer, Neon en meer
+- **Thema** — Dark, Gruvbox, Nord, Forest, **Zomerlicht** (crème, hoog-contrast — WCAG AAA, geoptimaliseerd voor buiten/felle zon), en meer
 - **API-sleutels** — OpenAI, Anthropic, Mistral
-- **Modellen** — overzicht beschikbare Ollama-modellen
+- **Modellen**
+  - Overzicht en beheer van eigen (OpenAI-compatibele) modellen
+  - **Model per taak** — optioneel een ander model dan je hoofdmodel instellen voor Afbeeldingen, Semantisch zoeken en Tekstverbetering. Leeg = automatisch (val terug op het hoofdmodel, of bij Semantisch zoeken direct op een embedding-model). Toont of het standaardmodel voor die taak al lokaal geïnstalleerd is
 - **PDF** — standaard annotatiekleur, pagina-weergave
 - **Weergave** — lettergrootte, regelafstand
 - **Offline** — opslaggebruik per categorie, PDF-limiet (50–500MB)
@@ -255,20 +274,22 @@ Het startscherm dat elke sessie richting geeft:
 
 **Split-scherm** — elk scherm naast een notitie. Rechterbalk (scrollbaar met ‹ ›):
 `Notities · Semantisch · Taken · Annotaties · Query · PDF · Plaatjes · Zoeken · Graaf · Mindmap · Notebook · Canvas`
+Notebook behoudt zijn gesprek ook in de split-rechts-positie, los van de hoofdweergave.
 
 ---
 
 ## Offline gebruik iPad
 
-1. Open de app op de iPad terwijl de laptop bereikbaar is (SW v22 installeert)
+1. Open de app op de iPad terwijl de laptop bereikbaar is (Service Worker installeert)
 2. Deel-icoon → **"Zet op beginscherm"** voor standalone PWA
 3. Per PDF: **⬇ Offline** in de PDF-bibliotheek voor offline caching
 4. **Werkt offline:**
    - Notities lezen en bewerken (IndexedDB sync-queue)
    - Gecachede PDFs lezen en annoteren
-   - SM-2 reviews doen
+   - Reviews doen
    - Dagnotitie schrijven
 5. Wijzigingen worden automatisch gesynchroniseerd bij herverbinding
+6. Layout past zich responsief aan bij het draaien van de iPad of split-view-multitasking
 
 > **Let op:** de standalone PWA (beginscherm-icoon) heeft een aparte opslagcontext van Safari. Cache wissen in Safari-instellingen heeft geen invloed op de PWA.
 
@@ -280,8 +301,9 @@ Het startscherm dat elke sessie richting geeft:
 |-----------|--------|------|
 | Python | ≥ 3.10 | Server |
 | Ollama | latest | Lokale AI |
-| nomic-embed-text | via Ollama | Semantisch zoeken |
-| gemma3:12b | via Ollama | Aanbevolen generatief model |
+| nomic-embed-text | via Ollama | Semantisch zoeken (standaard) |
+| gemma3:12b | via Ollama | Aanbevolen generatief hoofdmodel |
+| llama3.2-vision | via Ollama | Afbeeldingen (standaard) |
 | Chrome / Safari / Firefox | modern | Frontend |
 
 **Optionele cloud-modellen:**

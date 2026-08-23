@@ -1100,6 +1100,11 @@ const App = () => {
   // Voor "Lees dit boek" vanuit BookLibrary: welk PDF-bestand moet de
   // PDF-hub bij het volgende bezoek automatisch openen.
   const [openPdfName,  setOpenPdfName] = useState(null);
+  // Optioneel: specifieke pagina om naar toe te springen (bv. vanuit een
+  // semantisch-zoeken-resultaat) — los van openPdfName gehouden zodat de
+  // bestaande "open dit boek"-aanroep (altijd zonder pagina) ongewijzigd
+  // blijft werken.
+  const [openPdfPage,  setOpenPdfPage] = useState(null);
   const [isOffline,    setIsOffline]   = useState(!navigator.onLine);
   const [serverImages, setServerImages]= useState([]);
   // Verwijder embedding-modellen uit opgeslagen model
@@ -2042,7 +2047,8 @@ const App = () => {
                 else { setSelId(id); setTab("notes"); }
               },
               openPdfName,
-              onOpenPdfConsumed: () => setOpenPdfName(null),
+              openPdfPage,
+              onOpenPdfConsumed: () => { setOpenPdfName(null); setOpenPdfPage(null); },
               onRefreshPdfs:refreshPdfs,
               pdfAnnotations: pdfNotes,
               onTogglePdfRead: async name => {
@@ -2222,7 +2228,7 @@ const App = () => {
               notes,
               serverPdfs,
               onSelectNote: id=>{ setSelId(id); setTab("notes"); },
-              onOpenPdf: name=>{ setTab("pdfs"); },
+              onOpenPdf: name=>{ setOpenPdfName(name); setTab("pdf"); },
               onTogglePdfRead: async name => {
                 await fetch("/api/pdf-read-toggle",{
                   method:"POST",
@@ -2258,6 +2264,11 @@ const App = () => {
             onOpenNote: id => {
               if (isSplitRight) { setSplitSelId(id); }
               else { setSelId(id); setTab("notes"); }
+            },
+            onOpenPdf: (fname, page) => {
+              setOpenPdfName(fname);
+              setOpenPdfPage(page);
+              setTab("pdf");
             },
           });
           if(t==="tags") return React.createElement("div",

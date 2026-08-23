@@ -347,6 +347,70 @@ class VaultManager:
         self._embedding_path().write_text(
             json.dumps(data, ensure_ascii=False), "utf-8")
 
+    # ── PDF-embeddings — apart bestand, los van notitie-embeddings ─────────
+    # Los gehouden i.p.v. samengevoegd met notitie-embeddings: andere sleutel-
+    # vorm (bestand+pagina+chunk i.p.v. notitie-id), en zo kan de PDF-index
+    # herbouwd worden zonder de notitie-index aan te raken (en andersom).
+    def _pdf_embedding_path(self):
+        return self.vault / ".zettelkasten_pdf_embeddings.json"
+
+    def _load_pdf_embeddings(self) -> dict:
+        p = self._pdf_embedding_path()
+        if not p.exists(): return {}
+        try: return json.loads(p.read_text("utf-8"))
+        except Exception: return {}
+
+    def _save_pdf_embeddings(self, data: dict):
+        self._pdf_embedding_path().write_text(
+            json.dumps(data, ensure_ascii=False), "utf-8")
+
+    def _chunk_pdf_page(self, page_lines: list, max_chars: int = 2000, overlap_chars: int = 250) -> list:
+        """Knip de regels van één PDF-pagina in chunks voor embedding.
+
+        Strategie: pagina-niveau als basiseenheid (onderzoek — o.a. NVIDIA's
+        2024-chunking-benchmark — wijst dit uit als sterke default voor
+        gepagineerde documenten: hoogste nauwkeurigheid, laagste variantie,
+        en veel goedkoper dan zin-voor-zin "semantische" chunking). Een
+        gemiddelde pagina (300-500 woorden) past ruim binnen het
+        contextvenster van nomic-embed-text, dus meestal levert dit precies
+        1 chunk op. Alleen ongebruikelijk lange pagina's (dichte tekst,
+        tabellen) worden verder gesplitst — recursief op regelgrenzen, met
+        een bescheiden overlap zodat een zin die precies op de knip valt
+        niet zijn context verliest."""
+        text = "\n".join(l for l in page_lines if l.strip())
+        if len(text) <= max_chars:
+            return [text] if text.strip() else []
+        chunks = []
+        start = 0
+        while start < len(text):
+            end = min(start + max_chars, len(text))
+            # Probeer op een regel-einde te knippen i.p.v. midden in een zin
+            if end < len(text):
+                nl = text.rfind("\n", start, end)
+                if nl > start + max_chars // 2:
+                    end = nl
+            chunk = text[start:end].strip()
+            if chunk:
+                chunks.append(chunk)
+            if end >= len(text):
+                break
+            start = max(start, end - overlap_chars)
+        return chunks
+
+    def _iter_pdf_chunks(self):
+        """Genereert (key, bestandsnaam, pagina, chunk_tekst) voor elke
+        embed-bare chunk in de hele PDF-index. Gedeeld tussen het opbouwen
+        van de index (embed-pdfs) en het doorzoeken ervan (search, voor het
+        BM25-signaal) — zodat beide exact dezelfde chunk-indeling en dus
+        dezelfde sleutels gebruiken zonder de tekst zelf dubbel op te slaan."""
+        pdf_index = self._get_pdf_search_index()
+        for fname, entry in pdf_index.items():
+            for pg in entry.get("pages", []):
+                page_num = pg.get("page")
+                chunks = self._chunk_pdf_page(pg.get("lines", []))
+                for ci, chunk_text in enumerate(chunks):
+                    yield f"{fname}::{page_num}::{ci}", fname, page_num, chunk_text
+
 
     # ── Dagboek (persistente dagnotities à la Parchment) ─────────────────
     @property
@@ -2587,13 +2651,105 @@ class ZKHandler(BaseHTTPRequestHandler):
                     score = max(cos, 0.3 + 0.4 * bm25_norm) if bm25_norm > 0.15 else cos
                     results.append({"id": nid, "score": round(score, 4),
                                      "cosine": round(cos, 4), "bm25": round(bm25_norm, 4)})
-                return self._send(200, {"ok": True, "results": results[:limit]})
+
+                # ── Zelfde hybride aanpak, nu over PDF-pagina-chunks ─────────────
+                # Losstaand van bovenstaand omdat PDF-chunks een eigen sleutel-
+                # vorm hebben (bestand::pagina::chunk-index) — geen notitie-id.
+                # De client houdt deze twee lijsten ook apart (results vs
+                # pdf_results) zodat bestaande code die alleen `results`
+                # verwacht ongewijzigd blijft werken.
+                pdf_store = self.vault._load_pdf_embeddings()
+                pdf_cosine = {}
+                if q_emb:
+                    for key, entry in pdf_store.items():
+                        emb = entry.get("embedding", [])
+                        if len(emb) != len(q_emb): continue
+                        dot  = sum(a*b for a,b in zip(q_emb, emb))
+                        norm = math.sqrt(sum(x*x for x in emb)) or 1
+                        pdf_cosine[key] = dot / (q_norm * norm) if q_emb else 0.0
+
+                pdf_docs = {c[0]: c[3] for c in self.vault._iter_pdf_chunks()}
+                pdf_bm25 = self._bm25_scores(query, pdf_docs)
+
+                pdf_results = []
+                if pdf_cosine or pdf_bm25:
+                    pdf_cos_ranking  = [k for k,_ in sorted(pdf_cosine.items(), key=lambda x:-x[1])[:50]]
+                    pdf_bm25_ranking = [k for k,_ in sorted(pdf_bm25.items(), key=lambda x:-x[1])[:50]]
+                    pdf_fused = self._rrf_fuse([r for r in (pdf_cos_ranking, pdf_bm25_ranking) if r])
+                    max_pdf_bm25 = max(pdf_bm25.values()) if pdf_bm25 else 1
+
+                    # Eén resultaat per PAGINA — bij meerdere chunks op
+                    # dezelfde pagina alleen de best scorende tonen, anders
+                    # zie je "pagina 4" twee keer in de resultatenlijst
+                    best_per_page = {}
+                    for key, _ in sorted(pdf_fused.items(), key=lambda x: -x[1]):
+                        cos = pdf_cosine.get(key, 0.0)
+                        bm25_norm = (pdf_bm25.get(key, 0.0) / max_pdf_bm25) if max_pdf_bm25 else 0.0
+                        score = max(cos, 0.3 + 0.4 * bm25_norm) if bm25_norm > 0.15 else cos
+                        entry = pdf_store.get(key, {})
+                        # key = "bestand::pagina::chunk" — bij een chunk die
+                        # nog niet ge-embed is (alleen via BM25 gevonden)
+                        # ontbreekt entry; page moet dan consistent als str
+                        # behandeld worden, anders dedupliceert (bestand, 5)
+                        # niet tegen (bestand, "5") als beide voorkomen.
+                        key_parts = key.split("::")
+                        page_key = (entry.get("file", key_parts[0]),
+                                    str(entry.get("page", key_parts[1] if len(key_parts) > 1 else "0")))
+                        if page_key in best_per_page and best_per_page[page_key]["score"] >= score:
+                            continue
+                        best_per_page[page_key] = {
+                            "key": key, "file": entry.get("file", page_key[0]),
+                            "page": entry.get("page", page_key[1]),
+                            "excerpt": entry.get("excerpt", pdf_docs.get(key, "")[:300]),
+                            "score": round(score, 4), "cosine": round(cos, 4),
+                            "bm25": round(bm25_norm, 4),
+                        }
+                    pdf_results = sorted(best_per_page.values(), key=lambda x: -x["score"])[:limit]
+
+                return self._send(200, {"ok": True, "results": results[:limit],
+                                         "pdf_results": pdf_results})
             except Exception as e:
                 return self._send(200, {"ok": False, "error": str(e)})
 
         if p=="/api/semantic/status":
-            store = self.vault._load_embeddings()
-            return self._send(200, {"ok": True, "indexed": len(store)})
+            store     = self.vault._load_embeddings()
+            pdf_store = self.vault._load_pdf_embeddings()
+            pdf_total = sum(1 for _ in self.vault._iter_pdf_chunks())
+            # "ids" als object (niet lijst!) — de client leest dit met
+            # Object.keys(status.ids), wat op een JS-array de indices
+            # (0,1,2…) zou teruggeven i.p.v. de echte notitie-ID's.
+            return self._send(200, {"ok": True, "indexed": len(store),
+                                     "ids": {k: 1 for k in store},
+                                     "pdf_indexed": len(pdf_store),
+                                     "pdf_total_pages": pdf_total})
+
+        if p=="/api/semantic/embed-pdfs":
+            body       = self._body()
+            model      = body.get("model", "nomic-embed-text")
+            batch_size = int(body.get("batch_size", 5))
+            try:
+                pdf_store = self.vault._load_pdf_embeddings()
+                todo = [c for c in self.vault._iter_pdf_chunks() if c[0] not in pdf_store]
+                batch = todo[:batch_size]
+                updated = 0
+                for key, fname, page_num, chunk_text in batch:
+                    result = self._ollama_post("/api/embeddings",
+                        {"model": model, "prompt": chunk_text[:2000]}, 30)
+                    emb = result.get("embedding", [])
+                    if emb:
+                        pdf_store[key] = {
+                            "embedding": emb, "file": fname, "page": page_num,
+                            "excerpt": chunk_text[:300],
+                            "ts": __import__("time").time(),
+                        }
+                        updated += 1
+                self.vault._save_pdf_embeddings(pdf_store)
+                remaining = max(0, len(todo) - len(batch))
+                return self._send(200, {"ok": True, "updated": updated,
+                                         "total": len(pdf_store), "remaining": remaining})
+            except Exception as e:
+                return self._send(200, {"ok": False, "error": str(e),
+                    "hint": "Installeer nomic-embed-text: ollama pull nomic-embed-text"})
 
         if p=="/api/daily":
             body = self._body()

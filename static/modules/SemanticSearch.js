@@ -2,15 +2,19 @@
 // Zoekt notities op betekenis via lokale Ollama embeddings (nomic-embed-text).
 // Bouwt een index op en bewaart die in de vault als .zettelkasten_embeddings.json
 
-const SemanticSearch = ({ notes = [], onOpenNote, llmModel = "", taskLlmModel = "" }) => {
+const SemanticSearch = ({ notes = [], onOpenNote, onOpenPdf, llmModel = "", taskLlmModel = "" }) => {
   const { useState, useEffect, useCallback, useMemo, useRef } = React;
 
   const [query,       setQuery]       = useState("");
   const [results,     setResults]     = useState([]);
+  const [pdfResults,  setPdfResults]  = useState([]);
   const [searching,   setSearching]   = useState(false);
   const [indexStatus, setIndexStatus] = useState(null); // {indexed, total}
+  const [pdfIndexStatus, setPdfIndexStatus] = useState(null); // {indexed, total}
   const [indexing,    setIndexing]    = useState(false);
+  const [pdfIndexing, setPdfIndexing] = useState(false);
   const [indexPct,    setIndexPct]    = useState(0);
+  const [pdfIndexPct, setPdfIndexPct] = useState(0);
   const [error,       setError]       = useState("");
   const [embedModel,  setEmbedModel]  = useState(taskLlmModel || "nomic-embed-text");
   const [ollamaModels,setOllamaModels]= useState([]);
@@ -33,7 +37,10 @@ const SemanticSearch = ({ notes = [], onOpenNote, llmModel = "", taskLlmModel = 
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({}) })
       .then(r => r.json())
-      .then(d => setIndexStatus({ indexed: d.indexed || 0, total: notes.length }))
+      .then(d => {
+        setIndexStatus({ indexed: d.indexed || 0, total: notes.length });
+        setPdfIndexStatus({ indexed: d.pdf_indexed || 0, total: d.pdf_total_pages || 0 });
+      })
       .catch(() => {});
     // Haal beschikbare Ollama modellen op
     fetch("/api/ollama-models", { method: "POST",
@@ -57,6 +64,39 @@ const SemanticSearch = ({ notes = [], onOpenNote, llmModel = "", taskLlmModel = 
       })
       .catch(() => {});
   }, [notes.length]);
+
+  // ── PDF-index bouwen / bijwerken ─────────────────────────────────────────
+  // Anders dan buildIndex() hierboven: de server bepaalt zelf welke
+  // pagina-chunks nog ontbreken (via _iter_pdf_chunks() tegen de opgeslagen
+  // embeddings) — de client hoeft dus geen lijst mee te sturen, alleen te
+  // blijven aanroepen tot "remaining" op 0 staat.
+  const buildPdfIndex = useCallback(async () => {
+    setPdfIndexing(true); setError(""); setPdfIndexPct(0);
+    try {
+      let remaining = 1, totalToDo = null, done = 0;
+      while (remaining > 0) {
+        const resp = await fetch("/api/semantic/embed-pdfs", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ model: embedModel, batch_size: 5 }),
+        });
+        const d = await resp.json();
+        if (!d.ok) {
+          setError(d.error + (d.hint ? `\n💡 ${d.hint}` : ""));
+          setPdfIndexing(false); return;
+        }
+        remaining = d.remaining || 0;
+        if (totalToDo === null) totalToDo = d.updated + remaining;
+        done += d.updated;
+        setPdfIndexPct(totalToDo > 0 ? Math.round((done / totalToDo) * 100) : 100);
+        setPdfIndexStatus(p => ({ indexed: d.total, total: p?.total || 0 }));
+        if (d.updated === 0 && remaining > 0) break; // voorkom oneindige lus bij een hardnekkige fout per item
+      }
+    } catch(e) {
+      setError(`PDF-index fout: ${e.message}`);
+    }
+    setPdfIndexing(false);
+  }, [embedModel]);
 
   // ── Index bouwen / bijwerken ─────────────────────────────────────────────
   const buildIndex = useCallback(async (onlyMissing = true) => {
@@ -113,7 +153,7 @@ const SemanticSearch = ({ notes = [], onOpenNote, llmModel = "", taskLlmModel = 
   // ── Semantisch zoeken ─────────────────────────────────────────────────────
   const doSearch = useCallback(async () => {
     if (!query.trim()) return;
-    setSearching(true); setError(""); setResults([]);
+    setSearching(true); setError(""); setResults([]); setPdfResults([]);
     try {
       const resp = await fetch("/api/semantic/search", {
         method: "POST",
@@ -131,6 +171,7 @@ const SemanticSearch = ({ notes = [], onOpenNote, llmModel = "", taskLlmModel = 
         .map(r => ({ ...r, note: noteMap[r.id] }))
         .filter(r => r.note && r.score > 0.3);
       setResults(hits);
+      setPdfResults((d.pdf_results || []).filter(r => r.score > 0.3));
     } catch(e) {
       setError(`Zoekfout: ${e.message}`);
     }
@@ -141,6 +182,9 @@ const SemanticSearch = ({ notes = [], onOpenNote, llmModel = "", taskLlmModel = 
 
   const covered = indexStatus
     ? Math.round((indexStatus.indexed / Math.max(indexStatus.total, 1)) * 100)
+    : 0;
+  const pdfCovered = pdfIndexStatus && pdfIndexStatus.total > 0
+    ? Math.round((pdfIndexStatus.indexed / pdfIndexStatus.total) * 100)
     : 0;
 
   return React.createElement("div", {
@@ -253,6 +297,38 @@ const SemanticSearch = ({ notes = [], onOpenNote, llmModel = "", taskLlmModel = 
         }, "Alles herindexeren"),
       ),
 
+      // PDF-index status + knop — zelfde patroon als notities hierboven
+      pdfIndexStatus && pdfIndexStatus.total > 0 && React.createElement("div", {
+        style:{display:"flex",alignItems:"center",gap:"10px",flexWrap:"wrap"}
+      },
+        React.createElement("div", {style:{fontSize:"11px",color:W.fgMuted,flex:1}},
+          `📄 ${pdfIndexStatus.indexed}/${pdfIndexStatus.total} PDF-pagina's geïndexeerd (${pdfCovered}%)`
+        ),
+        React.createElement("div",{
+          style:{width:"80px",height:"4px",background:W.splitBg,
+                 borderRadius:"2px",overflow:"hidden"}},
+          React.createElement("div",{style:{
+            height:"100%",borderRadius:"2px",
+            background: pdfCovered===100 ? "#72b660" : W.blue,
+            width:`${pdfCovered}%`, transition:"width .3s"
+          }})
+        ),
+        pdfCovered < 100 && React.createElement("button", {
+          onClick: buildPdfIndex,
+          disabled: pdfIndexing,
+          title: "Indexeer PDF-pagina's voor semantisch zoeken",
+          style: {
+            background: pdfIndexing ? "rgba(138,198,242,0.1)" : "rgba(255,255,255,0.07)",
+            border: `1px solid ${W.blue}`,
+            color: W.blue,
+            borderRadius:"6px", padding:"4px 12px",
+            fontSize:"12px", fontWeight:"600",
+            cursor: pdfIndexing ? "wait" : "pointer",
+            opacity: pdfIndexing ? 0.7 : 1,
+          }
+        }, pdfIndexing ? `⏳ ${pdfIndexPct}%` : "↻ PDF's indexeren"),
+      ),
+
       // Foutmelding
       error && React.createElement("div", {
         style: { background:"rgba(229,120,109,0.08)",
@@ -267,7 +343,7 @@ const SemanticSearch = ({ notes = [], onOpenNote, llmModel = "", taskLlmModel = 
       style:{ flex:1, overflowY:"auto", padding:"12px 20px" }
     },
       // Geen resultaten na zoeken
-      results.length === 0 && !searching && query && !error &&
+      results.length === 0 && pdfResults.length === 0 && !searching && query && !error &&
         React.createElement("div",{
           style:{textAlign:"center",padding:"40px 0",color:W.fgMuted,fontSize:"13px"}
         },
@@ -280,7 +356,7 @@ const SemanticSearch = ({ notes = [], onOpenNote, llmModel = "", taskLlmModel = 
         ),
 
       // Startscherm
-      results.length === 0 && !query &&
+      results.length === 0 && pdfResults.length === 0 && !query &&
         React.createElement("div",{
           style:{textAlign:"center",padding:"40px 20px",color:W.fgMuted}
         },
@@ -385,6 +461,67 @@ const SemanticSearch = ({ notes = [], onOpenNote, llmModel = "", taskLlmModel = 
                     }},t)
                   )
                 )
+            )
+          );
+        })
+      ),
+
+      // PDF-resultatenlijst — apart blok, want andere brontype (bestand+pagina
+      // i.p.v. notitie), maar visueel in dezelfde stijl
+      pdfResults.length > 0 && React.createElement("div",{style:{
+        display:"flex",flexDirection:"column",gap:"2px",
+        marginTop: results.length > 0 ? "18px" : "0"
+      }},
+        React.createElement("div",{style:{
+          fontSize:"12px",color:W.fgMuted,marginBottom:"10px"
+        }},
+          `${pdfResults.length} PDF-resultaten gevonden voor "${query}"`),
+        pdfResults.map((hit, i) => {
+          const pct   = Math.round(hit.score * 100);
+          const color = pct > 80 ? "#72b660"
+            : pct > 60 ? (W.blue)
+            : (W.fgMuted);
+
+          return React.createElement("div",{
+            key: hit.key,
+            onClick: () => onOpenPdf?.(hit.file, hit.page),
+            style:{
+              display:"flex",alignItems:"flex-start",gap:"12px",
+              padding:"10px 14px",borderRadius:"8px",
+              background:"transparent",
+              border:"1px solid transparent",
+              cursor: onOpenPdf ? "pointer" : "default",
+              transition:"background .1s",
+            },
+            onMouseEnter: e => e.currentTarget.style.background = W.bg2,
+            onMouseLeave: e => e.currentTarget.style.background = "transparent",
+          },
+            // Similarity score
+            React.createElement("div",{style:{
+              width:"42px",height:"42px",borderRadius:"50%",flexShrink:0,
+              background:(()=>{ try { const h=color.replace("#",""); const [r,g,b]=h.match(/../g).map(x=>parseInt(x,16)); return `rgba(${r},${g},${b},0.12)`; } catch { return "rgba(128,128,128,0.12)"; } })(),
+              border:`2px solid ${color}`,
+              display:"flex",alignItems:"center",justifyContent:"center",
+              fontSize:"11px",fontWeight:"700",color
+            }}, `${pct}%`),
+            // PDF info
+            React.createElement("div",{style:{flex:1,minWidth:0}},
+              React.createElement("div",{style:{
+                fontSize:"14px",color:W.fg,fontWeight:"600",
+                display:"flex",alignItems:"center",gap:"6px",
+                overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"
+              }},
+                React.createElement("span",{style:{flexShrink:0}},"📄"),
+                React.createElement("span",{style:{overflow:"hidden",textOverflow:"ellipsis"}},
+                  hit.file || "(onbekend bestand)"),
+                React.createElement("span",{style:{color:W.fgMuted,fontWeight:"400",flexShrink:0}},
+                  `— p.${hit.page}`)
+              ),
+              React.createElement("div",{style:{
+                fontSize:"12px",color:W.fgMuted,marginTop:"3px",
+                overflow:"hidden",display:"-webkit-box",
+                WebkitLineClamp:"2",WebkitBoxOrient:"vertical"
+              }}, hit.excerpt || "")
             )
           );
         })
