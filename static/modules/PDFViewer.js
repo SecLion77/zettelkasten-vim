@@ -2216,9 +2216,14 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
                             setOfflinePdfs(s => new Set([...s, p.name]));
                           }
                         } catch (err) {
-                          btn.title = err.message || "Fout bij offline opslaan";
+                          const msg = err.message || "Fout bij offline opslaan";
+                          btn.title = msg;
                           btn.textContent = "⚠";
                           btn.disabled = false;
+                          // title (tooltip) vereist hover — bestaat niet op
+                          // een touchscreen. alert() is lelijk maar
+                          // gegarandeerd zichtbaar op iPad, zonder hover.
+                          alert("PDF offline opslaan mislukt:\n\n" + msg);
                           return;
                         }
                         btn.disabled = false;
@@ -2339,9 +2344,11 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
                             setOfflinePdfs(s => new Set([...s, p.name]));
                           }
                         } catch (err) {
-                          btn.title = err.message || "Fout bij offline opslaan";
+                          const msg = err.message || "Fout bij offline opslaan";
+                          btn.title = msg;
                           btn.textContent = "⚠";
                           btn.disabled = false;
+                          alert("PDF offline opslaan mislukt:\n\n" + msg);
                           return;
                         }
                         btn.disabled = false;
