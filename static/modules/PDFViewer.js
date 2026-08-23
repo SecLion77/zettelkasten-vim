@@ -2200,7 +2200,19 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
                             await removePdfOffline(p.name);
                             setOfflinePdfs(s => { const n = new Set(s); n.delete(p.name); return n; });
                           } else {
-                            await cachePdfOffline(p.name);
+                            // BUG (gevonden + gefixt): het resultaat van
+                            // cachePdfOffline() werd nooit gecontroleerd —
+                            // de knop toonde altijd "✓" zodra de aanroep
+                            // terugkwam, ook als de service worker
+                            // {ok:false, error:...} teruggaf (bv. PDF was
+                            // te groot, netwerkfout tijdens downloaden).
+                            // Resultaat: de knop léék gelukt, maar de PDF
+                            // stond niet echt in de cache — pas zichtbaar
+                            // zodra je daadwerkelijk offline ging.
+                            const result = await cachePdfOffline(p.name);
+                            if (!result?.ok) {
+                              throw new Error(result?.error || "Cachen mislukt — onbekende fout");
+                            }
                             setOfflinePdfs(s => new Set([...s, p.name]));
                           }
                         } catch (err) {
@@ -2320,7 +2332,10 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
                             await removePdfOffline(p.name);
                             setOfflinePdfs(s => { const n = new Set(s); n.delete(p.name); return n; });
                           } else {
-                            await cachePdfOffline(p.name);
+                            const result = await cachePdfOffline(p.name);
+                            if (!result?.ok) {
+                              throw new Error(result?.error || "Cachen mislukt — onbekende fout");
+                            }
                             setOfflinePdfs(s => new Set([...s, p.name]));
                           }
                         } catch (err) {

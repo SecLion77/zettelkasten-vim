@@ -2185,3 +2185,181 @@ Alleen `server.py`.
 ---
 
 **Status: alle in deze sessie gevonden bugs zijn nu opgelost.**
+
+---
+
+## Update: offline-knop bleek onbereikbaar — nu echt in de zichtbare bibliotheek
+
+**Gewijzigd:** alleen `PDFViewer.js`.
+
+### De oorzaak — mijn eigen eerdere antwoord was fout
+
+Ik had eerder de `⬇ Offline`-knop en `cachePdfOffline()`/`removePdfOffline()`
+gevonden en beschreven als bestaande functionaliteit — zonder te
+controleren of het component waar die knop in zit (`PDFUploadPanel`) ook
+daadwerkelijk ergens gerenderd wordt. Bleek van niet: `PDFUploadPanel`
+wordt in de hele codebase nooit aangeroepen — dode code. De écht
+zichtbare bibliotheek (grid- en lijstweergave) had alleen een
+"Offline"-**filterpil** (om te filteren op wat al offline stond), maar
+geen enkele knop om een PDF daadwerkelijk offline te zétten. Vandaar dat
+de knop niet te vinden was — hij bestond simpelweg niet in de zichtbare UI.
+
+### De fix
+
+De knop toegevoegd aan de **echte, actieve** `PDFViewer`-component — in
+zowel de grid- als de lijstweergave, naast de bestaande Open/Verwijder-
+knoppen. Hergebruikt de al correct geïmplementeerde
+`cachePdfOffline()`/`removePdfOffline()`-functies en de al bestaande,
+actieve `offlinePdfs`-state (regel 578) — dus geen nieuwe logica, alleen
+het zichtbaar maken van wat er al (correct) achter de schermen stond.
+
+**Bijgevangen:** `PDFUploadPanel` blijft als dode code in het bestand
+staan (niet verwijderd — dat was niet gevraagd en buiten scope van deze
+fix) — het is verder onschadelijk zolang het nooit gerenderd wordt, maar
+wel iets om op te ruimen bij een volgende opschoonronde.
+
+### Getest
+
+- Bevestigd dat de nieuwe knoppen binnen de juiste component vallen (de
+  actieve `PDFViewer`, regel 445+, niet de dode `PDFUploadPanel`) —
+  geen naamconflict met diens eigen, ongebruikte `offlinePdfs`-state.
+- Knop-label en tooltip voor alle 4 combinaties (grid/lijst ×
+  offline/niet-offline) los doorgerekend — correct.
+- `node --check` geslaagd.
+
+### Wat te kopiëren
+
+Alleen `PDFViewer.js`.
+
+---
+
+## Update: app startte niet op zonder serververbinding — écht gevonden en gefixt
+
+**Gewijzigd:** alleen `service-worker.js`.
+
+### De oorzaak
+
+`index.html` laadt `app.js` en alle `/modules/*.js`-bestanden met een
+cache-busting-querystring (`?v=<timestamp>`, bv.
+`app.js?v=1786475863`). De service worker cachet deze bestanden bij
+installatie echter onder hun **kale pad** (zonder querystring). De Cache
+API matcht standaard op de **volledige URL inclusief querystring** — dus
+`caches.match(req)` voor een aanvraag mét `?v=...` vond de precachede
+kale-pad-versie nooit.
+
+Concreet gevolg: zodra de server onbereikbaar is, faalt de netwerk-
+aanvraag (bedoeld, met een timeout van 2,5s als vangnet), maar de
+daaropvolgende cache-fallback sloeg altijd mis — voor zowel `app.js` als
+élke losse module. Dat betekent: de kern-app-code laadt dan helemaal niet,
+wat precies verklaart waarom de app niet opstartte zonder
+serververbinding.
+
+Onderweg ook nog gevonden: `SRS.js` (het FSRS-herhaalalgoritme) werd door
+`index.html` geladen maar stond niet in de precache-lijst — apart van de
+querystring-bug, gewoon een ontbrekende regel.
+
+### De fix
+
+Cache-sleutel genormaliseerd naar het kale pad (zonder querystring) bij
+zowel het **opslaan** als het **opzoeken** in de app-code-tak van
+`cacheFirstWithNetwork()`. Los voordeel: dit voorkomt ook dat er bij elke
+nieuwe deploy een nieuwe, nooit-opgeruimde cache-entry bijkomt onder de
+nieuwe timestamp — er blijft nu steeds precies één, actuele entry per
+bestand bestaan.
+
+`SRS.js` toegevoegd aan de precache-lijst. SW-versie opgehoogd naar v25
+zodat bestaande installaties de gefixte worker ook daadwerkelijk oppikken.
+
+### Getest
+
+- Kruisvergelijking tussen alle modules die `index.html` laadt en de
+  service-worker-precache-lijst — bevestigde `SRS.js` als enige echte
+  ontbrekende regel.
+- Bevestigd dat vendor-bestanden (React, PDF.js) dit probleem niet hadden
+  — die worden server-side zonder querystring gesubstitueerd.
+- Bevestigd dat `serveAppShell()` (voor de HTML-navigatie zelf) dit
+  probleem ook niet had — geen cache-busting-querystring op
+  navigatie-aanvragen.
+- URL-matching-logica concreet gesimuleerd: vóór de fix nooit een match
+  tussen precache-sleutel en een aanvraag mét querystring; na de fix
+  altijd een match, én bevestigd dat twee verschillende deploy-timestamps
+  na normalisatie dezelfde cache-sleutel delen (geen cache-opeenhoping).
+- `node --check` geslaagd.
+
+### Wat te kopiëren
+
+Alleen `service-worker.js`. **Let op:** gebruikers moeten de pagina
+minimaal één keer laden terwijl de server bereikbaar is, zodat de nieuwe
+service worker (v25) zich kan installeren en de app-code onder de
+gecorrigeerde cache-sleutel opnieuw kan opslaan — pas daarna werkt volledig
+offline opstarten.
+
+### Wat nog niet gecontroleerd is
+
+Deze fix lost de kern-oorzaak op die het meest overeenkomt met "app start
+niet op". Ik heb niet elk denkbaar offline-scenario end-to-end getest (dat
+vereist een échte browser/Service-Worker-omgeving, die ik hier niet heb).
+Mocht de app na deze fix nog steeds niet volledig offline werken, hoor ik
+dat graag — dan zoek ik gericht verder.
+
+---
+
+## Update: PDF-offline-knop toonde altijd succes, ook bij een mislukte download
+
+**Gewijzigd:** alleen `PDFViewer.js`.
+
+### Onderzoek
+
+Eerst het hele mechanisme nagetrokken: knop → `cachePdfOffline()` →
+service-worker-bericht `CACHE_PDF` → `cacheOfflinePdf()` (download +
+opslag in de `PDF_CACHE`) → en apart de leesroute bij het openen van een
+PDF (`PDFService.fetchPdfBlob()` → SW-fetch-handler → `cachePdfFile()`,
+die de cache checkt vóór een netwerkaanvraag).
+
+**URL-consistentie bevestigd, geen mismatch-bug** (zoals eerder bij
+`app.js`/modules): `pdfService.js`'s `fetchPdfBlob()` gebruikt exact
+dezelfde URL-constructie (`/api/pdf/${encodeURIComponent(name)}`) als
+`cachePdfOffline()` — dit deel van de keten was dus al correct.
+
+### De echte oorzaak
+
+De knop zelf (die ik in een eerdere sessie toevoegde) deed
+`await cachePdfOffline(p.name)` en toonde daarna **altijd** "✓ Offline" —
+zonder ooit te controleren of het resultaat `{ok: true}` of `{ok: false,
+error: ...}` was. Bij een mislukte download (bv. een netwerkhapering
+tijdens het downloaden, of de server die net op dat moment niet
+bereikbaar was) gaf de service worker netjes `{ok: false, error: "..."}`
+terug — maar de `await` gooide daar geen fout op (het is een normale
+resolve, geen reject), dus de `catch`-blok werd nooit aangeroepen en de
+knop toonde ten onrechte succes. Precies dit verklaart "ik dacht dat er
+iets gebeurde" — de PDF stond in werkelijkheid nooit in de cache.
+
+### De fix
+
+Het resultaat van `cachePdfOffline()` wordt nu expliciet gecontroleerd
+(`if (!result?.ok) throw new Error(...)`) — bij een mislukking verschijnt
+nu een eerlijke ⚠-foutmelding met de daadwerkelijke reden, in plaats van
+een vals ✓. Gefixt op beide plekken waar de knop staat (raster- en
+lijstweergave).
+
+### Getest
+
+- URL-constructie van `fetchPdfBlob()` (leesroute) vergeleken met
+  `cachePdfOffline()` (schrijfroute) — identiek, dus geen mismatch-bug
+  zoals bij `app.js`.
+- Beide scenario's (mislukte download / geslaagde download) concreet
+  gesimuleerd: vóór de fix toonde de knop in beide gevallen ✓, na de fix
+  correct onderscheid tussen ✓ (echt gelukt) en ⚠ met foutmelding
+  (mislukt).
+- `node --check` geslaagd.
+
+### Wat te doen
+
+Vervang `PDFViewer.js`. **Belangrijk:** PDF's die je met de oude,
+gebrekkige knop "offline" leken te hebben gezet, staan waarschijnlijk niet
+echt in de cache — zet ze na deze update opnieuw offline terwijl je
+verbinding hebt, en let nu op een eventuele ⚠-foutmelding.
+
+### Wat te kopiëren
+
+Alleen `PDFViewer.js`.
