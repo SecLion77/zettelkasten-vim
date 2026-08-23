@@ -115,15 +115,47 @@ const MODEL_COLOR = (m) => {
 // ── PDFUploadPanel — clean upload-paneel voor Invoer → PDF tab ───────────────
 // ── Offline helper: communiceert met SW via MessageChannel ────────────────────
 async function swRequest(data) {
-  // Wacht tot SW actief is — max 3s in stappen van 100ms
-  if (!navigator.serviceWorker?.controller) {
-    for (let i = 0; i < 30 && !navigator.serviceWorker?.controller; i++) {
+  if (!("serviceWorker" in navigator)) {
+    throw new Error("Deze browser ondersteunt geen Service Worker — offline opslaan is hier niet mogelijk.");
+  }
+  // Wacht tot SW actief is. Twee mechanismen naast elkaar, want geen van
+  // beide is op zichzelf waterdicht:
+  // - navigator.serviceWorker.ready: de standaard-manier, maar garandeert
+  //   niet dat de HUIDIGE pagina ook daadwerkelijk "controlled" is
+  //   (bv. bij de allereerste keer dat de SW installeert)
+  // - pollen op .controller: vangt dat geval op, maar kan te vroeg
+  //   opgeven als activate() lang duurt (bv. veel oude cache-entries
+  //   opruimen, trager op iPad-opslag)
+  if (!navigator.serviceWorker.controller) {
+    try {
+      await Promise.race([
+        navigator.serviceWorker.ready,
+        new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 5000)),
+      ]);
+    } catch {}
+    for (let i = 0; i < 50 && !navigator.serviceWorker.controller; i++) {
       await new Promise(res => setTimeout(res, 100));
     }
   }
-  return new Promise((resolve, reject) => {
-    const ctrl = navigator.serviceWorker?.controller;
-    if (!ctrl) { reject(new Error("Service Worker niet actief. Sluit de app en open opnieuw.")); return; }
+  return new Promise(async (resolve, reject) => {
+    // Val terug op reg.active als .controller onverhoopt nog steeds leeg
+    // is — dekt het randgeval waarin de pagina geladen werd vóórdat de SW
+    // 'm claimde, maar er wél al een actieve worker draait.
+    let ctrl = navigator.serviceWorker.controller;
+    if (!ctrl) {
+      try {
+        const reg = await navigator.serviceWorker.getRegistration();
+        ctrl = reg?.active || null;
+      } catch {}
+    }
+    if (!ctrl) {
+      reject(new Error(
+        "Service Worker niet actief. Herlaad de pagina — gebruik je de app " +
+        "vanaf het beginscherm (PWA), sluit 'm dan helemaal af (omhoog vegen " +
+        "in de app-wisselaar) en open opnieuw."
+      ));
+      return;
+    }
     const ch = new MessageChannel();
     ch.port1.onmessage = e => resolve(e.data);
     ctrl.postMessage(data, [ch.port2]);
