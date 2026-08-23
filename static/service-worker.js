@@ -1,6 +1,6 @@
 // ── Zettelkasten Service Worker ────────────────────────────────────────────
 // Versie: verhoog bij elke deploy om de cache te vernieuwen
-const SW_VERSION  = "zk-sw-v24";  // v24 → echte network-first voor app.js/modules i.p.v. stale-cache-first
+const SW_VERSION  = "zk-sw-v25";  // v25 → offline-app-start-bug gefixt: cache-sleutel genormaliseerd naar kaal pad (zonder ?v=… cache-busting-querystring), anders matchte de offline-fallback nooit
 const SHELL_CACHE  = `${SW_VERSION}-shell`;   // statische bestanden
 const API_CACHE    = `${SW_VERSION}-api`;      // gecachede API-responses
 const IDB_NAME     = "zettelkasten-offline";
@@ -50,6 +50,7 @@ const SHELL_ASSETS = [
   "/modules/offlineStore.js",
   "/modules/SemanticSearch.js",
   "/modules/DailyView.js",
+  "/modules/SRS.js",
   // Vendor-bestanden: React/PDF.js lokaal cachen zodat de app ook werkt
   // zonder internetverbinding (niet alleen zonder de eigen server)
   "/vendor/react.production.min.js",
@@ -345,16 +346,28 @@ async function cacheFirstWithNetwork(req) {
   // KRITIEK: korte timeout — anders hangt de app offline (zwart scherm)
   const isAppCode = NETWORK_FIRST_PATHS.some(p => path.startsWith(p));
   if (isAppCode) {
+    // BUG (gevonden + gefixt): index.html laadt app.js/modules met een
+    // cache-busting querystring (?v=<timestamp>), maar de Cache API matcht
+    // standaard op de VOLLEDIGE URL incl. querystring. De precache bij
+    // install() slaat bestanden op onder hun kale pad (geen querystring) —
+    // dus cache.match(req) hieronder vond NOOIT een treffer voor een
+    // request mét querystring, en viel altijd door naar de 503-foutrespons.
+    // Resultaat: app.js/modules laadden nooit uit cache → hele app start
+    // niet op zonder serververbinding. Fix: cache-sleutel normaliseren naar
+    // het kale pad (zonder querystring) bij zowel opslaan als opzoeken, zo
+    // blijft ook maar één cache-entry per bestand bestaan i.p.v. een nieuwe
+    // per deploy-timestamp die nooit meer opgeruimd wordt.
+    const cacheKey = new Request(url.origin + path, { headers: req.headers });
     try {
       const res = await fetch(req, { cache: "no-store", signal: AbortSignal.timeout(2500) });
       if (res.ok) {
         const cache = await caches.open(SHELL_CACHE);
-        cache.put(req, res.clone());
+        cache.put(cacheKey, res.clone());
       }
       return res;
     } catch {
       // Netwerk faalde/timede uit: val terug op de laatst gecachede versie
-      const cachedAppCode = await caches.match(req);
+      const cachedAppCode = await caches.match(cacheKey);
       if (cachedAppCode) return cachedAppCode;
       return new Response(
         "// Module niet beschikbaar offline: " + path,
