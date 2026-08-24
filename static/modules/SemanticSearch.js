@@ -178,8 +178,12 @@ const SemanticSearch = ({ notes = [], onOpenNote, onOpenPdf, llmModel = "", task
     setSearching(false);
   }, [query, notes, embedModel]);
 
-  const W = window.THEME_VARS || {};
-
+  // W komt uit de gedeelde, globale `let W` in app.js (top-level script-
+  // scope, gedeeld tussen alle <script>-tags op de pagina) — reageert
+  // correct op thema-wissels. Was hier per ongeluk lokaal geschaduwd door
+  // `window.THEME_VARS || {}`, een object dat nergens ooit gevuld wordt —
+  // dus élke W.xxx hierna gaf altijd undefined (geen kleur, browser-
+  // standaardstyling nam het over). Trof deze hele component.
   const covered = indexStatus
     ? Math.round((indexStatus.indexed / Math.max(indexStatus.total, 1)) * 100)
     : 0;

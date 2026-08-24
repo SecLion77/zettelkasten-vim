@@ -811,7 +811,9 @@ const DailyView = ({ notes=[], onOpenNote, onAddNote, llmModel="" }) => {
     };
   }, []);
 
-  const W   = window.THEME_VARS || {};
+  // W komt uit de gedeelde, globale `let W` in app.js — zie toelichting
+  // in SemanticSearch.js voor de exacte bug die hier zat (lokale
+  // schaduwing door een nooit-gevuld window.THEME_VARS).
   const card = {background:W.bg2,border:`1px solid ${W.splitBg}`,borderRadius:"10px",padding:"16px 20px"};
 
   // ── Review scherm ─────────────────────────────────────────────────────────
