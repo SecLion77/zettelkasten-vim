@@ -2,7 +2,7 @@ import threading
 #!/usr/bin/env python3
 """Zettelkasten VIM — Backend v4"""
 
-import os, sys, json, base64, threading, webbrowser
+import os, sys, json, base64, threading, webbrowser, ssl
 import urllib.request, urllib.error, re
 from pathlib import Path
 from datetime import datetime
@@ -58,6 +58,7 @@ _ensure_pdf_packages()
 DEFAULT_VAULT = Path.home() / "Zettelkasten"
 STATIC_DIR    = Path(__file__).parent / "static"
 VENDOR_DIR    = STATIC_DIR / "vendor"
+CERTS_DIR     = Path(__file__).parent / "certs"
 IMAGE_EXTS    = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg"}
 
 # CDN-URLs (online modus)
@@ -2285,6 +2286,21 @@ class ZKHandler(BaseHTTPRequestHandler):
                 ext=fp.suffix.lower()
                 return self._send(200,fp.read_bytes(),IMAGE_MIME.get(ext,"image/jpeg"))
             return self._send(404,{"error":"Afbeelding niet gevonden"})
+        # ── /cert — certificaat downloaden met het juiste MIME-type ─────────────
+        # Dit is de betrouwbare manier om het certificaat op de iPad te krijgen:
+        # AirDrop/mail bewaren het bestandstype niet altijd correct, waardoor
+        # iOS meldt "geen app om te openen". Met dit exacte MIME-type
+        # (application/x-x509-ca-cert) herkent Safari het bestand bij het
+        # downloaden zelf en start automatisch de "Installeer profiel"-flow.
+        # Werkt bewust ook gewoon over http:// (downloaden is geen Service-
+        # Worker-actie, dus geen secure context nodig) — zo kun je het
+        # certificaat ophalen vóórdat HTTPS zelf actief is.
+        if p == "/cert":
+            cert_fp = CERTS_DIR / "server.crt"
+            if cert_fp.exists():
+                return self._send_file(cert_fp, "application/x-x509-ca-cert")
+            return self._send(404, {"error": "Nog geen certificaat aangemaakt — zie certs/README.md"})
+
         # Statische bestanden — index.html via template (online/offline)
         if p == "/":
             return self._send_index_conditional()
@@ -7044,6 +7060,15 @@ def main():
     parser.add_argument("--host",       default="0.0.0.0")
     parser.add_argument("--offline",    action="store_true",
                         help="Gebruik lokale vendor-bestanden i.p.v. CDN (geen internet vereist)")
+    parser.add_argument("--https",      action="store_true",
+                        help="Serveer over HTTPS met certs/server.crt + certs/server.key "
+                             "(vereist voor offline/PWA-gebruik op iPad via het netwerk-IP — "
+                             "Service Workers werken niet over gewoon http:// op een ander "
+                             "adres dan localhost). Zie certs/README.md voor het aanmaken.")
+    parser.add_argument("--cert",       default=None,
+                        help="Pad naar certificaatbestand (override certs/server.crt)")
+    parser.add_argument("--key",        default=None,
+                        help="Pad naar sleutelbestand (override certs/server.key)")
     args=parser.parse_args()
 
     # Controleer vendor-bestanden bij --offline
@@ -7141,6 +7166,39 @@ def main():
                 return  # client verbroken — geen stacktrace nodig
             super().handle_error(request, client_address)
     server=ThreadingHTTPServer((args.host,args.port),ZKHandler)
+
+    # ── HTTPS (optioneel, --https) ───────────────────────────────────────────
+    # Nodig voor Service Workers (offline/PWA) op een ander apparaat dan de
+    # laptop zelf: browsers behandelen alleen https:// en http://localhost
+    # (niet een netwerk-IP over gewoon http://) als "secure context", en
+    # Safari biedt — anders dan Chrome/Firefox — geen ontwikkelinstelling om
+    # die eis voor lokaal gebruik te omzeilen. Zie certs/README.md.
+    is_https = False
+    if args.https:
+        cert_path = Path(args.cert) if args.cert else CERTS_DIR / "server.crt"
+        key_path  = Path(args.key)  if args.key  else CERTS_DIR / "server.key"
+        if not cert_path.exists() or not key_path.exists():
+            print(f"""
+⚠ --https opgegeven, maar certificaat niet gevonden:
+    verwacht: {cert_path}
+    verwacht: {key_path}
+
+  Maak eerst een certificaat aan — zie certs/README.md voor de complete
+  instructies (genereren + op de iPad vertrouwen). Start daarna opnieuw
+  met --https, of geef expliciete paden mee met --cert/--key.
+""")
+            sys.exit(1)
+        try:
+            ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            ssl_ctx.load_cert_chain(certfile=str(cert_path), keyfile=str(key_path))
+            server.socket = ssl_ctx.wrap_socket(server.socket, server_side=True)
+            is_https = True
+        except Exception as e:
+            print(f"\n⚠ HTTPS-certificaat kon niet geladen worden: {e}")
+            print(f"  Controleer of {cert_path} en {key_path} geldig zijn (zie certs/README.md).\n")
+            sys.exit(1)
+
+    scheme = "https" if is_https else "http"
     local_ip=get_local_ip()
     offline_label = "JA (vendor/)" if args.offline else "nee (CDN)"
     cloud_block = ""
@@ -7153,15 +7211,15 @@ def main():
 ║        ZETTELKASTEN VIM  —  Python Server v4         ║
 ╚══════════════════════════════════════════════════════╝
   Vault   : {vault_path}
-  Lokaal  : http://localhost:{args.port}
-  Netwerk : http://{local_ip}:{args.port}
+  Lokaal  : {scheme}://localhost:{args.port}
+  Netwerk : {scheme}://{local_ip}:{args.port}{"" if is_https else "   (⚠ geen HTTPS — Service Workers/offline werken hier NIET vanaf een ander apparaat, zie certs/README.md)"}
   Logging : {"aan" if args.verbose else "uit  (--verbose)"}{cloud_block}
   Offline : {offline_label}
   LLM     : ollama serve  +  ollama pull llama3.2-vision
   Stop    : Ctrl+C
 """)
     if not args.no_browser:
-        threading.Timer(0.8,lambda:webbrowser.open(f"http://localhost:{args.port}")).start()
+        threading.Timer(0.8,lambda:webbrowser.open(f"{scheme}://localhost:{args.port}")).start()
     try: server.serve_forever()
     except KeyboardInterrupt: print("\nServer gestopt.")
 

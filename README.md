@@ -22,6 +22,10 @@ Een lokale, privacy-first PKM-applicatie (Personal Knowledge Management) gebouwd
 cd /Users/hj/Applications/zettelkasten-vim
 python3 server.py --host 0.0.0.0 --port 8888
 
+# Voor offline/PWA-gebruik op de iPad: HTTPS vereist (eenmalige setup,
+# zie certs/README.md) — start daarna met:
+python3 server.py --host 0.0.0.0 --port 8888 --https
+
 # Vendor-bestanden downloaden (eenmalig, voor offline gebruik)
 cd static/vendor && bash download-vendors.sh
 
@@ -30,7 +34,7 @@ ollama pull gemma3:12b        # generatief model (aanbevolen)
 ollama pull nomic-embed-text  # embedding model voor semantisch zoeken
 ```
 
-Open de app via `http://localhost:8888` of via het IP-adres van de laptop op de iPad.
+Open de app via `http://localhost:8888` (laptop) of `https://<IP-adres>:8888` (iPad, na de HTTPS-setup — zie [`certs/README.md`](certs/README.md)).
 
 ---
 
@@ -280,7 +284,15 @@ Notebook behoudt zijn gesprek ook in de split-rechts-positie, los van de hoofdwe
 
 ## Offline gebruik iPad
 
-1. Open de app op de iPad terwijl de laptop bereikbaar is (Service Worker installeert)
+> **Vereist HTTPS.** Service Workers (nodig voor offline/PWA) werken niet
+> over een gewoon `http://`-adres naar het netwerk-IP van de laptop —
+> alleen `https://` of `http://localhost` gelden als "secure context".
+> Zie **[`certs/README.md`](certs/README.md)** voor het eenmalig aanmaken
+> en op de iPad vertrouwen van een lokaal certificaat, en start de server
+> daarna met `--https`. Zonder dit werkt de app op de iPad prima zolang er
+> verbinding is, maar niet offline.
+
+1. Open de app op de iPad (via `https://`, zie hierboven) terwijl de laptop bereikbaar is (Service Worker installeert)
 2. Deel-icoon → **"Zet op beginscherm"** voor standalone PWA
 3. Per PDF: **⬇ Offline** in de PDF-bibliotheek voor offline caching
 4. **Werkt offline:**

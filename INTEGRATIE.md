@@ -2363,3 +2363,267 @@ verbinding hebt, en let nu op een eventuele ⚠-foutmelding.
 ### Wat te kopiëren
 
 Alleen `PDFViewer.js`.
+
+---
+
+## Update: foutmelding bij mislukt offline-cachen nu ook zichtbaar op iPad
+
+**Gewijzigd:** alleen `PDFViewer.js`.
+
+Vervolg op de vorige fix (die het resultaat van het cachen eindelijk
+correct controleerde). De foutmelding zelf werd echter alleen als
+`title`-attribuut gezet — een browser-tooltip die **hover** vereist. Een
+iPad heeft geen hover, dus de foutmelding was daar feitelijk onzichtbaar,
+ook al werkte de detectie zelf al correct.
+
+**Fix:** naast de tooltip (blijft staan voor desktop) nu ook een
+`alert()` met de exacte foutmelding — niet mooi, maar gegarandeerd
+zichtbaar op elk apparaat, ook zonder hover. Op beide plekken toegepast
+(raster- en lijstweergave).
+
+### Getest
+
+- `node --check` geslaagd.
+- Bevestigd dat beide knop-instanties (raster + lijst) nu de `alert()`
+  bevatten; de losse, nooit-gerenderde `PDFUploadPanel`-knop bewust
+  ongewijzigd gelaten (dode code, buiten scope).
+
+### Wat te kopiëren
+
+Alleen `PDFViewer.js`.
+
+---
+
+## Update: "Service Worker niet actief" — wachtlogica robuuster gemaakt
+
+**Gewijzigd:** alleen `PDFViewer.js`.
+
+### Onderzoek
+
+De registratie-/update-code in `index.html` bleek al goed gebouwd
+(`clients.claim()`, auto-reload bij `controllerchange`, actieve
+update-checks) — dat was niet de oorzaak. Het probleem zat in
+`swRequest()`'s wachtlogica zelf: die pollede maar 3 seconden op
+`navigator.serviceWorker.controller`, wat in bepaalde gevallen te kort
+kan zijn — bijvoorbeeld vlak na een grote service-worker-update, wanneer
+`activate()` eerst oude caches opruimt (trager op iPad-opslag dan op een
+laptop), of bij de allereerste installatie ooit, waarbij `.controller`
+soms pas na een net iets langere vertraging beschikbaar komt.
+
+### De fix
+
+Twee mechanismen naast elkaar, want geen van beide is op zichzelf
+waterdicht:
+- **`navigator.serviceWorker.ready`** — de standaard, spec-conforme manier
+  om te wachten tot er een actieve worker is (met een 5s-timeout ernaast,
+  zodat dit nooit blijft hangen)
+- **Pollen op `.controller`** (nu 5s i.p.v. 3s) — vangt het randgeval op
+  waarbij er wél een actieve worker is, maar de huidige pagina die nog
+  niet "controlled" heeft
+- **Fallback op `reg.active`** — als `.controller` na dit alles nog steeds
+  leeg is, wordt de bericht toch naar de actieve worker uit de registratie
+  gestuurd (dekt een randgeval waarin de pagina geladen werd vóórdat de SW
+  'm claimde)
+
+Foutmelding ook explicieter gemaakt: verwijst nu specifiek naar het
+volledig afsluiten van de PWA (omhoog vegen in de app-wisselaar) i.p.v.
+alleen "sluit de app", wat op een iPad met de app op het beginscherm een
+ander soort actie is dan een tabblad sluiten.
+
+### Getest
+
+- Alle vier de wacht-paden (direct beschikbaar / via ready / via polling
+  / helemaal niet) los als besturingsstroom gesimuleerd — gedragen zich
+  zoals bedoeld.
+- `node --check` geslaagd.
+
+**Kanttekening:** service-worker-levenscyclus-timing is inherent lastig
+te reproduceren buiten een echte browser. Deze fix maakt de wachtlogica
+merkbaar robuuster en geeft bij een échte black-swan-situatie een
+bruikbaardere foutmelding, maar ik kon het exacte, oorspronkelijke
+tijdsverloop op de iPad niet zelf nabootsen. Laat het weten of de melding
+nu wegblijft, of dat je 'm nog steeds ziet — dat laatste zou wijzen op iets
+structureels (bv. de SW registreert daar helemaal niet), waar ik dan
+gerichter naar moet kijken.
+
+### Wat te kopiëren
+
+Alleen `PDFViewer.js`.
+
+---
+
+## Update: HTTPS-ondersteuning gebouwd voor offline/PWA-gebruik op de iPad
+
+**Gewijzigd:** `server.py`, `README.md`. **Nieuw:** `certs/generate-cert.sh`, `certs/README.md`.
+
+### De achtergrond
+
+Vorige melding ("browser ondersteunt geen Service Worker") bleek geen
+bug maar een fundamentele browserbeperking: Service Workers vereisen een
+"secure context" (`https://` of `http://localhost`) — een gewoon
+`http://`-adres naar het netwerk-IP van de laptop, precies hoe de iPad de
+app bereikt, telt daar niet in mee. Bevestigd via onderzoek (W3C-spec +
+MDN): Safari biedt — anders dan Chrome/Firefox — geen instelling om dit
+voor lokaal gebruik te omzeilen.
+
+### De bouw
+
+- **`server.py`**: nieuwe `--https`-vlag (+ optionele `--cert`/`--key`
+  overrides). Zoekt standaard naar `certs/server.crt`/`certs/server.key`;
+  wrapt de server-socket met Python's ingebouwde `ssl`-module (geen
+  nieuwe dependency). Zonder geldig certificaat: duidelijke foutmelding
+  + afsluiten, geen stille terugval. Opstart-banner en browser-launch
+  tonen nu automatisch `https://` i.p.v. `http://` zodra actief.
+- **`certs/generate-cert.sh`**: genereert automatisch een zelf-ondertekend
+  certificaat, geldig voor `localhost`/`127.0.0.1` én het (automatisch
+  gedetecteerde) LAN-IP van de laptop — met de verplichte Subject
+  Alternative Names (een certificaat zonder SAN wordt door moderne
+  browsers genegeerd, ook al staat het IP in de "Common Name"). 820 dagen
+  geldig — de maximale looptijd die Apple nog vertrouwt.
+- **`certs/README.md`**: volledige stap-voor-stap-instructies — genereren,
+  server starten, certificaat naar de iPad (AirDrop), en het cruciale
+  **twee-staps** vertrouwen op iOS (installeren ↠ apart nog expliciet
+  vertrouwen via Certificaatvertrouwensinstellingen — de stap die het
+  vaakst vergeten wordt). Inclusief wat te doen als het LAN-IP van de
+  laptop verandert.
+- **Hoofd-`README.md`**: bijgewerkt met de `--https`-vlag in de
+  installatie-instructies, en een duidelijke verwijzing naar
+  `certs/README.md` in de offline-iPad-sectie.
+
+### Getest — grondig, met een paar tegenslagen onderweg
+
+- Certificaat-generatie zelf getest: SAN-velden geverifieerd
+  (`DNS:localhost, IP:127.0.0.1, IP:<test-IP>`), geldigheidsduur correct.
+- Python's `ssl`-module laadt het gegenereerde certificaat probleemloos.
+- **Eerste end-to-end-test faalde** ("Empty reply from server", zelfs met
+  `--verbose`) — grondig geïsoleerd via een minimale, losstaande
+  SSL-server (werkte wél), toen de exacte `get_request()`-override uit
+  `server.py` (werkte ook wél), tot bleek dat **ook gewone HTTP zonder
+  `--https`** in dezelfde testomgeving faalde — de oorzaak lag dus niet
+  bij SSL, maar bij een ontbrekende `static/index.html` in mijn sandbox
+  (niet representatief voor de echte installatie). Na het toevoegen van
+  een minimale `index.html`: **HTTPS werkt volledig end-to-end**,
+  bevestigd met een echte `curl -k`-aanvraag die correct 200 OK +
+  paginainhoud teruggaf.
+- `py_compile` geslaagd.
+
+### Hoe te gebruiken
+
+1. `cd certs && bash generate-cert.sh`
+2. `python3 server.py --host 0.0.0.0 --port 8888 --https`
+3. `certs/server.crt` naar de iPad (AirDrop), installeren én expliciet
+   vertrouwen — volledige instructies in `certs/README.md`
+4. Op de iPad: `https://<IP-adres>:8888`
+
+### Wat te kopiëren
+
+`server.py`, `README.md`, en de nieuwe map `certs/` (met
+`generate-cert.sh` en `README.md` erin).
+
+---
+
+## Update: knoppen onleesbaar op graphite (en potentieel elk ander thema) — gevonden via devtools
+
+**Gewijzigd:** `DailyView.js`, `SemanticSearch.js`.
+
+### Het onderzoek
+
+Berekende contrastwaarden voor de gemelde knoppen kwamen keurig uit
+(5.12:1+) — wat niet overeenkwam met "onleesbaar". Dat wees erop dat de
+daadwerkelijk gerenderde kleuren niet overeenkwamen met wat de code zegt.
+Devtools-inspectie (dankzij een screenshot van het "Styles"-paneel)
+bevestigde het direct: de knop-HTML had wél `background`/`border`, maar
+**geen `color`-eigenschap** — die ontbrak volledig, waardoor de browser op
+zijn eigen standaard knop-tekstkleur terugvalt in plaats van de bedoelde
+thema-kleur.
+
+### De oorzaak
+
+Beide bestanden hadden ergens halverwege de component een regel
+`const W = window.THEME_VARS || {};` — een object dat **nergens in de
+hele codebase ooit gevuld wordt**. De rest van de app gebruikt een andere,
+wél correct bijgewerkte globale `let W = {...}` in `app.js` (top-level
+script-scope, gedeeld tussen alle los geladen `<script>`-modules). Omdat
+JavaScript deze lokale `const W` binnen de component laat voorgaan
+(shadowing), verwezen **alle** `W.xxx`-aanroepen na die regel — voor de
+rest van de hele component — naar een permanent leeg object. Elke
+`W.blue`/`W.fg`/etc. werd dus `undefined`, en React laat een CSS-
+eigenschap met waarde `undefined` gewoon volledig weg uit de gerenderde
+stijl, in plaats van een lege of foute waarde te tonen.
+
+Dit trof niet alleen de gemelde knoppen, maar potentieel **elk
+kleurgebruik in de rest van beide componenten** — inclusief de knoppen
+die ik zelf deze sessie aan `SemanticSearch.js` toevoegde (de PDF-index-
+functie), die dit bestaande, onopgemerkte probleem overerfden.
+
+**Bijgevangen, niet meegefixt:** hetzelfde patroon staat ook in
+`Dashboard.js`, `GraphView.js` en `RelatedNotesPanel.js` — bevestigd dat
+geen van die drie ergens gerenderd wordt (dode code, zelfde categorie als
+eerder `PDFUploadPanel`), dus geen zichtbaar effect en bewust ongemoeid
+gelaten.
+
+### De fix
+
+De schaduwende regel simpelweg verwijderd uit beide actieve bestanden —
+`W` valt daarna vanzelf terug op de correcte, gedeelde globale variabele
+uit `app.js` via normale JavaScript-scope-resolutie.
+
+### Getest
+
+- Bevestigd dat geen van beide bestanden nog een andere lokale
+  `const W`/`let W`-declaratie bevat.
+- Concreet gesimuleerd: vóór de fix `color: undefined` (React laat de
+  eigenschap volledig weg), na de fix `color: "#7aa8c8"` / `"#d4d4d4"` —
+  correct toegepast.
+- `node --check` op beide bestanden geslaagd.
+
+### Wat te kopiëren
+
+`DailyView.js`, `SemanticSearch.js`.
+
+---
+
+## Update: certificaat downloaden op de iPad — betrouwbaardere methode + verduidelijking Chrome/Safari
+
+**Gewijzigd:** `server.py`. **Bijgewerkt:** `certs/README.md`, `certs/generate-cert.sh`.
+
+### Het probleem
+
+AirDrop en mail bewaren het bestandstype van `server.crt` niet altijd
+correct, waardoor iOS meldt "geen app om dit bestand te openen" — het
+certificaat komt dan aan zonder dat iOS het als installeerbaar profiel
+herkent.
+
+### De fix
+
+Nieuwe route **`/cert`** in `server.py`, die het certificaat serveert met
+het exacte MIME-type dat Safari nodig heeft om het automatisch te
+herkennen (`application/x-x509-ca-cert`). Werkt bewust over gewoon
+`http://` (downloaden is geen Service-Worker-actie, dus geen secure
+context nodig) — je kunt het certificaat dus ophalen vóórdat HTTPS zelf
+actief is. Simpelweg naar `http://<IP>:8888/cert` gaan in Safari op de
+iPad triggert direct de "Installeer profiel"-melding.
+
+### Verduidelijking: Chrome vs Safari op de iPad
+
+Op iOS/iPadOS moet elke browser (Apple-beleid) onder de motorkap WebKit
+gebruiken en deelt daarom **dezelfde, systeembrede
+certificaatvertrouwensinstellingen**. Het vertrouwen (stap 4 in de
+README) hoef je dus maar één keer te doen, voor alle browsers tegelijk —
+geen aparte Chrome-stappen nodig. Voor het downloaden zelf raad ik Safari
+aan (daarmee geverifieerd); of Chrome de `/cert`-download exact hetzelfde
+afhandelt heb ik niet kunnen verifiëren, dus dat vermeld ik expliciet als
+onzeker in plaats van het als feit te presenteren.
+
+### Getest
+
+- `/cert`-route end-to-end getest: server echt gestart, `curl` bevestigt
+  `Content-Type: application/x-x509-ca-cert`, en de gedownloade inhoud is
+  byte-voor-byte identiek aan `certs/server.crt`.
+- `py_compile` geslaagd.
+
+### Wat te kopiëren
+
+`server.py`, en de bijgewerkte `certs/README.md` +
+`certs/generate-cert.sh` (vervang de hele `certs/`-map-inhoud, of alleen
+deze twee bestanden).
