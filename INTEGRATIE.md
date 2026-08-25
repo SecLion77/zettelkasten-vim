@@ -2627,3 +2627,79 @@ onzeker in plaats van het als feit te presenteren.
 `server.py`, en de bijgewerkte `certs/README.md` +
 `certs/generate-cert.sh` (vervang de hele `certs/`-map-inhoud, of alleen
 deze twee bestanden).
+
+---
+
+## Update: verduidelijking foutcode -25294 (macOS Sleutelhangertoegang, niet de iPad)
+
+**Bijgewerkt:** alleen `certs/README.md`.
+
+Foutcode `-25294` opgezocht en bevestigd (Apple DTS-engineer op de
+developer-forums): dit is `errSecNoSuchKeychain`, een macOS
+Sleutelhangertoegang-eigenaardigheid bij het dubbelklikken op een
+zelf-ondertekend certificaat — geen probleem met het certificaat zelf, en
+geen iOS-foutmelding. Navraag bevestigde: de gebruiker zag dit op de Mac
+(dubbelklik), niet op de iPad.
+
+**Belangrijk om te vermelden:** dit importeren-op-de-Mac-stapje was
+sowieso niet nodig voor het oorspronkelijke doel (de iPad offline laten
+werken) — dat werkt volledig via de al bestaande iPad-stappen. Nu een
+losse, optionele sectie toegevoegd voor wie de Mac zelf óók
+waarschuwingsvrij wil laten werken, met de terminal-commando-aanpak
+(`security add-trusted-cert`) in plaats van de haperende
+Sleutelhangertoegang-GUI. Commando-syntax geverifieerd tegen meerdere
+onafhankelijke bronnen (juiste `-r trustRoot`-waarde voor een echt
+zelf-ondertekend certificaat, in tegenstelling tot `trustAsRoot` voor een
+ander scenario) — niet zomaar aangenomen.
+
+### Wat te kopiëren
+
+Alleen `certs/README.md`.
+
+---
+
+## Update: lange tekst liep buiten beeld op iPad in portrait-stand
+
+**Gewijzigd:** alleen `DailyView.js`.
+
+### Het onderzoek
+
+Screenshot toonde: tekst bij "Openstaande taken" en "Recente activiteit"
+liep door tot de rand van het scherm, zonder de bedoelde "…"-afkapping.
+Beide plekken bleken **al correct** `minWidth:0` (op de flex-wrapper) +
+`overflow:hidden; textOverflow:ellipsis; whiteSpace:nowrap` (op de tekst
+zelf) te hebben — dus niet de oorzaak. Dat twee onafhankelijk gecodeerde
+secties precies hetzelfde symptoom vertoonden, wees op een gedeelde,
+hogerop liggende oorzaak.
+
+### De oorzaak
+
+De hoofd-grid van het dashboard gebruikte `gridTemplateColumns:"1fr"` in
+de smalle (portrait) stand. Een kale `1fr`-kolom heeft standaard een
+impliciete `min-width: auto` — dat laat de kolom nog steeds breder worden
+dan de beschikbare ruimte zodra een geneste element een grotere
+intrinsieke inhoudsbreedte heeft, **ook al** heeft dat element zelf al
+correct `minWidth:0`. Precies dit duwde bij smalle iPad-breedtes de hele
+pagina breder dan het scherm, waardoor de eigenlijk-correcte
+ellipsis-afkapping nooit in werking trad — de tekst kreeg simpelweg altijd
+"genoeg" ruimte binnen de te-brede kolom.
+
+### De fix
+
+`gridTemplateColumns` aangepast van `"1fr"`/`"1fr 340px"` naar
+`"minmax(0,1fr)"`/`"minmax(0,1fr) 340px"` — dwingt de kolom om nooit
+breder te worden dan zijn toegewezen ruimte, ongeacht de inhoud. Dit is
+het grid-equivalent van de bekende flexbox-`min-width:0`-regel.
+
+### Getest
+
+- `node --check` geslaagd.
+- **Kanttekening:** kon dit niet visueel in een echte browser renderen
+  (geen browser-tool beschikbaar). De fix berust op gedocumenteerd,
+  bekend CSS Grid-gedrag (niet een aanname of gok) — maar een visuele
+  bevestiging op de iPad zelf blijft de definitieve test. Laat het weten
+  of de tekst nu wél netjes afkapt met "…".
+
+### Wat te kopiëren
+
+Alleen `DailyView.js`.

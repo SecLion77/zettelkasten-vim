@@ -874,7 +874,15 @@ const DailyView = ({ notes=[], onOpenNote, onAddNote, llmModel="" }) => {
   return React.createElement("div",{style:{
     flex:1,overflowY:"auto",padding:"16px 20px",
     display:"grid",
-    gridTemplateColumns:isWide?"1fr 340px":"1fr",
+    // minmax(0,1fr) i.p.v. kale "1fr": een grid-track zonder expliciete
+    // minimum-breedte mag nog steeds breder worden dan de beschikbare
+    // ruimte zodra een geneste element een grotere intrinsieke
+    // inhoudsbreedte heeft — zelfs als dat element zelf al correct
+    // minWidth:0 + ellipsis-afkapping heeft (zoals hier bij de taken- en
+    // recente-activiteit-lijst). Bij smalle (portrait-iPad) breedtes
+    // duwde dit de hele pagina breder dan het scherm, waardoor lange
+    // tekst buiten beeld liep i.p.v. netjes af te kappen met "…".
+    gridTemplateColumns:isWide?"minmax(0,1fr) 340px":"minmax(0,1fr)",
     gridAutoRows:"min-content",gap:"14px",alignItems:"start",
     maxWidth:"1200px",margin:"0 auto",width:"100%",boxSizing:"border-box",
   }},
