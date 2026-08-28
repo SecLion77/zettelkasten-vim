@@ -9,6 +9,7 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
                     onPasteBlock=null,
                     hideTagStrip=false,
                     noteId="",
+                    noteTitle="",
                     notes=[],           // voor [[ wiki-link autocomplete
                     }) => {
 
@@ -1248,6 +1249,35 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
     setAiLoading(false);
   }, [llmModel]);
 
+  // ── Round-trip naar dagnotitie (\d) ───────────────────────────────────────
+  // Stuurt tekst als taak naar de dagnotitie van vandaag, met een
+  // terugverwijzing naar deze notitie. Gebruikt dezelfde datumnotatie
+  // (UTC-gebaseerd via toISOString) als DailyView.js's eigen "today", voor
+  // consistentie — dit is een bestaande, elders al gebruikte conventie in
+  // de app, bewust niet hier "verbeterd" naar lokale tijd, want dan zouden
+  // de twee schermen op een ander moment van dag zouden kunnen wisselen.
+  const sendToDaily = React.useCallback(async (text) => {
+    const today = new Date().toISOString().slice(0, 10);
+    const titel = (noteTitle || "").trim();
+    const line = titel ? `- [ ] ${text} ([[${titel}]])` : `- [ ] ${text}`;
+    setStatus("→ dagnotitie…");
+    try {
+      const resp = await fetch("/api/daily/append", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ date: today, line }),
+      });
+      const d = await resp.json();
+      if (d.ok) {
+        setStatus("✓ Toegevoegd aan dagnotitie van vandaag");
+      } else {
+        setStatus("Fout: " + (d.error || "onbekend"));
+      }
+    } catch(e) {
+      setStatus("Fout: " + e.message.slice(0, 40));
+    }
+  }, [noteTitle]);
+
   // ── AI taalverbetering ────────────────────────────────────────────────────
   // Werkt op de hele tekst (bestaand gedrag, via de "✨ verbeter"-knop
   // onderaan) of op een specifieke selectie (nieuw, via \a in VISUAL-mode —
@@ -1797,6 +1827,19 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
         }
         setStatus(''); draw(); return;
       }
+      if (e.key === 'd') {
+        // Round-trip terug naar "vandaag" — de tegenhanger van Fragment→
+        // Zettelkasten (die van dagnotitie NAAR een permanente notitie
+        // werkt). Selectie (of, zonder selectie, de huidige alinea) gaat
+        // als taak de dagnotitie van vandaag in, met een terugverwijzing
+        // naar deze notitie zodat de context niet verloren gaat.
+        const rd = s.visual ? getVisualRange(s) : getCurrentParagraphRange(s);
+        const textD = (rd ? getTextInRange(s, rd) : "").trim();
+        if (!textD) { setStatus("Niets te versturen — selecteer tekst of ga naar een alinea"); draw(); return; }
+        if (s.visual) exitVisual(s);
+        sendToDaily(textD);
+        setStatus(''); draw(); return;
+      }
       setStatus(''); draw(); return;
     }
 
@@ -2033,7 +2076,7 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
       case "m":
         s._markPending = true; setStatus("m..."); break;
       case "\\": // Leader key → laag-annotatie
-        s._leaderPending = true; setStatus("\\bron  \\kritisch  \\eigen  \\a=AI-actie (selectie)"); break;
+        s._leaderPending = true; setStatus("\\bron  \\kritisch  \\eigen  \\a=AI-actie  \\d=→dagnotitie"); break;
       case "'":
       case "`":
         s._jumpMarkPending = true; setStatus(`${e.key}...`); break;
@@ -2567,6 +2610,9 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
           ["\\  k",          "Markeer woord/selectie als kritische noot"],
           ["\\  e",          "Markeer woord/selectie als eigen gedachte"],
         ], "Wrapt de tekst als [tekst]{.bron} e.d. — deze laag-markering wordt herkend bij het exporteren van PDF-highlights, zodat bron/kritiek/eigen-gedachte later ook visueel te onderscheiden zijn."],
+        ["→ DAGNOTITIE (\\d)", W.green, [
+          ["\\  d",          "Stuur selectie (of huidige alinea) als taak naar vandaag"],
+        ], "De tegenhanger van Fragment→Zettelkasten (die van de dagnotitie NAAR een permanente notitie werkt) — dit werkt andersom: een vervolgtaak of -vraag die tijdens het schrijven ontstaat, gaat direct als openstaande taak de dagnotitie van vandaag in, met een terugverwijzing naar deze notitie."],
         ["MUIS", W.blue, [
           ["klik",          "Plaats cursor (blijft in huidige mode)"],
           ["dubbelklik",    "Plaats cursor + start INSERT-mode"],

@@ -245,8 +245,23 @@ const ReviewPanel = ({ notes = [], onOpenNote, onUpdateNote }) => {
                 React.createElement("div", { style: { flex: 1, minWidth: 0 } },
                   React.createElement("div", {
                     style: { fontSize: "13px", color: W.fg,
-                             overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }
-                  }, n.title || n.id),
+                             overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                             display: "flex", alignItems: "center", gap: "5px" }
+                  },
+                    n.title || n.id,
+                    // "Rijp" — stabiel gebleken bij herhaalde reviews (weinig
+                    // "Vergeten"). Puur een afgeleid signaal uit bestaande
+                    // FSRS-data, niets nieuws opgeslagen: een idee dat je
+                    // consequent onthoudt is mogelijk toe aan verdichting of
+                    // een link naar verwante notities — spaced repetition als
+                    // signaal terug naar de Zettelkasten-structuur, niet
+                    // alleen geheugentraining.
+                    (rd?.stability||0) >= 60 && (rd?.reps||0) >= 3 && (rd?.lapses||0) <= 1 &&
+                      React.createElement("span", {
+                        title: `Rijp — stabiel bij ${rd.reps} reviews, ${Math.round(rd.stability)} dagen stabiliteit`,
+                        style: { fontSize: "10px", flexShrink: 0 }
+                      }, "🌳")
+                  ),
                   React.createElement("div", {
                     style: { fontSize: "10px", color: W.fgMuted, marginTop: "2px" }
                   }, rd?.lastReview ? `Laatste review: ${rd.lastReview} · stabiliteit: ${Math.round(rd.stability||0)}d` : "Nieuw")

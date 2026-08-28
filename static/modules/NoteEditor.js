@@ -312,6 +312,7 @@ const NoteEditor = ({
       allNotesText,
       onSplitCmd,
       noteId:       note?.id,
+      noteTitle:    editTitle,
       hideTagStrip: true,
       notes,        // voor [[ wiki-link autocomplete
     })

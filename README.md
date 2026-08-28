@@ -330,5 +330,27 @@ Notebook behoudt zijn gesprek ook in de split-rechts-positie, los van de hoofdwe
 
 ---
 
+## Een bewuste keuze: geen plugin-systeem
+
+Deze app heeft, anders dan Obsidian (2000+ community-plugins) of Logseq,
+geen plugin-architectuur — en dat is geen ontbrekende functie, maar een
+expliciete afweging.
+
+**Wat je daarmee wint:** diepte in plaats van breedte. Een highlight-kleur
+tijdens het lezen draagt zijn betekenis (bron/kritisch/eigen) daadwerkelijk
+door tot in de uiteindelijke notitie; spaced repetition (FSRS) werkt tegen
+hetzelfde datamodel als de Zettelkasten-structuur zelf; semantisch zoeken
+bestrijkt notities én PDF's via één en dezelfde index. Bij een
+plugin-ecosysteem is de gebruiker zelf de lijm tussen zulke losse
+functies — hier zit die lijm al ingebakken.
+
+**Wat je daarvoor inlevert:** elke uitbreiding vereist een wijziging in de
+hoofd-codebase, niet een los te installeren plugin. Voor een persoonlijk
+systeem (één gebruiker, één onderhouder) is dat een aanvaardbare
+afweging — maar het is een reëel plafond mocht deze app ooit breder
+gedeeld worden dan dat.
+
+---
+
 *Gebouwd in 30+ sessies als lokaal, privacy-first alternatief voor Obsidian / Logseq / Notion.*
 *Geen vendor lock-in. Geen abonnement. Alle data in plain Markdown.*

@@ -2796,6 +2796,29 @@ class ZKHandler(BaseHTTPRequestHandler):
             except ValueError as e:
                 return self._send(400, {"error": str(e)})
 
+        if p=="/api/daily/append":
+            # Voegt één regel toe aan de dagnotitie — voor de round-trip
+            # vanuit een permanente notitie terug naar "vandaag" (bv. een
+            # vervolgtaak of -vraag die tijdens het schrijven/lezen ontstaat).
+            # Bewust server-side lezen+schrijven in één aanroep (i.p.v. de
+            # client eerst laten ophalen en dan de volledige inhoud terug te
+            # laten sturen) — dat voorkomt een race condition als de
+            # dagnotitie ondertussen elders alweer gewijzigd is (bv. een
+            # ander open tabblad, of de quick-entry-bar op het dagscherm).
+            body = self._body()
+            date = body.get("date", "")
+            line = body.get("line", "")
+            if not date: return self._send(400, {"error": "date vereist"})
+            if not line.strip(): return self._send(400, {"error": "line vereist"})
+            try:
+                current = self.vault.get_daily_note(date)
+                bestaand = current["content"].rstrip("\n")
+                nieuw = (bestaand + "\n" + line) if bestaand else line
+                result = self.vault.save_daily_note(date, nieuw + "\n")
+                return self._send(200, {"ok": True, **result})
+            except ValueError as e:
+                return self._send(400, {"error": str(e)})
+
         if p=="/api/daily/list":
             return self._send(200, {"dates": self.vault.list_daily_notes()})
 
