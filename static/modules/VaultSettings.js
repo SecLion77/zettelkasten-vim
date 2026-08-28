@@ -815,7 +815,7 @@ const VaultSettings = ({vaultPath, onChangeVault, onClose, onTaskModelsChange=nu
                 hint:"Gebruikt bij het analyseren/beschrijven van afbeeldingen (Plaatjes-tab)." },
               { key:"semantic_llm_model", label:"Semantisch zoeken",   value:semanticLlmModel, setValue:setSemanticLlmModel,
                 defaultModel:"nomic-embed-text",
-                hint:"Gebruikt voor de embeddings bij semantisch zoeken (Ontdekken-tab) — bewust niet het hoofdmodel, want dat is meestal een chat-model en geen embedding-model." },
+                hint:"Gebruikt voor de embeddings bij semantisch zoeken (Ontdekken-tab) — bewust niet het hoofdmodel, want dat is meestal een chat-model en geen embedding-model. Vault overwegend niet-Engelstalig? bge-m3 is native meertalig (100+ talen) en vaak nauwkeuriger dan nomic-embed-text voor Nederlandse tekst. Let op: na het wisselen van embeddingmodel moet je herindexeren — voor notities \"Alles herindexeren\", voor PDF's \"Volledig herindexeren\" (niet de gewone \"bijwerken\"-knoppen: die zien oude embeddings van het vorige model ten onrechte als \"al gedaan\")." },
               { key:"text_improve_llm_model", label:"Tekstverbetering", value:textImproveLlmModel, setValue:setTextImproveLlmModel,
                 defaultModel:null,
                 hint:"Gebruikt bij AI-tekstverbetering in de notitie-editor (selecteer tekst → \\a, of \"✨ verbeter\" onderaan). Valt terug op het hoofdmodel — hier alleen invullen als je bewust een ander (bv. sneller of specifieker) model wilt voor deze taak." },
@@ -860,6 +860,7 @@ const VaultSettings = ({vaultPath, onChangeVault, onClose, onTaskModelsChange=nu
                       {id:"llama3.3:8b",    label:"Llama 3.3 8B"},
                       {id:"llama3.2-vision",label:"Llama 3.2 Vision"},
                       {id:"nomic-embed-text",label:"nomic-embed-text (embeddings)"},
+                      {id:"bge-m3",         label:"bge-m3 (embeddings, meertalig)"},
                     ].map(m => React.createElement("option", { key:m.id, value:m.id }, m.label))
                   ),
                   customModels.length > 0 && React.createElement("optgroup", { label:"Aangepast" },

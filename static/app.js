@@ -276,6 +276,22 @@ const _savedTheme = (() => { try { return localStorage.getItem("zk_theme") || "v
 let W = { ...THEMES[_savedTheme] || THEMES["void-cyan"] };
 _applyThemeExtended(W); _applyThemeCss(W); // CSS vars direct toepassen bij laden
 
+// window.THEME_VARS — live alias voor W, geen aparte kopie.
+// Reden: een aantal componenten (DailyView.js, SemanticSearch.js — en
+// voorheen ook drie inmiddels verwijderde dode bestanden) lazen per
+// abuis `window.THEME_VARS || {}` in plaats van de gedeelde globale W.
+// Dat object werd nergens gevuld, dus elke W.xxx daar gaf `undefined` —
+// een echte bug die knoppen onleesbaar maakte (zie INTEGRATIE.md). De
+// betrouwbaarste fix is niet "nooit meer die typo maken", maar het foute
+// patroon zelf onschadelijk maken: een getter zodat window.THEME_VARS
+// altijd hetzelfde, actuele thema-object teruggeeft als W — ook al
+// verandert later ooit hóe W bijgewerkt wordt (nu via Object.assign(W,t),
+// wat toch al dezelfde referentie behoudt, maar een getter blijft ook
+// correct als dat wisselt naar een her-toewijzing).
+try {
+  Object.defineProperty(window, "THEME_VARS", { get: () => W, configurable: true });
+} catch {}
+
 // Thema wisselen — roep dit aan vanuit de instellingen
 window._setTheme = (id) => {
   if (!THEMES[id]) return;
@@ -836,68 +852,6 @@ const TagPill = ({tag, onRemove, small, onClick}) => {
       style:{cursor:"pointer",color:tColor,opacity:0.65,marginLeft:"2px",
              fontSize:"13px",lineHeight:1,fontWeight:"bold",flexShrink:0}
     },"×")
-  );
-};
-
-// ── Tag Editor ─────────────────────────────────────────────────────────────────
-const TagEditor = ({tags=[], onChange, allTags=[]}) => {
-  const [input,setInput] = React.useState("");
-  const [open, setOpen]  = React.useState(false);
-  const inputRef = React.useRef(null);
-
-  const suggestions = allTags
-    .filter(t=>t.toLowerCase().includes(input.toLowerCase())&&!tags.includes(t))
-    .slice(0,8);
-
-  const add = (t) => {
-    t = t.trim().replace(/^#/,"").replace(/\s+/g,"_");
-    if (t && !tags.includes(t)) onChange([...tags,t]);
-    setInput(""); setOpen(false);
-  };
-
-  const onKey = (e) => {
-    if (["Enter","Tab",","," "].includes(e.key)) { e.preventDefault(); if(input) add(input); }
-    else if (e.key==="Backspace" && !input && tags.length) onChange(tags.slice(0,-1));
-    else if (e.key==="Escape") setOpen(false);
-  };
-
-  return React.createElement("div",{style:{position:"relative"}},
-    React.createElement("div",{
-      style:{display:"flex",flexWrap:"wrap",gap:"3px",padding:"4px 6px 6px",
-        background:W.bg,border:`1px solid ${W.splitBg}`,borderRadius:"4px",
-        cursor:"text",minHeight:"28px",maxHeight:"120px",
-        overflow:"auto",
-        // Schaalbaar met de muis via resize-handle rechtsonder
-        resize:"vertical",
-      },
-      onClick:()=>inputRef.current?.focus()
-    },
-      ...tags.map(t=>React.createElement(TagPill,{key:t,tag:t,onRemove:t=>onChange(tags.filter(x=>x!==t)),small:true})),
-      React.createElement("input",{
-        ref:inputRef,value:input,
-        onChange:e=>{setInput(e.target.value);setOpen(true);},
-        onKeyDown:onKey,onFocus:()=>setOpen(true),
-        onBlur:()=>setTimeout(()=>setOpen(false),150),
-        placeholder:tags.length?"":"tag toevoegen…",
-        style:{border:"none",background:"transparent",outline:"none",
-          fontSize:"14px",color:W.fg,minWidth:"80px",flex:1}
-      })
-    ),
-    open && (suggestions.length>0||input) && React.createElement("div",{
-      style:{position:"absolute",top:"100%",left:0,right:0,background:W.bg3,
-        border:`1px solid ${W.splitBg}`,borderRadius:"4px",zIndex:200,
-        boxShadow:"0 4px 16px rgba(0,0,0,0.5)",marginTop:"2px",overflow:"hidden"}
-    },
-      input && React.createElement("div",{
-        onMouseDown:e=>{e.preventDefault();add(input);},
-        style:{padding:"5px 10px",fontSize:"14px",color:W.blue,cursor:"pointer",
-          borderBottom:`1px solid ${W.splitBg}`}
-      },"+ \"",input,"\" toevoegen"),
-      ...suggestions.map(t=>React.createElement("div",{
-        key:t,onMouseDown:e=>{e.preventDefault();add(t);},
-        style:{padding:"4px 10px",fontSize:"14px",color:W.fg,cursor:"pointer"}
-      },"#"+t))
-    )
   );
 };
 

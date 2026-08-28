@@ -70,16 +70,26 @@ const SemanticSearch = ({ notes = [], onOpenNote, onOpenPdf, llmModel = "", task
   // pagina-chunks nog ontbreken (via _iter_pdf_chunks() tegen de opgeslagen
   // embeddings) — de client hoeft dus geen lijst mee te sturen, alleen te
   // blijven aanroepen tot "remaining" op 0 staat.
-  const buildPdfIndex = useCallback(async () => {
+  const buildPdfIndex = useCallback(async (forceAll = false) => {
     setPdfIndexing(true); setError(""); setPdfIndexPct(0);
     try {
-      let remaining = 1, totalToDo = null, done = 0;
+      let remaining = 1, totalToDo = null, done = 0, first = true;
       while (remaining > 0) {
         const resp = await fetch("/api/semantic/embed-pdfs", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ model: embedModel, batch_size: 5 }),
+          body: JSON.stringify({
+            model: embedModel, batch_size: 5,
+            // clear_first alleen bij de allereerste aanroep van een
+            // "volledig herindexeren" — maakt de index één keer leeg zodat
+            // oude entries van een ander (embedding-)model niet ten
+            // onrechte als "al gedaan" blijven tellen. Bij de aanroepen
+            // erna niet meer meesturen, anders wist elke batch alsnog
+            // z'n eigen vorige voortgang weer.
+            ...(forceAll && first ? { clear_first: true } : {}),
+          }),
         });
+        first = false;
         const d = await resp.json();
         if (!d.ok) {
           setError(d.error + (d.hint ? `\n💡 ${d.hint}` : ""));
@@ -318,7 +328,7 @@ const SemanticSearch = ({ notes = [], onOpenNote, onOpenPdf, llmModel = "", task
           }})
         ),
         pdfCovered < 100 && React.createElement("button", {
-          onClick: buildPdfIndex,
+          onClick: () => buildPdfIndex(false),
           disabled: pdfIndexing,
           title: "Indexeer PDF-pagina's voor semantisch zoeken",
           style: {
@@ -331,6 +341,23 @@ const SemanticSearch = ({ notes = [], onOpenNote, onOpenPdf, llmModel = "", task
             opacity: pdfIndexing ? 0.7 : 1,
           }
         }, pdfIndexing ? `⏳ ${pdfIndexPct}%` : "↻ PDF's indexeren"),
+        // "Volledig herindexeren" — nodig na een embeddingmodel-wissel
+        // (bv. naar bge-m3): de gewone knop hierboven ziet oude entries
+        // van een ander model als "al gedaan" en slaat ze over.
+        pdfIndexStatus.indexed > 0 && React.createElement("button", {
+          onClick: () => buildPdfIndex(true),
+          disabled: pdfIndexing,
+          title: "Herindexeer alle PDF-pagina's met het huidige model — nodig na het wisselen van embeddingmodel",
+          style: {
+            background: "none",
+            border: `1px solid ${W.splitBg}`,
+            color: W.fgMuted,
+            borderRadius:"6px", padding:"4px 10px",
+            fontSize:"11px",
+            cursor: pdfIndexing ? "wait" : "pointer",
+            opacity: pdfIndexing ? 0.5 : 1,
+          }
+        }, "↻ Volledig herindexeren"),
       ),
 
       // Foutmelding

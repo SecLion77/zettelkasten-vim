@@ -2743,6 +2743,18 @@ class ZKHandler(BaseHTTPRequestHandler):
             body       = self._body()
             model      = body.get("model", "nomic-embed-text")
             batch_size = int(body.get("batch_size", 5))
+            # clear_first=True (bv. na een embeddingmodel-wissel, één keer bij
+            # de eerste aanroep van een "volledig herindexeren"): maakt de
+            # PDF-index eerst leeg. Nodig omdat oude entries van een ánder
+            # model anders in pdf_store blijven staan (met een niet-matchende
+            # vector-afmeting, dus stilzwijgend genegeerd bij het zoeken) maar
+            # qua sleutel-aanwezigheid ten onrechte als "al gedaan" tellen —
+            # zonder dit zou "opnieuw indexeren" gewoon nooit verder komen
+            # dan steeds dezelfde eerste batch (de "te doen"-lijst zou nooit
+            # krimpen). Na het leegmaken werkt de normale
+            # ontbrekende-only-voortgang gewoon weer correct.
+            if body.get("clear_first"):
+                self.vault._save_pdf_embeddings({})
             try:
                 pdf_store = self.vault._load_pdf_embeddings()
                 todo = [c for c in self.vault._iter_pdf_chunks() if c[0] not in pdf_store]

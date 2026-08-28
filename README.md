@@ -43,6 +43,9 @@ Open de app via `http://localhost:8888` (laptop) of `https://<IP-adres>:8888` (i
 ```
 zettelkasten-vim/
 ├── server.py              # Python HTTP-server (geen frameworks)
+├── certs/                 # Lokaal HTTPS-certificaat (voor offline/PWA op iPad — zie certs/README.md)
+│   ├── generate-cert.sh    # Genereert server.crt/server.key voor localhost + LAN-IP
+│   └── README.md           # Stap-voor-stap: genereren, downloaden, vertrouwen op iPad
 ├── static/
 │   ├── index.html         # App shell — laadt React + alle modules
 │   ├── app.js             # Hoofd-app: state, routing, navigatie
@@ -129,7 +132,7 @@ Het startscherm dat elke sessie richting geeft:
 - **Verwante notities tijdens het lezen** — zijpaneel toont relevante notities op basis van je actieve selectie, zonder dat je naar Notebook hoeft te wisselen
 - **Annotatieteller** — gele badge (✦ n) per PDF in de lijstweergave
 - **Gelezen-status** — toggle per PDF, zichtbaar in de lijst
-- **Offline caching** — sla PDF op voor gebruik zonder server (⬇ Offline)
+- **Offline caching** — sla PDF op voor gebruik zonder server (⬇ Offline, in zowel de raster- als lijstweergave); toont een duidelijke foutmelding als het cachen mislukt, i.p.v. altijd "gelukt" te tonen
 - **AI-samenvatting** — automatische samenvatting van de PDF-inhoud (optioneel eigen model, zie Instellingen)
 
 #### 🖼 Plaatjes
@@ -182,7 +185,8 @@ Het startscherm dat elke sessie richting geeft:
 - **Lokale embeddings** via Ollama (`nomic-embed-text`, 84MB) — of een eigen embedding-model, zie Instellingen
 - Vindt notities op *betekenis* — ook zonder exacte trefwoorden
 - **Index bouwen** — indexeer notities in batches; index opgeslagen in `.zettelkasten_embeddings.json`
-- **Hybride zoeken** — combineert BM25-tekstzoeken met embeddings
+- **Ook PDF's doorzoekbaar op betekenis** — aparte "PDF's indexeren"-sectie; doorzoekt de PDF-tekst die de PDF-index toch al per pagina bijhoudt, op paginaniveau gechunkt. Resultaten tonen bestand + paginanummer + fragment, en openen het PDF direct op de juiste pagina. Index opgeslagen in `.zettelkasten_pdf_embeddings.json`
+- **Hybride zoeken** — combineert BM25-tekstzoeken met embeddings (reciprocal rank fusion), voor zowel notities als PDF's — vindt ook exacte termen (ADR-nummers, productcodes) die pure embeddings zouden missen
 - **Score-weergave** — resultaten met % overeenkomst
 - Beschikbaar in het hoofd-scherm én in de split-balk
 
@@ -241,7 +245,7 @@ Het startscherm dat elke sessie richting geeft:
 - **API-sleutels** — OpenAI, Anthropic, Mistral
 - **Modellen**
   - Overzicht en beheer van eigen (OpenAI-compatibele) modellen
-  - **Model per taak** — optioneel een ander model dan je hoofdmodel instellen voor Afbeeldingen, Semantisch zoeken en Tekstverbetering. Leeg = automatisch (val terug op het hoofdmodel, of bij Semantisch zoeken direct op een embedding-model). Toont of het standaardmodel voor die taak al lokaal geïnstalleerd is
+  - **Model per taak** — optioneel een ander model dan je hoofdmodel instellen voor Afbeeldingen, Semantisch zoeken en Tekstverbetering. Leeg = automatisch (val terug op het hoofdmodel, of bij Semantisch zoeken direct op een embedding-model — `bge-m3` staat er als meertalig alternatief bij, aanbevolen voor niet-Engelstalige vaults). Toont of het standaardmodel voor die taak al lokaal geïnstalleerd is
 - **PDF** — standaard annotatiekleur, pagina-weergave
 - **Weergave** — lettergrootte, regelafstand
 - **Offline** — opslaggebruik per categorie, PDF-limiet (50–500MB)
@@ -314,6 +318,7 @@ Notebook behoudt zijn gesprek ook in de split-rechts-positie, los van de hoofdwe
 | Python | ≥ 3.10 | Server |
 | Ollama | latest | Lokale AI |
 | nomic-embed-text | via Ollama | Semantisch zoeken (standaard) |
+| bge-m3 | via Ollama | Semantisch zoeken — optioneel alternatief, native meertalig (100+ talen), vaak nauwkeuriger voor niet-Engelse vaults. Instelbaar via Instellingen → Modellen → Model per taak. Na het wisselen: "Volledig herindexeren" gebruiken, niet "bijwerken" |
 | gemma3:12b | via Ollama | Aanbevolen generatief hoofdmodel |
 | llama3.2-vision | via Ollama | Afbeeldingen (standaard) |
 | Chrome / Safari / Firefox | modern | Frontend |
