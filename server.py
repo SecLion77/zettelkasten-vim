@@ -8,7 +8,7 @@ from pathlib import Path
 from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
-from urllib.parse import urlparse, unquote
+from urllib.parse import urlparse, unquote, urlencode
 import argparse
 
 # ── Automatisch installeren van optionele PDF-pakketten ───────────────────────
@@ -846,6 +846,26 @@ class VaultManager:
 
     def set_api_key(self, provider: str, key: str):
         self.save_config({f"api_key_{provider}": key.strip()})
+
+    # ── Google Tasks-koppeling (OAuth, alleen-lezen) ────────────────────────
+    # client_id/client_secret komen uit een eigen Google Cloud-project van de
+    # gebruiker (zie certs/README.md-achtige instructies in de UI/README) —
+    # geen gedeelde applicatie-sleutel, elke gebruiker maakt zijn eigen aan.
+    # refresh_token wordt pas gezet ná een succesvolle OAuth-consent-flow.
+    def get_google_tasks_config(self):
+        cfg = self.get_config()
+        return {
+            "client_id":     cfg.get("google_tasks_client_id", ""),
+            "client_secret": cfg.get("google_tasks_client_secret", ""),
+            "refresh_token": cfg.get("google_tasks_refresh_token", ""),
+        }
+
+    def set_google_tasks_config(self, **kwargs):
+        patch = {f"google_tasks_{k}": v for k, v in kwargs.items() if v is not None}
+        self.save_config(patch)
+
+    def disconnect_google_tasks(self):
+        self.save_config({"google_tasks_refresh_token": None})
 
     # Externe PDF-mappen (opgeslagen in config)
     def get_ext_pdf_dirs(self):
@@ -2166,6 +2186,9 @@ class ZKHandler(BaseHTTPRequestHandler):
             "/api/fetch-url":         lambda: self._fetch_url_endpoint(),
             "/api/health":           lambda: self._send(200, {"ok": True, "status": "running"}),
             "/api/pdf-index/status": lambda: self._pdf_index_status_get(),
+            "/api/google-tasks/status":   lambda: self._google_tasks_status(),
+            "/api/google-tasks/auth-url": lambda: self._google_tasks_auth_url(),
+            "/api/google-tasks/list":     lambda: self._google_tasks_list(),
         }
 
     def _pdf_index_status_get(self):
@@ -2218,6 +2241,153 @@ class ZKHandler(BaseHTTPRequestHandler):
             }
         return self._send(200, result)
 
+    # ── Google Tasks — OAuth (alleen-lezen) ─────────────────────────────────
+    # Standaard "installed app"-OAuth-flow met een loopback-redirect-URI
+    # (http://localhost:<poort>/api/google-tasks/callback) — de officieel
+    # door Google ondersteunde manier voor desktop-/CLI-achtige apps, geen
+    # geheime server-side webapp nodig. Scope bewust "tasks.readonly": de
+    # app hoeft alleen te lezen om taken te kunnen importeren, nooit terug
+    # te schrijven naar Google Tasks.
+    _GOOGLE_TASKS_SCOPE = "https://www.googleapis.com/auth/tasks.readonly"
+
+    def _google_tasks_redirect_uri(self):
+        # Host-header van het inkomende verzoek — werkt zowel voor localhost
+        # als (tijdens deze eenmalige koppel-stap, altijd vanaf de laptop
+        # zelf) een expliciet lokaal adres, zonder de poort te hoeven
+        # hardcoden.
+        host = self.headers.get("Host", "localhost")
+        return f"http://{host}/api/google-tasks/callback"
+
+    def _google_tasks_status(self):
+        cfg = self.vault.get_google_tasks_config()
+        cid = cfg["client_id"]
+        return self._send(200, {
+            "configured": bool(cfg["client_id"] and cfg["client_secret"]),
+            "connected":  bool(cfg["refresh_token"]),
+            # Gemaskeerde preview zodat de UI kan bevestigen dat er
+            # daadwerkelijk iets is opgeslagen, zonder de waarden zelf
+            # terug te sturen — zelfde patroon als /api/api-keys.
+            "client_id_preview": (cid[:12]+"…") if len(cid) > 12 else ("●●●●" if cid else ""),
+            "client_secret_set": bool(cfg["client_secret"]),
+        })
+
+    def _google_tasks_auth_url(self):
+        cfg = self.vault.get_google_tasks_config()
+        if not cfg["client_id"]:
+            return self._send(400, {"error": "Nog geen client_id/client_secret ingesteld — zie Instellingen → Google Tasks"})
+        params = {
+            "client_id": cfg["client_id"],
+            "redirect_uri": self._google_tasks_redirect_uri(),
+            "response_type": "code",
+            "scope": self._GOOGLE_TASKS_SCOPE,
+            "access_type": "offline",   # nodig om een refresh_token te krijgen
+            "prompt": "consent",        # forceert een refresh_token ook bij herhaalde koppeling
+        }
+        url = "https://accounts.google.com/o/oauth2/v2/auth?" + urlencode(params)
+        return self._send(200, {"url": url})
+
+    def _google_tasks_callback(self):
+        from urllib.parse import parse_qs, urlparse as _up
+        qs = parse_qs(_up(self.path).query)
+        code = qs.get("code", [""])[0]
+        err  = qs.get("error", [""])[0]
+        if err:
+            return self._send(200, f"<html><body><h3>Koppeling geannuleerd of mislukt: {err}</h3>"
+                                    f"<p>Je kunt dit venster sluiten.</p></body></html>", "text/html")
+        if not code:
+            return self._send(400, {"error": "Geen 'code' ontvangen van Google"})
+        cfg = self.vault.get_google_tasks_config()
+        try:
+            payload = urlencode({
+                "code": code,
+                "client_id": cfg["client_id"],
+                "client_secret": cfg["client_secret"],
+                "redirect_uri": self._google_tasks_redirect_uri(),
+                "grant_type": "authorization_code",
+            }).encode()
+            req = urllib.request.Request("https://oauth2.googleapis.com/token", data=payload, method="POST")
+            with urllib.request.urlopen(req, timeout=15) as r:
+                token_data = json.loads(r.read())
+            refresh_token = token_data.get("refresh_token", "")
+            if not refresh_token:
+                # Kan gebeuren als de gebruiker al eerder toestemming gaf
+                # zonder "prompt=consent" — vraag opnieuw te proberen.
+                return self._send(200,
+                    "<html><body><h3>Geen refresh-token ontvangen.</h3>"
+                    "<p>Probeer de koppeling opnieuw — soms geeft Google er bij een tweede poging "
+                    "meteen wel een. Je kunt dit venster sluiten.</p></body></html>", "text/html")
+            self.vault.set_google_tasks_config(refresh_token=refresh_token)
+            return self._send(200,
+                "<html><body><h3>✓ Gekoppeld aan Google Tasks</h3>"
+                "<p>Je kunt dit venster sluiten en teruggaan naar de app.</p></body></html>", "text/html")
+        except Exception as e:
+            return self._send(200, f"<html><body><h3>Koppeling mislukt</h3><p>{e}</p></body></html>", "text/html")
+
+    def _google_tasks_get_access_token(self):
+        """Wisselt de opgeslagen refresh_token in voor een verse access_token.
+        Geen caching van de access_token — voor een persoonlijk, incidenteel
+        gebruikt tool (een paar keer per dag het dagscherm openen) is één
+        extra tokenverzoek per lijst-aanvraag verwaarloosbaar, en het
+        voorkomt elke complexiteit rond expiry-tracking."""
+        cfg = self.vault.get_google_tasks_config()
+        if not cfg["refresh_token"]:
+            return None, "Niet gekoppeld aan Google Tasks"
+        try:
+            payload = urlencode({
+                "client_id": cfg["client_id"],
+                "client_secret": cfg["client_secret"],
+                "refresh_token": cfg["refresh_token"],
+                "grant_type": "refresh_token",
+            }).encode()
+            req = urllib.request.Request("https://oauth2.googleapis.com/token", data=payload, method="POST")
+            with urllib.request.urlopen(req, timeout=15) as r:
+                data = json.loads(r.read())
+            token = data.get("access_token")
+            if not token:
+                return None, data.get("error_description", "Geen access_token ontvangen")
+            return token, None
+        except urllib.error.HTTPError as e:
+            body = e.read().decode(errors="replace")
+            return None, f"Google gaf een fout terug: {body[:200]}"
+        except Exception as e:
+            return None, str(e)
+
+    def _google_tasks_list(self):
+        token, err = self._google_tasks_get_access_token()
+        if err:
+            return self._send(200, {"ok": False, "error": err})
+        try:
+            req = urllib.request.Request(
+                "https://tasks.googleapis.com/tasks/v1/users/@me/lists",
+                headers={"Authorization": f"Bearer {token}"})
+            with urllib.request.urlopen(req, timeout=15) as r:
+                lists = json.loads(r.read()).get("items", [])
+            alle_taken = []
+            for lst in lists:
+                lst_id = lst.get("id")
+                req2 = urllib.request.Request(
+                    f"https://tasks.googleapis.com/tasks/v1/lists/{lst_id}/tasks"
+                    "?showCompleted=false&showHidden=false",
+                    headers={"Authorization": f"Bearer {token}"})
+                with urllib.request.urlopen(req2, timeout=15) as r2:
+                    taken = json.loads(r2.read()).get("items", [])
+                for t in taken:
+                    if t.get("status") == "completed":
+                        continue
+                    alle_taken.append({
+                        "id": t.get("id"),
+                        "title": t.get("title", "").strip(),
+                        "notes": t.get("notes", ""),
+                        "due": t.get("due", ""),
+                        "list": lst.get("title", ""),
+                    })
+            return self._send(200, {"ok": True, "tasks": alle_taken})
+        except urllib.error.HTTPError as e:
+            body = e.read().decode(errors="replace")
+            return self._send(200, {"ok": False, "error": f"Google Tasks-fout: {body[:200]}"})
+        except Exception as e:
+            return self._send(200, {"ok": False, "error": str(e)})
+
     def _get_disk_usage(self):
         import os, shutil
         v = self.vault
@@ -2265,6 +2435,8 @@ class ZKHandler(BaseHTTPRequestHandler):
         route = self._get_routes().get(p)
         if route:
             return route()
+        if p == "/api/google-tasks/callback":
+            return self._google_tasks_callback()
         if p.startswith("/api/browse"):
             from urllib.parse import parse_qs, urlparse as _up
             qs = parse_qs(_up(self.path).query)
@@ -2933,6 +3105,23 @@ class ZKHandler(BaseHTTPRequestHandler):
                     self.vault.set_api_key(provider, body[provider])
             status = {pr: bool(self.vault.get_api_key(pr)) for pr in ("anthropic","openai","google","openrouter","mistral","jan")}
             return self._send(200, {"ok": True, "configured": status})
+        if p=="/api/google-tasks/config":
+            body = self._body()
+            client_id     = body.get("client_id", "").strip()
+            client_secret = body.get("client_secret", "").strip()
+            existing = self.vault.get_google_tasks_config()
+            # Een leeg secret-veld betekent "behoud het bestaande", niet
+            # "wis het" — anders zou je bij elke aanpassing van alleen de
+            # client_id ook opnieuw het secret moeten opzoeken en plakken.
+            if not client_secret and existing["client_secret"]:
+                client_secret = existing["client_secret"]
+            if not client_id or not client_secret:
+                return self._send(400, {"error": "client_id en client_secret zijn beide vereist"})
+            self.vault.set_google_tasks_config(client_id=client_id, client_secret=client_secret)
+            return self._send(200, {"ok": True})
+        if p=="/api/google-tasks/disconnect":
+            self.vault.disconnect_google_tasks()
+            return self._send(200, {"ok": True})
         if p=="/api/vault":
             body=self._body()
             np=body.get("path","").strip()

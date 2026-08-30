@@ -423,6 +423,117 @@ const InboxProcessor = ({ dayContent, onDayChange, onAddNote, viewDate, today, W
   );
 };
 
+// ── GoogleTasksPanel — selecteerbare taken uit Google Tasks ─────────────────
+// Alleen zichtbaar als er daadwerkelijk een koppeling actief is (zie
+// Instellingen → API-sleutels → Google Tasks) — geen koppeling betekent
+// geen paneel, om niet-gebruikers niet met een lege/foutieve sectie op te
+// zadelen. Haalt bij het openen de actuele, onvoltooide taken op; bij
+// "Opnemen" gaan de geselecteerde items als taak de dagnotitie van
+// vandaag in (hetzelfde /api/daily/append-endpoint als de \d-round-trip
+// vanuit de Vim-editor) en verdwijnen ze lokaal uit de lijst.
+const GoogleTasksPanel = ({ W }) => {
+  const [status,     setStatus]     = React.useState(null); // null = nog niet geladen
+  const [tasks,      setTasks]      = React.useState([]);
+  const [selected,   setSelected]   = React.useState(new Set());
+  const [loading,    setLoading]    = React.useState(false);
+  const [importing,  setImporting]  = React.useState(false);
+  const [collapsed,  setCollapsed]  = React.useState(false);
+  const [msg,        setMsg]        = React.useState("");
+
+  const loadTasks = React.useCallback(() => {
+    setLoading(true);
+    fetch("/api/google-tasks/list").then(r=>r.json()).then(d => {
+      setLoading(false);
+      if (d.ok) { setTasks(d.tasks || []); }
+      else { setMsg(d.error || "Kon taken niet ophalen"); }
+    }).catch(e => { setLoading(false); setMsg(e.message); });
+  }, []);
+
+  React.useEffect(() => {
+    fetch("/api/google-tasks/status").then(r=>r.json()).then(d => {
+      setStatus(d);
+      if (d.connected) loadTasks();
+    }).catch(()=>setStatus({configured:false, connected:false}));
+  }, [loadTasks]);
+
+  if (!status || !status.connected) return null; // niet gekoppeld -> geen paneel
+
+  const toggle = (id) => setSelected(s => {
+    const n = new Set(s);
+    n.has(id) ? n.delete(id) : n.add(id);
+    return n;
+  });
+
+  const importSelected = async () => {
+    const items = tasks.filter(t => selected.has(t.id));
+    if (!items.length) return;
+    setImporting(true);
+    const today = new Date().toISOString().slice(0, 10);
+    for (const t of items) {
+      const line = `- [ ] ${t.title} (Google Tasks)`;
+      try {
+        await fetch("/api/daily/append", {
+          method: "POST", headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({ date: today, line }),
+        });
+      } catch {}
+    }
+    setTasks(ts => ts.filter(t => !selected.has(t.id)));
+    setSelected(new Set());
+    setImporting(false);
+    setMsg(`✓ ${items.length} taak/taken toegevoegd aan de dagnotitie van vandaag`);
+    setTimeout(()=>setMsg(""), 4000);
+  };
+
+  return React.createElement("div",{style:{
+    background:W.bg2, border:`1px solid ${W.splitBg}`, borderRadius:"10px",
+    padding:"16px 20px", gridColumn:"1 / -1",
+  }},
+    React.createElement("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",cursor:"pointer"},
+      onClick:()=>setCollapsed(c=>!c)},
+      React.createElement("div",{style:{fontSize:"13px",fontWeight:"700",color:W.fg}},
+        `📋 Uit Google Tasks (${tasks.length})`),
+      React.createElement("span",{style:{fontSize:"11px",color:W.fgMuted}}, collapsed?"▼ toon":"▲ verberg")
+    ),
+    !collapsed && React.createElement(React.Fragment, null,
+      loading && React.createElement("div",{style:{fontSize:"12px",color:W.fgMuted,marginTop:"10px"}}, "⏳ Laden…"),
+      !loading && tasks.length===0 && React.createElement("div",{style:{fontSize:"12px",color:W.fgMuted,fontStyle:"italic",marginTop:"10px"}},
+        "Geen openstaande taken in Google Tasks."),
+      !loading && tasks.length>0 && React.createElement("div",{style:{marginTop:"10px",display:"flex",flexDirection:"column",gap:"2px"}},
+        tasks.map(t => React.createElement("label",{
+          key:t.id,
+          style:{display:"flex",alignItems:"flex-start",gap:"9px",padding:"5px 0",cursor:"pointer"}
+        },
+          React.createElement("input",{
+            type:"checkbox", checked:selected.has(t.id), onChange:()=>toggle(t.id),
+            style:{marginTop:"3px",flexShrink:0}
+          }),
+          React.createElement("div",{style:{flex:1,minWidth:0}},
+            React.createElement("div",{style:{fontSize:"13px",color:W.fg}}, t.title),
+            (t.notes || t.list) && React.createElement("div",{style:{fontSize:"10px",color:W.fgMuted,marginTop:"1px"}},
+              [t.list, t.notes].filter(Boolean).join(" · "))
+          )
+        ))
+      ),
+      !loading && tasks.length>0 && React.createElement("div",{style:{display:"flex",gap:"8px",alignItems:"center",marginTop:"10px"}},
+        React.createElement("button",{
+          onClick:importSelected, disabled:selected.size===0||importing,
+          style:{background:selected.size?W.blue:"rgba(255,255,255,0.06)",
+                 color:selected.size?W.bg:W.fgMuted, border:"none",borderRadius:"5px",
+                 padding:"6px 14px",fontSize:"12px",fontWeight:"bold",
+                 cursor:selected.size?"pointer":"default"}
+        }, importing ? "…" : `→ Opnemen (${selected.size})`),
+        React.createElement("button",{
+          onClick:loadTasks, title:"Ververs",
+          style:{background:"none",border:`1px solid ${W.splitBg}`,color:W.fgMuted,
+                 borderRadius:"5px",padding:"6px 10px",fontSize:"12px",cursor:"pointer"}
+        }, "↻")
+      ),
+      msg && React.createElement("div",{style:{fontSize:"11px",color:W.fgMuted,marginTop:"8px"}}, msg)
+    )
+  );
+};
+
 // ── OpenTasksPanel — overzicht openstaande taken met filter ─────────────────
 const OpenTasksPanel = ({ notes, onOpenNote, W }) => {
   const [sortOrder,  setSortOrder]  = React.useState("new"); // "new"|"old"
@@ -1177,6 +1288,9 @@ const DailyView = ({ notes=[], onOpenNote, onAddNote, llmModel="" }) => {
     React.createElement("div",{style:{gridColumn:"1 / -1"}},
       React.createElement(OpenTasksPanel,{notes,onOpenNote,W})
     ),
+
+    // ── Google Tasks (indien gekoppeld) ─────────────────────────── volle breedte
+    React.createElement(GoogleTasksPanel,{W}),
 
     // ── Recente notities ──────────────────────────────────────── volle breedte
     recentNotes.length>0&&React.createElement("div",{style:{...card,gridColumn:"1 / -1"}},

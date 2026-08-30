@@ -1003,6 +1003,26 @@ const App = () => {
   // Tellers om focus te triggeren bij split-wissel
   const [editorFocusTrigger, setEditorFocusTrigger] = React.useState(0);
   const [searchFocusTrigger, setSearchFocusTrigger] = React.useState(0);
+  // Web Share Target (Android "Delen" → deze app) — zie manifest.json
+  // share_target. null = geen binnenkomende share, anders {text, saving, msg}
+  const [sharedCapture, setSharedCapture] = React.useState(null);
+
+  // Eigen, expliciet geprefixte querystring-namen (shared_title/shared_text/
+  // shared_url, i.p.v. de generieke title/text/url) — dit is dezelfde
+  // start_url ("/") als een normale app-start, dus zo kan dit nooit per
+  // ongeluk botsen met een ander gebruik van die parameternamen. Eenmalig
+  // bij opstarten checken, en de URL meteen opschonen zodat een latere
+  // herlaad niet dezelfde share opnieuw oppikt.
+  React.useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const sTitle = params.get("shared_title") || "";
+    const sText  = params.get("shared_text")  || "";
+    const sUrl   = params.get("shared_url")   || "";
+    if (!sTitle && !sText && !sUrl) return;
+    const stukjes = [sText || sTitle, sUrl].filter(Boolean);
+    setSharedCapture({ text: stukjes.join(" — "), saving: false, msg: "" });
+    window.history.replaceState({}, "", window.location.pathname);
+  }, []);
 
   // Stuur focus naar het juiste paneel bij elke split-wissel
   React.useEffect(() => {
@@ -1889,6 +1909,89 @@ const App = () => {
         animation:"fadeIn .2s ease-out", whiteSpace:"nowrap",
       }
     }, syncToast),
+
+    // ── Web Share Target — bevestigingsscherm voor een binnenkomende share ──
+    // Bottom-sheet i.p.v. een gecentreerd dialoogvenster: op een telefoon
+    // makkelijker met de duim te bereiken, en het meest herkenbare patroon
+    // voor dit soort korte, bevestig-en-klaar-acties op Android.
+    sharedCapture && React.createElement("div", {
+      onClick: () => setSharedCapture(null),
+      style: { position:"fixed", inset:0, zIndex:10000,
+               background:"rgba(0,0,0,0.55)", display:"flex",
+               alignItems:"flex-end", justifyContent:"center" }
+    },
+      React.createElement("div", {
+        onClick: e => e.stopPropagation(),
+        style: {
+          width:"100%", maxWidth:"520px", background:W.bg2,
+          borderRadius:"16px 16px 0 0", padding:"20px 20px calc(20px + env(safe-area-inset-bottom,0px))",
+          boxShadow:"0 -8px 32px rgba(0,0,0,0.4)",
+          display:"flex", flexDirection:"column", gap:"14px",
+        }
+      },
+        React.createElement("div", {
+          style:{fontSize:"16px", fontWeight:"700", color:W.fg}
+        }, "📤 Vastleggen in dagnotitie"),
+        React.createElement("textarea", {
+          value: sharedCapture.text,
+          onChange: e => setSharedCapture(s => ({...s, text:e.target.value})),
+          rows: 3,
+          style: {
+            width:"100%", background:W.bg, border:`1px solid ${W.splitBg}`,
+            borderRadius:"10px", padding:"12px 14px", color:W.fg,
+            fontSize:"16px", lineHeight:"1.4", outline:"none",
+            fontFamily:"inherit", resize:"vertical",
+          }
+        }),
+        sharedCapture.msg && React.createElement("div", {
+          style:{fontSize:"13px", color: sharedCapture.msg.startsWith("✓") ? W.comment : W.orange}
+        }, sharedCapture.msg),
+        // Grote, duim-vriendelijke knoppen — minimaal 48px hoog
+        React.createElement("div", {style:{display:"flex", gap:"10px"}},
+          React.createElement("button", {
+            onClick: () => setSharedCapture(null),
+            disabled: sharedCapture.saving,
+            style:{
+              flex:"0 0 auto", background:"none", border:`1px solid ${W.splitBg}`,
+              color:W.fgMuted, borderRadius:"10px", padding:"14px 20px",
+              fontSize:"15px", minHeight:"48px", cursor:"pointer",
+            }
+          }, "Annuleren"),
+          React.createElement("button", {
+            onClick: async () => {
+              const tekst = sharedCapture.text.trim();
+              if (!tekst) return;
+              setSharedCapture(s => ({...s, saving:true, msg:""}));
+              const today = new Date().toISOString().slice(0, 10);
+              try {
+                const r = await fetch("/api/daily/append", {
+                  method:"POST", headers:{"Content-Type":"application/json"},
+                  body: JSON.stringify({ date:today, line:`- [ ] ${tekst} (gedeeld)` }),
+                });
+                const d = await r.json();
+                if (d.ok) {
+                  setSharedCapture(s => ({...s, saving:false, msg:"✓ Toegevoegd aan dagnotitie"}));
+                  setTimeout(() => setSharedCapture(null), 1200);
+                } else {
+                  setSharedCapture(s => ({...s, saving:false, msg:"✗ " + (d.error || "Opslaan mislukt")}));
+                }
+              } catch(e) {
+                setSharedCapture(s => ({...s, saving:false, msg:"✗ " + e.message}));
+              }
+            },
+            disabled: !sharedCapture.text.trim() || sharedCapture.saving,
+            style:{
+              flex:"1 1 auto",
+              background: sharedCapture.text.trim() ? W.blue : "rgba(255,255,255,0.06)",
+              color: sharedCapture.text.trim() ? W.bg : W.fgMuted,
+              border:"none", borderRadius:"10px", padding:"14px 20px",
+              fontSize:"15px", fontWeight:"700", minHeight:"48px",
+              cursor: sharedCapture.text.trim() ? "pointer" : "default",
+            }
+          }, sharedCapture.saving ? "…" : "→ Toevoegen aan dagnotitie")
+        )
+      )
+    ),
 
 
     // ── Subtab-balk (desktop+tablet, alleen als actieve hoofdtab subtabs heeft) ──

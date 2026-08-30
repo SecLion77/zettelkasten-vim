@@ -13,6 +13,7 @@ const SHELL_ASSETS = [
   "/",
   "/index.html",
   "/app.js",
+  "/manifest.json",
   "/modules/noteApi.js",
   "/modules/noteStore.js",
   "/modules/pdfService.js",

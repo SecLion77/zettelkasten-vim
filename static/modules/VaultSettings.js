@@ -7,6 +7,17 @@ const VaultSettings = ({vaultPath, onChangeVault, onClose, onTaskModelsChange=nu
   const [newPath,  setNewPath] = useState(vaultPath);
   const [msg,      setMsg]     = useState("");
   const [appVersion, setAppVersion] = React.useState({sw:"…", app:"…"});
+  // Google Tasks-koppeling
+  const [gtStatus,       setGtStatus]       = useState({configured:false, connected:false});
+  const [gtClientId,     setGtClientId]     = useState("");
+  const [gtClientSecret, setGtClientSecret] = useState("");
+  const [gtMsg,          setGtMsg]          = useState("");
+  const [gtSaving,       setGtSaving]       = useState(false);
+
+  const refreshGtStatus = React.useCallback(() => {
+    api.get("/google-tasks/status").then(d => setGtStatus(d)).catch(()=>{});
+  }, []);
+  useEffect(() => { refreshGtStatus(); }, [refreshGtStatus]);
 
   React.useEffect(() => {
     // Haal app + SW versie op
@@ -673,6 +684,95 @@ const VaultSettings = ({vaultPath, onChangeVault, onClose, onTaskModelsChange=nu
             React.createElement("br"),
             React.createElement("code",{style:{color:W.string,fontSize:"11px"}},
               "export ANTHROPIC_API_KEY=sk-ant-…")
+          ),
+
+          // ── Google Tasks-koppeling ──────────────────────────────────────
+          React.createElement("div",{style:{
+            marginTop:"24px",paddingTop:"20px",borderTop:`1px solid ${W.splitBg}`
+          }},
+            React.createElement("div",{style:{fontSize:"14px",fontWeight:"600",color:W.fg,marginBottom:"4px"}},
+              "📋 Google Tasks"),
+            React.createElement("div",{style:{fontSize:"12px",color:W.fgMuted,marginBottom:"12px",lineHeight:"1.6"}},
+              "Toont je openstaande Google Tasks op het Vandaag-scherm, zodat je ze kunt selecteren en overnemen als taak. Alleen-lezen — de app schrijft nooit naar Google Tasks terug. Vereist een eigen Google Cloud-project (gratis, eenmalig) — zie ",
+              React.createElement("code",{style:{color:W.string,fontSize:"11px"}}, "README.md § Google Tasks koppelen"),
+              " voor de stap-voor-stap-instructies."
+            ),
+            // Duidelijke bevestiging van wat er al is opgeslagen — voorheen
+            // was hier geen enkel signaal zichtbaar na het opslaan.
+            (gtStatus.client_id_preview || gtStatus.client_secret_set) && React.createElement("div",{
+              style:{fontSize:"11px",color:W.fgDim,marginBottom:"8px",display:"flex",gap:"14px",flexWrap:"wrap"}
+            },
+              React.createElement("span",null,
+                "Client ID: ", gtStatus.client_id_preview
+                  ? React.createElement("code",{style:{color:W.string}}, gtStatus.client_id_preview)
+                  : React.createElement("span",{style:{color:W.orange}}, "niet opgeslagen")),
+              React.createElement("span",null,
+                "Client secret: ", gtStatus.client_secret_set
+                  ? React.createElement("span",{style:{color:W.comment}}, "✓ opgeslagen")
+                  : React.createElement("span",{style:{color:W.orange}}, "niet opgeslagen"))
+            ),
+            React.createElement("div",{style:{display:"flex",gap:"8px",marginBottom:"8px",flexWrap:"wrap"}},
+              React.createElement("input",{
+                type:"text", placeholder:"Client ID (…apps.googleusercontent.com)",
+                value:gtClientId, onChange:e=>setGtClientId(e.target.value),
+                style:{flex:"1 1 260px",background:W.bg,border:`1px solid ${W.splitBg}`,
+                       borderRadius:"5px",padding:"7px 10px",color:W.fg,fontSize:"12px",outline:"none"}
+              }),
+              React.createElement("input",{
+                type:"password", placeholder:gtStatus.client_secret_set ? "Client secret (al opgeslagen — laat leeg om te behouden)" : "Client secret",
+                value:gtClientSecret, onChange:e=>setGtClientSecret(e.target.value),
+                style:{flex:"1 1 180px",background:W.bg,border:`1px solid ${W.splitBg}`,
+                       borderRadius:"5px",padding:"7px 10px",color:W.fg,fontSize:"12px",outline:"none"}
+              })
+            ),
+            React.createElement("div",{style:{display:"flex",gap:"8px",alignItems:"center",flexWrap:"wrap"}},
+              React.createElement("button",{
+                onClick: async () => {
+                  const canSave = gtClientId.trim() && (gtClientSecret.trim() || gtStatus.client_secret_set);
+                  if (!canSave) return;
+                  setGtSaving(true);
+                  const r = await api.post("/google-tasks/config", {client_id:gtClientId.trim(), client_secret:gtClientSecret.trim()});
+                  setGtSaving(false);
+                  if (r.ok) { setGtMsg("✓ Opgeslagen"); setGtClientSecret(""); refreshGtStatus(); }
+                  else setGtMsg("✗ " + (r.error || "Opslaan mislukt"));
+                  setTimeout(()=>setGtMsg(""), 4000);
+                },
+                disabled: !(gtClientId.trim() && (gtClientSecret.trim() || gtStatus.client_secret_set)) || gtSaving,
+                style:{background:(gtClientId.trim()&&(gtClientSecret.trim()||gtStatus.client_secret_set))?W.blue:"rgba(255,255,255,0.06)",
+                       color:(gtClientId.trim()&&(gtClientSecret.trim()||gtStatus.client_secret_set))?W.bg:W.fgMuted,
+                       border:"none",borderRadius:"5px",padding:"7px 14px",fontSize:"12px",
+                       cursor:(gtClientId.trim()&&(gtClientSecret.trim()||gtStatus.client_secret_set))?"pointer":"default",fontWeight:"bold"}
+              }, gtSaving ? "…" : "💾 Opslaan"),
+              gtStatus.configured && !gtStatus.connected && React.createElement("button",{
+                onClick: async () => {
+                  const r = await api.get("/google-tasks/auth-url");
+                  if (r.url) { window.open(r.url, "_blank"); setGtMsg("Voltooi de koppeling in het geopende tabblad, kom dan hier terug en klik ↻"); }
+                  else setGtMsg("✗ " + (r.error || "Kon geen koppel-link maken"));
+                },
+                style:{background:"rgba(159,202,86,0.12)",border:`1px solid ${W.comment}`,
+                       color:W.comment,borderRadius:"5px",padding:"7px 14px",fontSize:"12px",
+                       cursor:"pointer",fontWeight:"bold"}
+              }, "🔗 Verbind met Google"),
+              gtStatus.configured && React.createElement("button",{
+                title:"Ververs koppelstatus",
+                onClick: refreshGtStatus,
+                style:{background:"none",border:`1px solid ${W.splitBg}`,color:W.fgMuted,
+                       borderRadius:"5px",padding:"7px 10px",fontSize:"12px",cursor:"pointer"}
+              }, "↻"),
+              gtStatus.connected && React.createElement("span",{
+                style:{fontSize:"12px",color:W.comment,display:"flex",alignItems:"center",gap:"4px"}
+              }, "✓ Verbonden"),
+              gtStatus.connected && React.createElement("button",{
+                onClick: async () => {
+                  await api.post("/google-tasks/disconnect", {});
+                  setGtMsg("Losgekoppeld"); refreshGtStatus();
+                  setTimeout(()=>setGtMsg(""), 3000);
+                },
+                style:{background:"none",border:`1px solid rgba(229,120,109,0.3)`,color:W.orange,
+                       borderRadius:"5px",padding:"7px 10px",fontSize:"12px",cursor:"pointer"}
+              }, "Loskoppelen")
+            ),
+            gtMsg && React.createElement("div",{style:{marginTop:"8px",fontSize:"12px",color:W.fgMuted}}, gtMsg)
           )
         ),
 

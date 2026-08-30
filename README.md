@@ -85,6 +85,8 @@ Het startscherm dat elke sessie richting geeft:
 - **Statistieken** — notities totaal, reviews vandaag, in SR-systeem, openstaande taken
 - **📋 Nieuwe ADR** — Architecture Decision Record met vooraf ingevuld sjabloon (context, beslissing, alternatieven, consequenties, betrokkenen, status-geschiedenis)
 - **Recente activiteit** — notities van de afgelopen 7 dagen met +SR knop
+- **📤 Delen vanuit andere Android-apps** — via het native "Delen"-menu (Google Tasks, Keep, browser, WhatsApp, wat dan ook) rechtstreeks een taak/notitie vastleggen in de dagnotitie van vandaag, met een bevestigingsscherm voordat het opgeslagen wordt. Vereist dat de app als PWA op het beginscherm staat — zie [Offline gebruik](#offline-gebruik-ipad)
+- **📋 Google Tasks** (optioneel, zie [hieronder](#google-tasks-koppelen)) — openstaande taken selecteren en overnemen
 
 ---
 
@@ -95,6 +97,7 @@ Het startscherm dat elke sessie richting geeft:
   - **Regelnummers** — relatieve nummering standaard aan (`:set nornu` om uit te zetten)
   - **Uitgebreid hulpscherm** (`?`) — overzicht van alle sneltoetsen: navigatie, bewerken, text objects, visual, folds, marks/macro's, links (`[[`), bron-markering (`\b`/`\k`/`\e`), AI-tekstverbetering en muisacties
   - **AI-tekstverbetering** (Cmd/Ctrl+I, of `\a` na een selectie) — selecteer tekst (of laat leeg voor de huidige alinea) en kies Verbeteren / Korter / Uitgebreider / Andere toon / een eigen instructie. Het voorstel wordt altijd eerst getoond — nooit automatisch toegepast
+  - **→ Dagnotitie** (`\d`) — de tegenhanger van Fragment→Zettelkasten: stuurt selectie (of de huidige alinea) als taak naar de dagnotitie van vandaag, met een terugverwijzing naar de bronnotitie
 - **Markdown-editor** — rijke teksteditor met syntaxmarkering
 - **Live preview** — split-view editor + gerenderde preview
 - **Outline-editor** — hiërarchische bullets voor notulen en plannen; standaard actief op touch-apparaten, met een altijd-zichtbare toggle naar VIM-mode
@@ -307,6 +310,19 @@ Notebook behoudt zijn gesprek ook in de split-rechts-positie, los van de hoofdwe
 5. Wijzigingen worden automatisch gesynchroniseerd bij herverbinding
 6. Layout past zich responsief aan bij het draaien van de iPad of split-view-multitasking
 
+### Delen vanuit andere apps (Android)
+
+Met de app als PWA op het beginscherm (zelfde "Zet op beginscherm"-stap
+als hierboven, via het deelmenu van je eigen browser op Android) verschijnt
+**"Zettelkasten"** voortaan ook als optie in het native **Delen**-menu van
+elke andere app — Google Tasks, Keep, de browser, WhatsApp, wat dan ook.
+Tik op de gedeelde tekst → toont een bevestigingsscherm → **"→ Toevoegen
+aan dagnotitie"**.
+
+> **Let op:** na het bijwerken van de app moet de PWA eenmalig **verwijderd
+> en opnieuw** op het beginscherm gezet worden — Android cachet de
+> deel-registratie hardnekkig bij een gewone update.
+
 > **Let op:** de standalone PWA (beginscherm-icoon) heeft een aparte opslagcontext van Safari. Cache wissen in Safari-instellingen heeft geen invloed op de PWA.
 
 ---
@@ -327,6 +343,78 @@ Notebook behoudt zijn gesprek ook in de split-rechts-positie, los van de hoofdwe
 - `OPENAI_API_KEY` — OpenAI GPT-modellen
 - `ANTHROPIC_API_KEY` — Anthropic Claude
 - Mistral API-sleutel
+
+---
+
+## Google Tasks koppelen
+
+Toont je openstaande Google Tasks op het "⚡ Vandaag"-scherm, zodat je ze
+kunt selecteren en met één klik overnemen als taak in je dagnotitie. **Puur
+lezen** — de app schrijft nooit terug naar Google Tasks.
+
+> **Waarom niet Google Keep?** Onderzocht, maar Google Keep heeft geen
+> officiële API voor persoonlijke Gmail-accounts (alleen voor zakelijke
+> Workspace-accounts, via een beheerder) — de enige programmatische toegang
+> zou via een niet-officiële bibliotheek moeten, met een hoog-risico
+> "master token" die volledige accounttoegang geeft. Dat past niet bij het
+> privacy-first uitgangspunt van deze app. Google Tasks heeft wél een
+> gewone, officiële API met standaard OAuth — vandaar de keuze.
+
+Er is geen gedeelde app-sleutel — je maakt eenmalig je **eigen, gratis**
+Google Cloud-project aan, alleen voor je eigen gebruik. Duurt ~5 minuten,
+eenmalig.
+
+### Stap 1 — Google Cloud-project aanmaken
+
+1. Ga naar [console.cloud.google.com](https://console.cloud.google.com) en log in met hetzelfde Google-account waar je Google Tasks op gebruikt
+2. Bovenin: **project selecteren → Nieuw project**
+3. Geef een naam (bv. "Zettelkasten") → **Aanmaken**
+
+### Stap 2 — Google Tasks API inschakelen
+
+1. Zoek in de bovenste zoekbalk naar **"Google Tasks API"**
+2. Open het resultaat → **Inschakelen**
+
+### Stap 3 — OAuth-toestemmingsscherm instellen
+
+1. Menu (☰) → **API's en services → OAuth-toestemmingsscherm**
+2. Kies **Extern** (External) → **Aanmaken**
+3. Vul een app-naam in (bv. "Zettelkasten Tasks-koppeling"), je eigen e-mailadres bij "Ondersteuning" en onderaan bij "Contactgegevens ontwikkelaar" → **Opslaan en doorgaan**
+4. Bij "Scopes": niets toevoegen nodig, gewoon **Opslaan en doorgaan**
+5. Bij "Testgebruikers": **+ Add users** → voer je eigen Gmail-adres in → **Toevoegen** → **Opslaan en doorgaan**
+
+Dit laatste stapje is belangrijk: zolang de app in **"Testing"**-status
+staat (de standaard, en voor eigen gebruik hoef je dat nooit te wijzigen),
+werkt de koppeling alleen voor de e-mailadressen die je hier expliciet als
+testgebruiker toevoegt — dat is precies wat je wilt, en voorkomt dat je
+door Google's uitgebreide verificatieproces voor publieke apps hoeft.
+
+### Stap 4 — OAuth-credentials aanmaken
+
+1. Menu (☰) → **API's en services → Inloggegevens**
+2. **+ Inloggegevens maken → OAuth-client-ID**
+3. Applicatietype: **Webtoepassing**
+4. Bij **"Geautoriseerde omleidings-URI's"** → **+ URI toevoegen**, voer exact in
+   (pas de poort aan als je de server niet op 8888 draait):
+   ```
+   http://localhost:8888/api/google-tasks/callback
+   ```
+5. **Maken** — je krijgt nu een **Client-ID** en **Clientgeheim** te zien. Kopieer beide.
+
+### Stap 5 — Koppelen in de app
+
+1. Open de app → **⚙ Instellingen → API-sleutels**, scroll naar **"📋 Google Tasks"**
+2. Plak de Client-ID en het Clientgeheim uit stap 4 → **💾 Opslaan**
+3. Klik **🔗 Verbind met Google** — er opent een nieuw tabblad met Google's toestemmingsscherm
+4. Log in (met het account dat je als testgebruiker toevoegde) en geef toestemming
+5. Je ziet een bevestigingspagina ("✓ Gekoppeld") — dat tabblad kun je sluiten
+6. Terug in de app: klik **↻** naast de knoppen om de status te verversen — er verschijnt nu "✓ Verbonden"
+
+Ga naar het "⚡ Vandaag"-scherm: je openstaande Google Tasks staan er nu,
+aanvinkbaar, met een **"→ Opnemen"**-knop die de geselecteerde taken direct
+aan de dagnotitie van vandaag toevoegt.
+
+**Loskoppelen** kan altijd via dezelfde instellingenpagina.
 
 ---
 

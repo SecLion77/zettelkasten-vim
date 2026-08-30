@@ -23,5 +23,14 @@
     }
   ],
   "categories": ["productivity", "utilities"],
-  "screenshots": []
+  "screenshots": [],
+  "share_target": {
+    "action": "/",
+    "method": "GET",
+    "params": {
+      "title": "shared_title",
+      "text": "shared_text",
+      "url": "shared_url"
+    }
+  }
 }
