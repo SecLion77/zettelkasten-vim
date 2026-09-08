@@ -1380,21 +1380,13 @@ const App = () => {
     setNotes([...NoteStore.getAll()]);
   }, []);
 
-  // ── Error / loading ───────────────────────────────────────────────────────
-  if (error) return React.createElement("div", {
-    style:{display:"flex",alignItems:"center",justifyContent:"center",
-           height:"100vh",background:W.bg,color:W.fg,
-           flexDirection:"column",gap:"16px",padding:"32px",textAlign:"center"}
-  },
-    React.createElement("div", {style:{fontSize:"36px"}}, "⚠️"),
-    React.createElement("div", {style:{fontSize:"15px",color:W.orange}}, "Server niet bereikbaar"),
-    React.createElement("pre", {style:{fontSize:"14px",color:W.fgMuted,
-      background:W.bg2,padding:"16px",borderRadius:"8px",
-      border:`1px solid ${W.splitBg}`,lineHeight:"1.8",maxWidth:"400px",
-      whiteSpace:"pre-wrap",textAlign:"left"}}, error),
-    React.createElement("div", {style:{fontSize:"14px",color:W.fgDim}},
-      "Zorg dat server.py draait, ververs dan de pagina.")
-  );
+  // BUG (gevonden + gefixt): dit blok (MAIN_TABS + activeMain/activeSubs
+  // + de forceRender-hooks) stond hierna, NA de "if (error) return"
+  // hieronder. Zodra de server tijdelijk onbereikbaar was (bv. een
+  // herstart) en daarna weer terugkwam, veranderde het aantal
+  // aangeroepen hooks tussen twee renders — "Rendered fewer hooks than
+  // expected" (React-fout #300). Hooks moeten ALTIJD vóór een
+  // conditionele return staan, ongeacht of die return zelf hooks bevat.
 
   const MAIN_TABS = [
     { id:"today",      icon:"⚡", label:"Vandaag",     sub: null },
@@ -1486,6 +1478,23 @@ const App = () => {
       window._graphToNotebook = null;
     };
   }, []);
+
+  // ── Error / loading ───────────────────────────────────────────────────────
+  if (error) return React.createElement("div", {
+    style:{display:"flex",alignItems:"center",justifyContent:"center",
+           height:"100vh",background:W.bg,color:W.fg,
+           flexDirection:"column",gap:"16px",padding:"32px",textAlign:"center"}
+  },
+    React.createElement("div", {style:{fontSize:"36px"}}, "⚠️"),
+    React.createElement("div", {style:{fontSize:"15px",color:W.orange}}, "Server niet bereikbaar"),
+    React.createElement("pre", {style:{fontSize:"14px",color:W.fgMuted,
+      background:W.bg2,padding:"16px",borderRadius:"8px",
+      border:`1px solid ${W.splitBg}`,lineHeight:"1.8",maxWidth:"400px",
+      whiteSpace:"pre-wrap",textAlign:"left"}}, error),
+    React.createElement("div", {style:{fontSize:"14px",color:W.fgDim}},
+      "Zorg dat server.py draait, ververs dan de pagina.")
+  );
+
 
   if (!loaded) return React.createElement("div", {
     style:{display:"flex",alignItems:"center",justifyContent:"center",
@@ -2042,14 +2051,25 @@ const App = () => {
     React.createElement("div", {
       style:{flex:1, display:"flex", flexDirection:"column", overflow:"hidden", minHeight:0}},
 
-      // NotesTab altijd in DOM — display:none bewaart scroll + VIM-state
+      // NotesTab altijd in DOM — display:none bewaart scroll + VIM-state.
+      // BUG (gevonden + gefixt): notesTabEl stond hier áltijd als kind,
+      // ook wanneer splitMode actief is — maar in split-modus wordt
+      // datzelfde notesTabEl-element óók op de split-linker-positie
+      // gerenderd (verderop in deze functie). Eén React-elementinstantie
+      // kan niet gelijktijdig op twee posities in de boom bestaan, ook
+      // niet als de ene plek CSS-verborgen is (display:none betekent nog
+      // steeds "onderdeel van de boom"). Dit veroorzaakte een crash
+      // (React-fout #300) zodra binnen split-modus iets NotesTab's eigen
+      // state liet updaten (bv. een nieuwe notitie aanmaken). Fix: hier
+      // alleen renderen als we ECHT niet in split-modus zitten — dan
+      // bestaat het element maar op één plek tegelijk.
       React.createElement("div", {
         key:"notes-always",
         style:{
           flex:1, display:(tab==="notes"&&!splitMode)?"flex":"none",
           flexDirection:"row", overflow:"hidden", minHeight:0
         }
-      }, notesTabEl),
+      }, !splitMode ? notesTabEl : null),
 
       // Notebook altijd in DOM — display:none bewaart chatgeschiedenis e.d.
       React.createElement("div", {

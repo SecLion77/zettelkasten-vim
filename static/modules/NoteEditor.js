@@ -14,6 +14,7 @@ const NoteEditor = ({
   isMobile = false,
   goyoMode = false,
   onSave,
+  onAutoSave = null,
   onClose,
   onDelete,
   onToggleGoyo,
@@ -29,6 +30,45 @@ const NoteEditor = ({
   const [editTitle,   setEditTitle]   = useState(note?.title   || "");
   const [editContent, setEditContent] = useState(note?.content || "");
   const [editTags,    setEditTags]    = useState(note?.tags    || []);
+
+  // ── Auto-save (debounced, 2s na de laatste wijziging) ───────────────────
+  // Onderzoek naar gangbare auto-save-intervallen (Google Docs ~5s, diverse
+  // editor-bibliotheken 5-10s, en het bestaande precedent in déze app zelf
+  // — de dagnotitie bewaart al na 1,5s stilte) wijst allemaal op een
+  // debounce van enkele seconden na tikken-stoppen, niet een vaste
+  // periodieke timer los van activiteit. 2s hier: iets ruimer dan de
+  // dagnotitie (langere, complexere teksten dan losse dagboek-regels),
+  // maar nog steeds ruim binnen de tijd die je normaal tussen tabs wisselt.
+  // Gebruikt bewust de kale, "stille" opslagfunctie (onAutoSave) — niet
+  // dezelfde onSave die ook de editor sluit, en niet dezelfde validatie-UI
+  // (titel-foutmelding + focus stelen) als de handmatige opslaan-knop: een
+  // notitie die je nog geen titel gaf mag gewoon stilzwijgend wachten tot
+  // je die wél geeft, zonder elke 2 seconden een storende melding te tonen.
+  const autoSaveTimer = useRef(null);
+  const lastAutoSaveNoteId = useRef(note?.id);
+  useEffect(() => {
+    // Sla de trigger over als dit een notitiewissel is (of de allereerste
+    // render) — dan komt de wijziging van het aparte sync-effect hierboven
+    // ([note?.id]), niet van een echte gebruikersbewerking. Zonder deze
+    // check zou openen van een andere notitie zelf al een auto-save-tik
+    // veroorzaken.
+    if (note?.id !== lastAutoSaveNoteId.current) {
+      lastAutoSaveNoteId.current = note?.id;
+      return;
+    }
+    if (!onAutoSave || !note) return;
+    clearTimeout(autoSaveTimer.current);
+    autoSaveTimer.current = setTimeout(() => {
+      onAutoSave({
+        ...note,
+        title:   editTitle,
+        content: editContent,
+        tags:    [...new Set([...editTags, ...extractTags(editContent)])],
+        modified: new Date().toISOString(),
+      });
+    }, 2000);
+    return () => clearTimeout(autoSaveTimer.current);
+  }, [editTitle, editContent, editTags, note, onAutoSave]);
 
   // iPad/iOS: detecteer touch-apparaat voor native textarea modus
   const isTouch = typeof window !== "undefined" &&

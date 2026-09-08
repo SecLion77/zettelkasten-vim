@@ -879,7 +879,15 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
       }
       return;
     }
-    if (cmd==="w")            { onSave(); setStatus("opgeslagen ✓"); return; }
+    if (cmd==="w") {
+      onSave(); setStatus("opgeslagen ✓");
+      // Escape puur om op te slaan (":w" als allereerste actie na het
+      // verlaten van INSERT, zie _justLeftInsert hierboven) — keer dan
+      // automatisch terug naar INSERT i.p.v. de gebruiker in NORMAL te
+      // laten staan en een aparte "i" te laten indrukken om door te typen.
+      if (s._justLeftInsert) { s._justLeftInsert = false; setMode("INSERT"); }
+      return;
+    }
     if (cmd==="wq")           { onSave(); onEscape(); return; }
     if (cmd==="q!")           { onEscape(); return; }
     if (cmd==="goyo")         { onToggleGoyo?.(); return; }
@@ -1443,6 +1451,12 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
           }
           delete s._insertStart; delete s._insertSnapshot; delete s._insertText;
         }
+        // Onthoud dat we ZOJUIST INSERT verlieten — als de allereerste
+        // volgende toets ":" is (dus Escape puur om even te kunnen
+        // opslaan), keren we na ":w" automatisch terug naar INSERT i.p.v.
+        // de gebruiker in NORMAL te laten staan. Wordt hieronder direct
+        // weer gewist zodra er iets anders dan ":" gebeurt.
+        s._justLeftInsert = true;
         setMode("NORMAL");
         setStatus("");
         draw();
@@ -1925,6 +1939,12 @@ const VimEditor = ({value, onChange, onSave, onEscape, noteTags=[], onTagsChange
     if (s.macroRec !== null && e.key !== "q") {
       s.macroKeys.push(e.key);
     }
+
+    // _justLeftInsert overleeft alleen als ":" de allereerste toets is na
+    // Escape — bij elke andere toets (een normale NORMAL-mode-actie) is de
+    // gebruiker duidelijk niet alleen even aan het opslaan, dus dan gewoon
+    // in NORMAL laten staan zoals gebruikelijk.
+    if (e.key !== ":") s._justLeftInsert = false;
 
     switch (e.key) {
       // Mode wissels

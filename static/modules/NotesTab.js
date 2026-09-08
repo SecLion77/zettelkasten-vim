@@ -449,6 +449,7 @@ const NotesTab = ({
         isMobile,
         goyoMode,
         onSave:           handleSaveAndClose,
+        onAutoSave:       handleSave,
         onClose:          () => setVimMode(false),
         onDelete:         handleDelete,
         onToggleGoyo:     () => onGoyoChange?.(!goyoMode),
