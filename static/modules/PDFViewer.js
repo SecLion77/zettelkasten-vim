@@ -215,9 +215,17 @@ const PdfToolbarDivider = ({ W }) => React.createElement("span", {
   style: { width: "1px", alignSelf: "stretch", background: W.splitBg, flexShrink: 0, margin: "0 2px" }
 });
 
-const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, onAutoSummarize, onDeletePdf, onPasteToNote=null, onAddNote=null, onSaveNote=null, onOpenNote=null, notes=[], isTablet=false, onTogglePdfRead=null, pdfAnnotations=[], openPdfName=null, openPdfPage=null, onOpenPdfConsumed=null}) => {
+const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, onAutoSummarize, onDeletePdf, onPasteToNote=null, onAddNote=null, onSaveNote=null, onOpenNote=null, notes=[], isTablet=false, onTogglePdfRead=null, pdfAnnotations=[], openPdfName=null, openPdfPage=null, onOpenPdfConsumed=null, onCurrentFileChange=null}) => {
   const [pdfDoc,     setPdfDoc]     = useState(null);
   const [pdfFile,    setPdfFile]    = useState(null);
+  // Meldt het daadwerkelijk geladen bestand aan de ouder — in
+  // tegenstelling tot openPdfName (een kortstondig "open dit"-signaal dat
+  // PDFViewer zelf meteen weer op null zet zodra het verwerkt is) blijft
+  // dit de hele tijd dat een PDF zichtbaar is kloppen. Nodig voor de
+  // Lezen-tab, waar het canvas moet weten welke PDF er rechts open staat.
+  useEffect(() => {
+    onCurrentFileChange?.(pdfFile?.name || null);
+  }, [pdfFile?.name]);
   const [pageNum,    setPageNum]    = useState(1);   // huidige zichtbare pagina (voor annotaties)
   const pageNumRef      = useRef(1);      // ref-versie: altijd actueel zonder closure-problemen
   const pdfDocRef        = useRef(null);
@@ -1399,6 +1407,29 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
     await AnnotationStore.update(id, patch);
   };
 
+  // Highlight bewust tot kaart maken: notitie (met card_source) aanmaken en
+  // de highlight zelf markeren als "al een kaart". Eén functie voor beide
+  // plekken waar je dit kunt doen (de highlight-lijst én het ANNOTATIES-
+  // zijpaneel) — voorheen stond de logica alleen in de eerste, waardoor
+  // highlights uit het zijpaneel nooit een kaart konden worden.
+  const promoteHighlightToCard = async (h) => {
+    if (!onSaveNote || !pdfFile || h.cardNoteId) return;
+    const stem  = pdfFile.name.replace(/\.pdf$/i,"");
+    const newId = genId();
+    await onSaveNote({
+      id: newId,
+      title: (h.text ? h.text.slice(0,50) : "HL") + " (p."+h.page+")",
+      content: "> "+layerWrap(h.text||"",h.colorId)+(h.note?"\n"+h.note:"")
+               +"\n\n---\n*Bron: [["+stem+"]], p."+h.page+"*",
+      tags: ["highlight","pdf"], noteType: "literature",
+      card_source: { pdf: pdfFile.name, page: h.page, highlightId: h.id },
+    });
+    await AnnotationStore.update(h.id, { cardNoteId: newId });
+    setHighlights(AnnotationStore.getAll());
+    // Laat een open Lezen-canvas (links) weten dat er een kaart bij is.
+    window.dispatchEvent(new CustomEvent("zk:card-promoted", { detail: { pdf: pdfFile.name } }));
+  };
+
   const removeHighlight=async(id)=>{
     await AnnotationStore.remove(id);
     if(editingId===id)setEditingId(null);
@@ -2530,17 +2561,23 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
                   h.note&&React.createElement("div",{style:{fontSize:"12px",color:W.fgDim,padding:"4px 6px",
                     background:hc.bg,borderRadius:"3px",marginTop:"4px"}},h.note),
                   React.createElement("div",{style:{display:"flex",gap:"6px",marginTop:"6px"}},
-                    React.createElement("button",{onClick:()=>{
-                        const stem=pdfFile.name.replace(/\.pdf$/i,"");
-                        if(onSaveNote) onSaveNote({
-                          title:(h.text?h.text.slice(0,50):"HL")+" (p."+h.page+")",
-                          content:"> "+layerWrap(h.text||"",h.colorId)+(h.note?"\n"+h.note:"")+"\n\n---\n*Bron: [["+stem+"]], p."+h.page+"*",
-                          tags:["highlight","pdf"],noteType:"literature"});
-                      },
-                      style:{fontSize:"11px",padding:"2px 8px",borderRadius:"4px",
-                        background:W.commentBg||"rgba(159,202,86,.1)",color:W.tagColor||W.comment,
-                        border:`1px solid ${W.tagBorder||"rgba(159,202,86,.28)"}`,cursor:"pointer"}
-                    },"+ notitie"),
+                    h.cardNoteId
+                      // Highlight is al gepromoveerd tot kaart — badge i.p.v. knop,
+                      // opent de notitie i.p.v. 'm nogmaals aan te maken. Card
+                      // Axis-gedachte: één highlight ↔ één kaart, nooit twee.
+                      ? React.createElement("button",{
+                          title:"Al een kaart — open de notitie",
+                          onClick:()=>{ if(onOpenNote) onOpenNote(h.cardNoteId); },
+                          style:{fontSize:"11px",padding:"2px 8px",borderRadius:"4px",
+                            background:"rgba(138,198,242,0.1)",color:W.blue,
+                            border:`1px solid rgba(138,198,242,0.3)`,cursor:"pointer",
+                            display:"flex",alignItems:"center",gap:"4px"}
+                        },"🗂 kaart")
+                      : React.createElement("button",{onClick:()=>promoteHighlightToCard(h),
+                        style:{fontSize:"11px",padding:"2px 8px",borderRadius:"4px",
+                          background:W.commentBg||"rgba(159,202,86,.1)",color:W.tagColor||W.comment,
+                          border:`1px solid ${W.tagBorder||"rgba(159,202,86,.28)"}`,cursor:"pointer"}
+                      },"+ kaart"),
                     React.createElement("button",{onClick:()=>{AnnotationStore.remove(h.id);setHighlights(AnnotationStore.getAll());},
                       style:{fontSize:"11px",padding:"2px 8px",borderRadius:"4px",background:"none",
                         color:W.fgMuted,border:`1px solid ${W.splitBg}`,cursor:"pointer"}},"× wis")
@@ -2814,6 +2851,24 @@ const PDFViewer = ({pdfNotes, setPdfNotes, allTags, serverPdfs, onRefreshPdfs, o
                 '"',h.text&&h.text.substring(0,80),h.text&&h.text.length>80?"...":"",'"'),
               h.note&&!isEditing&&React.createElement("div",{style:{fontSize:"11px",color:W.fgDim,
                 padding:"3px 6px",background:col.bg,borderRadius:"3px",marginBottom:"4px"}},h.note),
+              // Bewust tot kaart maken — altijd zichtbaar, niet pas na
+              // uitklappen. Bestaat de kaart al (cardNoteId), dan opent de
+              // knop die notitie i.p.v. een tweede aan te maken.
+              React.createElement("div",{style:{display:"flex",gap:"6px",marginBottom:isEditing?"2px":"0"}},
+                h.cardNoteId
+                  ? React.createElement("button",{
+                      title:"Al een kaart — open de notitie",
+                      onClick:()=>{ if(onOpenNote) onOpenNote(h.cardNoteId); },
+                      style:{fontSize:"11px",padding:"2px 8px",borderRadius:"4px",cursor:"pointer",
+                        background:"rgba(138,198,242,0.1)",color:W.blue,
+                        border:"1px solid rgba(138,198,242,0.3)"}},"🗂 kaart")
+                  : React.createElement("button",{
+                      title:"Maak van deze highlight een kaart (notitie + bronverwijzing)",
+                      onClick:()=>promoteHighlightToCard(h),
+                      style:{fontSize:"11px",padding:"2px 8px",borderRadius:"4px",cursor:"pointer",
+                        background:W.commentBg||"rgba(159,202,86,.1)",color:W.tagColor||W.comment,
+                        border:`1px solid ${W.tagBorder||"rgba(159,202,86,.28)"}`}},"+ kaart")
+              ),
               isEditing&&React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:"4px",marginTop:"4px"}},
                 React.createElement("textarea",{value:h.note||"",rows:3,placeholder:"Notitie...",
                   onChange:e=>updateHighlight(h.id,{note:e.target.value}),

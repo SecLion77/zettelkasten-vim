@@ -1,7 +1,7 @@
 // ── Graph ───────────────────────────────────────────────────────────────────
 // Deps: W, genId, extractLinks, extractTypedLinks, LINK_TYPES, extractTags, TagFilterBar
 
-const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDeleteNote, llmModel=""}) => {
+const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDeleteNote, llmModel="", onOpenPdf=null}) => {
   const { useState, useRef, useCallback, useMemo, useEffect } = React;
 
   const cvRef      = useRef(null);
@@ -584,6 +584,7 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
         tags:n.tags||[], type:"note",
         linkCount:extractLinks(n.content).length,
         backCount:notes.filter(x=>extractLinks(x.content).includes(n.id)).length,
+        card_source:n.card_source||null,
       })),
       ...tagNodes,
     ];
@@ -1124,6 +1125,16 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
           ctx.textAlign="center";
           ctx.fillText("📌",n.x,n.y-r-2);
         }
+        // Kaart-badge — deze knoop komt uit een PDF-highlight (Card Axis:
+        // highlight, graaf-knoop en notitie zijn hetzelfde ding, hier
+        // zichtbaar gemaakt als knoop). Rechts naast het pin-icoon, zodat
+        // ze niet overlappen als een notitie toevallig ook vastgezet is.
+        if(n.card_source){
+          ctx.fillStyle="rgba(122,168,200,0.85)";
+          ctx.font=`${Math.max(8,10/v.scale)}px sans-serif`;
+          ctx.textAlign="center";
+          ctx.fillText("🗂",n.x+r+3,n.y-r-2);
+        }
 
         // Label
         ctx.globalAlpha=dimmed?0.18:1;
@@ -1144,6 +1155,7 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
             if(n.tags?.length) lines.push(n.tags.map(t=>"#"+t).join(" ").substring(0,36));
             if(communityMode&&n.communityIdx!==undefined) lines.push(`community ${n.communityIdx+1}`);
             if(n.pinned) lines.push("📌 vastgezet");
+            if(n.card_source) lines.push(`🗂 ${n.card_source.pdf}, p.${n.card_source.page}`);
           }
           const ttW=Math.min(240,Math.max(...lines.map(l=>l.length))*7+24);
           const ttH=lines.length*16+12;
@@ -1797,6 +1809,13 @@ const Graph = ({notes, onSelect, selectedId, localMode=false, onUpdateNote, onDe
       [
         {label:"👁 Bekijk notitie", action:()=>{ setPeekNoteId(ctxMenu.node.id); setCtxMenu(null); }},
         {label:"📖 Open notitie", action:()=>{ onSelect(ctxMenu.node.id); setCtxMenu(null); }},
+        // Alleen voor knopen die uit een PDF-highlight zijn gepromoveerd
+        // (Card Axis: highlight ↔ graaf-knoop ↔ notitie, hier de directe
+        // sprong terug naar de brontekst).
+        ...(ctxMenu.node.card_source ? [{
+          label:`↗ Open bron-PDF (p.${ctxMenu.node.card_source.page})`,
+          action:()=>{ onOpenPdf?.(ctxMenu.node.card_source.pdf, ctxMenu.node.card_source.page); setCtxMenu(null); }
+        }] : []),
         {label:pinnedIds.has(ctxMenu.node.id)?"📌 Losmaak (unpin)":"📌 Vastzetten (pin)",
          action:()=>{
            setPinnedIds(prev=>{

@@ -151,6 +151,7 @@ class VaultManager:
         if note.get("noteType"):    fm += f"noteType: {note['noteType']}\n"
         if note.get("layer"):       fm += f"layer: {note['layer']}\n"
         if note.get("fields"):      fm += "fields: " + json.dumps(note['fields'], ensure_ascii=False) + "\n"
+        if note.get("card_source"): fm += "card_source: " + json.dumps(note['card_source'], ensure_ascii=False) + "\n"
         fm += "---\n\n"
         return fm + note.get("content","")
 
@@ -158,7 +159,7 @@ class VaultManager:
         try: text = path.read_text(encoding="utf-8")
         except: return None
         note = {"id":path.stem,"title":path.stem,"tags":[],"content":"",
-                "created":"","modified":"","sourceUrl":"","importedAt":"","isRead":False,"noteType":"","layer":"","fields":{}}
+                "created":"","modified":"","sourceUrl":"","importedAt":"","isRead":False,"noteType":"","layer":"","fields":{},"card_source":None}
         if text.startswith("---"):
             parts = text.split("---",2)
             if len(parts)>=3:
@@ -179,6 +180,9 @@ class VaultManager:
                     elif line.startswith("fields:"):
                         try: note["fields"] = json.loads(line[7:].strip())
                         except: note["fields"] = {}
+                    elif line.startswith("card_source:"):
+                        try: note["card_source"] = json.loads(line[12:].strip())
+                        except: note["card_source"] = None
         else: note["content"] = text
         # Fallback: gebruik bestandsdatum als modified/created ontbreekt
         if not note["modified"] or not note["created"]:
@@ -277,13 +281,47 @@ class VaultManager:
     # technisch een geldig type; dit is de canonieke set die de UI toont.
     LINK_TYPES = ["inspireert", "weerlegt", "bouwt-voort-op", "zie-ook", "verwijst-naar"]
 
+    def get_cards_for_pdf(self, pdf_name: str) -> list:
+        """Notities die uit highlights van deze PDF zijn gepromoveerd tot
+        kaart, voor het vullen van een Lezen-bord. Retourneert
+        [{id,title,page,highlightId}], gesorteerd op pagina.
+
+        Twee bronnen, in deze volgorde:
+        1. card_source.pdf === pdf_name  (machine-leesbaar, nieuw)
+        2. de leesbare bronregel '*Bron: [[naam]], p.N*' die elke
+           highlight-promotie al sinds jaar en dag in de notitie zet —
+           vangt notities op van vóór card_source bestond, en dekt ook het
+           geval dat een extra veld onderweg door een andere laag is
+           weggefilterd."""
+        import re
+        stem = re.sub(r"\.pdf$", "", pdf_name, flags=re.I).strip().lower()
+        bron_re = re.compile(r"\*Bron:\s*\[\[(.+?)\]\],\s*p\.(\d+)\*")
+        cards, seen = [], set()
+        for n in self.load_notes():
+            cs = n.get("card_source") or {}
+            if cs.get("pdf") == pdf_name:
+                page, hid = cs.get("page"), cs.get("highlightId")
+            else:
+                m = bron_re.search(n.get("content") or "")
+                if not m or m.group(1).strip().lower() != stem:
+                    continue
+                page, hid = int(m.group(2)), None
+            if n["id"] in seen:
+                continue
+            seen.add(n["id"])
+            cards.append({"id": n["id"], "title": n.get("title") or n["id"],
+                          "page": page, "highlightId": hid})
+        cards.sort(key=lambda c: c["page"] or 0)
+        return cards
+
     def get_typed_graph(self) -> dict:
         """Bouwt graafdata (nodes + getypeerde edges) voor de graafweergave.
         Retourneert {nodes:[{id,title,tags,noteType}], edges:[{source,target,type}]}."""
         notes = self.load_notes()
         note_map = {n["id"]: n for n in notes}
         nodes = [{"id": n["id"], "title": n.get("title") or n["id"],
-                   "tags": n.get("tags", []), "noteType": n.get("noteType", "")}
+                   "tags": n.get("tags", []), "noteType": n.get("noteType", ""),
+                   "cardSource": n.get("card_source")}
                   for n in notes]
         edges = []
         seen = set()
@@ -2437,6 +2475,13 @@ class ZKHandler(BaseHTTPRequestHandler):
             return route()
         if p == "/api/google-tasks/callback":
             return self._google_tasks_callback()
+        if p == "/api/cards-for-pdf":
+            from urllib.parse import parse_qs, urlparse as _up
+            qs = parse_qs(_up(self.path).query)
+            pdf_name = qs.get("pdf", [""])[0]
+            if not pdf_name:
+                return self._send(400, {"error": "pdf-parameter vereist"})
+            return self._send(200, {"cards": self.vault.get_cards_for_pdf(pdf_name)})
         if p.startswith("/api/browse"):
             from urllib.parse import parse_qs, urlparse as _up
             qs = parse_qs(_up(self.path).query)
@@ -2587,9 +2632,12 @@ class ZKHandler(BaseHTTPRequestHandler):
                 self.wfile.write(data)
                 return
 
-        # PWA iconen (icon-192.png, icon-512.png)
-        if p in ("/icon-192.png", "/icon-512.png", "/apple-touch-icon.png"):
-            fp = STATIC_DIR / p.lstrip("/")
+        # PWA iconen (icon-192.png, icon-512.png). /favicon.ico (die elke
+        # browser uit zichzelf opvraagt) wijst naar hetzelfde PNG-icoon —
+        # browsers accepteren PNG onder die naam, en het voorkomt de 404
+        # in de console.
+        if p in ("/icon-192.png", "/icon-512.png", "/apple-touch-icon.png", "/favicon.ico"):
+            fp = STATIC_DIR / ("icon-192.png" if p == "/favicon.ico" else p.lstrip("/"))
             if fp.exists():
                 data = fp.read_bytes()
                 self.send_response(200)

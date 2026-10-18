@@ -69,13 +69,71 @@ function buildNeighborhood(noteId, notes, maxLevel = 2) {
   return [...level1, ...level2.sort((a,b) => b.weight - a.weight).slice(0,4)];
 }
 
-const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", serverImages = [], pendingNotes = null, onClearPending, onShowInGraph }) => {
+// ── Mindmap-weergave: generieke boom-layout op basis van kaarten +
+// verbindingen ────────────────────────────────────────────────────────────
+// Puur een berekende "overlay" voor weergave/hit-test in mindmap-modus —
+// raakt de opgeslagen x/y van kaarten (canvas-modus) nooit aan. Dat is de
+// kern van "context niet verliezen bij het wisselen": beide weergaven
+// lezen dezelfde onderliggende kaarten+verbindingen, alleen de POSITIE
+// waarop ze getekend worden verschilt per modus.
+function computeMindmapLayout(cards, connections) {
+  if (!cards.length) return [];
+  const childrenOf = {}, hasParent = new Set();
+  connections.forEach(c => {
+    (childrenOf[c.from] = childrenOf[c.from] || []).push(c.to);
+    hasParent.add(c.to);
+  });
+  // Wortels: kaarten zonder inkomende verbinding. Geen enkele (bv. een
+  // cykel)? Neem de eerste kaart als noodgreep — voorkomt een leeg canvas.
+  let roots = cards.filter(c => !hasParent.has(c.id));
+  if (!roots.length) roots = [cards[0]];
+
+  const LEVEL_GAP = 260, CARD_GAP = 90;
+  const depthOf = {}, order = [];
+  const visited = new Set();
+  const queue = roots.map(r => ({ id: r.id, depth: 0 }));
+  while (queue.length) {
+    const { id, depth } = queue.shift();
+    if (visited.has(id)) continue;
+    visited.add(id);
+    depthOf[id] = depth;
+    order.push(id);
+    (childrenOf[id] || []).forEach(cid => { if (!visited.has(cid)) queue.push({ id: cid, depth: depth + 1 }); });
+  }
+  // Kaarten die vanuit geen enkele wortel bereikbaar zijn (losse eilandjes,
+  // bv. nog niet verbonden nieuwe kaarten) krijgen depth 0.
+  cards.forEach(c => { if (!(c.id in depthOf)) { depthOf[c.id] = 0; order.push(c.id); } });
+
+  const byDepth = {};
+  order.forEach(id => { const d = depthOf[id]; (byDepth[d] = byDepth[d] || []).push(id); });
+
+  const posById = {};
+  Object.keys(byDepth).sort((a,b)=>a-b).forEach(depth => {
+    const ids = byDepth[depth];
+    ids.forEach((id, i) => {
+      posById[id] = { x: depth * LEVEL_GAP, y: i * CARD_GAP - ((ids.length-1)*CARD_GAP)/2 };
+    });
+  });
+
+  return cards.map(c => ({ ...c, x: posById[c.id].x, y: posById[c.id].y }));
+}
+
+const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", serverImages = [], pendingNotes = null, onClearPending, onShowInGraph, pdfScope = null, lezenContext = false }) => {
   const { useState, useEffect, useRef, useCallback } = React;
+  // lezen = we draaien binnen de Lezen-tab (ook als er nog geen PDF open is)
+  const lezen = !!pdfScope || lezenContext;
 
   // ── State ────────────────────────────────────────────────────────────────
   const [cards, setCards]         = useState([]);
   const [connections, setCons]    = useState([]);
   const [selected, setSelected]   = useState(null);   // card id
+  // "canvas" = vrije, zelf bepaalde plaatsing (bestaand gedrag, ongewijzigd).
+  // "mindmap" = dezelfde kaarten+verbindingen, getoond als berekende boom —
+  // alleen relevant/getoond als deze Whiteboard-instantie vanuit de nieuwe
+  // Lezen-tab wordt gebruikt (pdfScope gezet); de losse Canvas-tab laat
+  // deze schakelaar gewoon weg en gedraagt zich exact als voorheen.
+  const [viewMode, setViewMode]   = useState("canvas");
+  const [pdfMsg, setPdfMsg]       = useState("");   // korte terugmelding bij "kaarten ophalen"
   const [editingId, setEditingId] = useState(null);   // card in tekst-edit
   const [tool, setTool]           = useState("select"); // select | connect | text | note
   const [boards, setBoards]       = useState([]);     // beschikbare bord-IDs
@@ -126,6 +184,16 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
   const dragging  = useRef(null);   // { id, startX, startY, startCX, startCY }
   const afRef     = useRef(null);
   const stateRef  = useRef({ cards: [], connections: [] });
+  // effectiveCardsRef: wat er getekend/aangeklikt wordt — gelijk aan
+  // stateRef.current.cards in canvas-modus, berekende layout in
+  // mindmap-modus. stateRef.current.cards zelf (de opgeslagen bron)
+  // verandert hierdoor nooit.
+  const effectiveCardsRef = useRef([]);
+  useEffect(() => {
+    effectiveCardsRef.current = viewMode === "mindmap"
+      ? computeMindmapLayout(cards, connections)
+      : cards;
+  }, [cards, connections, viewMode]);
 
   // Strip markdown voor plain-text preview
   const stripMd = (t = "") => t
@@ -307,7 +375,7 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
 
   const cardAt = (sx, sy) => {
     const { x, y } = toWorld(sx, sy);
-    const cds = stateRef.current.cards;
+    const cds = effectiveCardsRef.current;
     // Zoek van achter naar voren (bovenste kaart eerst)
     for (let i = cds.length - 1; i >= 0; i--) {
       const c = cds[i];
@@ -341,7 +409,8 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
         dirtyRef.current = false;
         const CW = cv.width / dpr, CH = cv.height / dpr;
         const v  = viewRef.current;
-        const { cards: cds, connections: cons } = stateRef.current;
+        const cds = effectiveCardsRef.current;
+        const { connections: cons } = stateRef.current;
 
         ctx.clearRect(0, 0, CW, CH);
 
@@ -598,6 +667,94 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
     setCards(next);
     saveBoard(next, stateRef.current.connections);
     return card;
+  }, [saveBoard]);
+
+  // ── Kaarten van de gekoppelde PDF ophalen (Lezen-tab) ───────────────────
+  // Haalt alle notities op die via card_source aan pdfScope hangen en zet
+  // ze als kaarten op dit bord, in een simpel grid — hergebruikt exact
+  // dezelfde grid-layout als de bestaande pendingNotes-batch hieronder.
+  // Notities die al als kaart aanwezig zijn (zelfde noteId) worden
+  // overgeslagen, zodat de knop veilig herhaaldelijk te klikken is.
+  const pdfMsgTimer = useRef(null);
+  const flashPdfMsg = useCallback((m) => {
+    setPdfMsg(m);
+    clearTimeout(pdfMsgTimer.current);
+    pdfMsgTimer.current = setTimeout(() => setPdfMsg(""), 6000);
+  }, []);
+
+  const loadPdfCards = useCallback(async () => {
+    if (!pdfScope) return;
+    try {
+      const r = await fetch(`/api/cards-for-pdf?pdf=${encodeURIComponent(pdfScope)}`);
+      if (!r.ok) {
+        // 404 = oude server.py zonder deze route
+        flashPdfMsg(`✗ Server antwoordde ${r.status} — is server.py bijgewerkt en herstart?`);
+        return;
+      }
+      const d = await r.json();
+      const all = d.cards || [];
+      if (!all.length) {
+        flashPdfMsg("Nog geen kaarten voor deze PDF — klik '+ kaart' bij een highlight in het annotatiepaneel.");
+        return;
+      }
+      const existingNoteIds = new Set(stateRef.current.cards.map(c => c.noteId).filter(Boolean));
+      const toAdd = all.filter(c => !existingNoteIds.has(c.id));
+      if (!toAdd.length) {
+        flashPdfMsg(`Alle ${all.length} kaart${all.length===1?"":"en"} van deze PDF staan al op dit bord.`);
+        return;
+      }
+      const cols = 3, colW = 290, rowH = 170;
+      const startCount = stateRef.current.cards.length;
+      toAdd.forEach((c, i) => {
+        const idx = startCount + i;
+        const col = idx % cols, row = Math.floor(idx / cols);
+        addCard(80 + col * colW, 80 + row * rowH, c.title, 1, c.id);
+      });
+      flashPdfMsg(`✓ ${toAdd.length} kaart${toAdd.length===1?"":"en"} toegevoegd`);
+    } catch(e) {
+      console.error("Kaarten van PDF ophalen mislukt:", e);
+      flashPdfMsg("✗ Ophalen mislukt: " + e.message);
+    }
+  }, [pdfScope, addCard, flashPdfMsg]);
+
+  // Maak je rechts bewust een kaart van een highlight (+ kaart), dan komt
+  // die meteen op dit bord — je hoeft niet nog eens op "ophalen" te klikken.
+  // Het blijft een bewuste handeling: de trigger is jouw klik op "+ kaart".
+  useEffect(() => {
+    if (!pdfScope) return;
+    const onPromoted = (e) => { if (e.detail?.pdf === pdfScope) loadPdfCards(); };
+    window.addEventListener("zk:card-promoted", onPromoted);
+    return () => window.removeEventListener("zk:card-promoted", onPromoted);
+  }, [pdfScope, loadPdfCards]);
+
+  // ── Bord combineren ──────────────────────────────────────────────────────
+  // Kopieert de kaarten+verbindingen van een ánder bord naar dit bord —
+  // bewust een kopie, geen levende koppeling: wijzigingen op het ene bord
+  // beïnvloeden het andere daarna niet meer. IDs worden hernummerd (anders
+  // zouden twee borden met dezelfde kaart-ID's door elkaar gaan lopen),
+  // met een simpele horizontale verschuiving zodat de gekopieerde kaarten
+  // niet exact op bestaande kaarten belanden.
+  const combineWithBoard = useCallback(async (otherBoardId) => {
+    try {
+      const d = await fetch("/api/config").then(r => r.json());
+      const other = (d.config || {})[`whiteboard_${otherBoardId}`];
+      if (!other) return;
+      const idMap = {};
+      const offsetX = 400;
+      const newCards = (other.cards || []).map(c => {
+        const newId = genId();
+        idMap[c.id] = newId;
+        return { ...c, id: newId, x: c.x + offsetX, y: c.y };
+      });
+      const newCons = (other.connections || []).map(con => ({
+        ...con, id: genId(), from: idMap[con.from], to: idMap[con.to],
+      })).filter(con => con.from && con.to);
+      const mergedCards = [...stateRef.current.cards, ...newCards];
+      const mergedCons  = [...stateRef.current.connections, ...newCons];
+      stateRef.current = { cards: mergedCards, connections: mergedCons };
+      setCards(mergedCards); setCons(mergedCons);
+      saveBoard(mergedCards, mergedCons);
+    } catch(e) { console.error("Bord combineren mislukt:", e); }
   }, [saveBoard]);
 
   // ── Verwerk notities vanuit andere tabs ────────────────────────────────────
@@ -904,11 +1061,16 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
     // Select tool
     if (card) {
       setSelected(card.id);
-      dragging.current = {
-        id: card.id,
-        startX: sx, startY: sy,
-        startCX: card.x, startCY: card.y,
-      };
+      // Slepen alleen in canvas-modus — in mindmap-modus zijn x/y berekend
+      // (niet de echte opgeslagen positie), dus slepen zou de eigenlijke
+      // canvas-positie corrumperen zodra je terugschakelt.
+      if (viewMode === "canvas") {
+        dragging.current = {
+          id: card.id,
+          startX: sx, startY: sy,
+          startCX: card.x, startCY: card.y,
+        };
+      }
     } else {
       // Sla label op als editor open was (klik buiten = bevestigen)
       if (editingCon) {
@@ -1672,6 +1834,28 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
                 React.createElement("div", {
                   style: { display: "flex", gap: "2px", padding: "0 6px", flexShrink: 0 }
                 },
+                  // Combineer met dit bord — kopieert kaarten+verbindingen
+                  // van bid naar het actieve bord. Alleen zinvol/getoond
+                  // binnen de Lezen-tab (pdfScope) en niet voor het bord
+                  // zelf.
+                  lezen && bid !== activeBoard && React.createElement("button", {
+                    onClick: e => {
+                      e.stopPropagation();
+                      if (confirm(`Kaarten van "${name}" toevoegen aan het huidige bord? (kopie, "${name}" zelf blijft ongewijzigd)`)) {
+                        combineWithBoard(bid);
+                        setShowBoardMenu(false);
+                      }
+                    },
+                    title: `Combineer met "${name}"`,
+                    style: {
+                      background: "none", border: "none", color: W.fgMuted,
+                      cursor: "pointer", fontSize: "11px", padding: "3px 5px",
+                      borderRadius: "3px",
+                    },
+                    onMouseEnter: e => { e.currentTarget.style.color = W.blue; e.currentTarget.style.background = "rgba(255,255,255,0.08)"; },
+                    onMouseLeave: e => { e.currentTarget.style.color = W.fgMuted; e.currentTarget.style.background = "none"; },
+                  }, "⇄"),
+
                   // Hernoem
                   React.createElement("button", {
                     onClick: e => {
@@ -2024,6 +2208,53 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
     React.createElement("div", {
       style: { flex: 1, position: "relative", overflow: "hidden", minHeight: 0 }
     },
+      // Weergave-schakelaar (Canvas ↔ Mindmap) — alleen zichtbaar wanneer
+      // dit bord vanuit de Lezen-tab wordt gebruikt (pdfScope gezet). De
+      // losse, standalone Canvas-tab toont deze schakelaar niet en
+      // gedraagt zich exact als voorheen.
+      lezen && React.createElement("div", {
+        style: { position: "absolute", top: "10px", left: "10px", zIndex: 5,
+                 display: "flex", gap: "2px", background: W.bg2,
+                 border: `1px solid ${W.splitBg}`, borderRadius: "8px", padding: "3px" }
+      },
+        [["canvas","🖼 Canvas"],["mindmap","🗺 Mindmap"]].map(([m,label]) =>
+          React.createElement("button", {
+            key: m,
+            title: m==="mindmap" ? "Berekende boomweergave — hier niet sleepbaar, wisselt niets aan je canvas-indeling" : "Vrije, zelf bepaalde plaatsing",
+            onClick: () => setViewMode(m),
+            style: {
+              background: viewMode===m ? "rgba(138,198,242,0.15)" : "transparent",
+              border: `1px solid ${viewMode===m ? "rgba(138,198,242,0.4)" : "transparent"}`,
+              borderRadius: "6px", color: viewMode===m ? W.blue : W.fgMuted,
+              padding: "5px 10px", fontSize: "12px", cursor: "pointer", fontWeight: viewMode===m ? "600" : "400",
+            }
+          }, label)
+        )
+      ),
+      // "Haal kaarten van deze PDF op" — los van de weergave-schakelaar,
+      // want ook zinvol in canvas-modus. Herhaaldelijk klikken is veilig:
+      // notities die al als kaart aanwezig zijn worden overgeslagen.
+      lezen && React.createElement("button", {
+        onClick: pdfScope ? loadPdfCards : undefined,
+        disabled: !pdfScope,
+        title: pdfScope
+          ? "Haal (nieuwe) kaarten op die vanuit deze PDF zijn gepromoveerd"
+          : "Open eerst een PDF in het rechterdeel — daarna kun je hier de kaarten van die PDF ophalen",
+        style: {
+          position: "absolute", top: "10px", right: "10px", zIndex: 5,
+          background: W.bg2, border: `1px solid ${W.splitBg}`, borderRadius: "8px",
+          color: W.fgMuted, padding: "6px 12px", fontSize: "12px",
+          cursor: pdfScope ? "pointer" : "not-allowed", opacity: pdfScope ? 1 : 0.55,
+        },
+        onMouseEnter: e => { if (pdfScope) e.currentTarget.style.color = W.blue; },
+        onMouseLeave: e => { e.currentTarget.style.color = W.fgMuted; },
+      }, pdfScope ? "↓ Kaarten van PDF ophalen" : "↓ Kaarten ophalen (open eerst een PDF)"),
+      lezen && pdfMsg && React.createElement("div", {
+        style: { position: "absolute", top: "46px", right: "10px", zIndex: 5, maxWidth: "280px",
+                 background: W.bg2, border: `1px solid ${pdfMsg.startsWith("✗") ? W.orange : W.splitBg}`,
+                 borderRadius: "8px", padding: "7px 11px", fontSize: "12px", lineHeight: 1.4,
+                 color: pdfMsg.startsWith("✗") ? W.orange : pdfMsg.startsWith("✓") ? W.comment : W.fgMuted }
+      }, pdfMsg),
       React.createElement("canvas", {
         ref: cvRef,
         style: {

@@ -22,7 +22,10 @@
       "purpose": "any maskable"
     }
   ],
-  "categories": ["productivity", "utilities"],
+  "categories": [
+    "productivity",
+    "utilities"
+  ],
   "screenshots": [],
   "share_target": {
     "action": "/",
@@ -31,6 +34,7 @@
       "title": "shared_title",
       "text": "shared_text",
       "url": "shared_url"
-    }
+    },
+    "enctype": "application/x-www-form-urlencoded"
   }
 }

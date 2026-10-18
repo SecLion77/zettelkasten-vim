@@ -1074,6 +1074,13 @@ const App = () => {
   // Voor "Lees dit boek" vanuit BookLibrary: welk PDF-bestand moet de
   // PDF-hub bij het volgende bezoek automatisch openen.
   const [openPdfName,  setOpenPdfName] = useState(null);
+  // Stabiele tegenhanger van openPdfName: dat laatste is een kortstondig
+  // "open dit bestand"-signaal dat PDFViewer zelf weer op null zet zodra
+  // het verwerkt is (onOpenPdfConsumed) — bruikbaar om een opening te
+  // triggeren, niet om te weten welke PDF er momenteel zichtbaar is.
+  // currentPdfName blijft wél kloppen zolang een PDF in beeld is, nodig
+  // voor de Lezen-tab (Whiteboard's pdfScope).
+  const [currentPdfName, setCurrentPdfName] = useState(null);
   // Optioneel: specifieke pagina om naar toe te springen (bv. vanuit een
   // semantisch-zoeken-resultaat) — los van openPdfName gehouden zodat de
   // bestaande "open dit boek"-aanroep (altijd zonder pagina) ongewijzigd
@@ -1245,6 +1252,10 @@ const App = () => {
   const isMobile  = winW < 768;
   const isTablet  = winW >= 768 && winW < 1200;
   const isDesktop = winW >= 1200;
+  // Lezen-tab (canvas + PDF naast elkaar) werkt al vanaf 900px — een iPad in
+  // landscape (~1180px) of een smaller browservenster zit onder de 1200px
+  // van isDesktop en kreeg anders stilletjes alleen de losse PDF zonder canvas.
+  const canSplitLezen = winW >= 900;
 
   // Op desktop sidebar altijd open; tablet/mobile via toggle
   const showSidebar  = isDesktop || sidebarOpen;
@@ -1392,6 +1403,7 @@ const App = () => {
     { id:"today",      icon:"⚡", label:"Vandaag",     sub: null },
     { id:"notes",      icon:"📝", label:"Schrijven",   sub: null },
     { id:"whiteboard", icon:"🎨", label:"Canvas",      sub: null },
+    { id:"lezen",      icon:"📖", label:"Lezen",       sub: null },
     { id:"library",    icon:"📚", label:"Bibliotheek", sub: [
         {id:"pdf",          icon:"📄", label:"PDF"},
         {id:"images",       icon:"🖼",  label:"Plaatjes"},
@@ -1593,6 +1605,17 @@ const App = () => {
   const handleMainTab = (mainId) => {
     const mt = MAIN_TABS.find(m => m.id === mainId);
     if (!mt) return;
+    if (mainId === "lezen") {
+      // Combineert bestaande onderdelen (geen nieuw component): split-
+      // modus met links het canvas (gekoppeld aan de PDF die rechts open
+      // komt te staan via openPdfName), rechts de PDF-weergave. Alleen
+      // zinvol op desktop-breedte — smallere schermen vallen terug op de
+      // normale, losse PDF-tab (waar splitMode toch al nergens gebruikt
+      // wordt, zie "if(splitMode && isDesktop)" verderop).
+      setTab("lezen");
+      if (canSplitLezen) { setSplitMode(true); setSplitLeft("whiteboard"); setSplitTab("pdf"); }
+      return;
+    }
     if (!mt.sub) { setTab(mainId); return; }  // standalone tab (bijv. Canvas)
     if (mt.sub.some(s => s.id === tab)) return;
     setTab(mt.sub[0].id);
@@ -2104,7 +2127,8 @@ const App = () => {
             React.createElement(Graph,{notes,
               onSelect:id=>{setSelId(id);setTab("notes");},selectedId:selId,
               onUpdateNote:async(note)=>{ await NoteStore.save(note); setNotes([...NoteStore.getAll()]); },
-              onDeleteNote:(id)=>{ NoteStore.remove(id).then(()=>setNotes([...NoteStore.getAll()])); }}));
+              onDeleteNote:(id)=>{ NoteStore.remove(id).then(()=>setNotes([...NoteStore.getAll()])); },
+              onOpenPdf:(fname,page)=>{ setOpenPdfName(fname); setOpenPdfPage(page); setTab("pdf"); }}));
           if(t==="daily") return React.createElement(DailyView, {
             notes, llmModel,
             onOpenNote: id => { setSelId(id); setTab("notes"); },
@@ -2114,7 +2138,10 @@ const App = () => {
               if(saved?.id){ setSelId(saved.id); setTab("notes"); }
             },
           });
-          if(t==="pdf") return React.createElement("div",{style:{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",minHeight:0}},
+          // "lezen" valt hier terug op de normale, losse PDF-weergave
+          // wanneer split-modus niet actief kon worden (smal scherm) —
+          // nooit een leeg scherm.
+          if(t==="pdf"||t==="lezen") return React.createElement("div",{style:{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",minHeight:0}},
             React.createElement(PDFViewer,{pdfNotes,setPdfNotes,allTags,serverPdfs,
               notes,isTablet,
               llmModel,
@@ -2126,6 +2153,7 @@ const App = () => {
               openPdfName,
               openPdfPage,
               onOpenPdfConsumed: () => { setOpenPdfName(null); setOpenPdfPage(null); },
+              onCurrentFileChange: setCurrentPdfName,
               onRefreshPdfs:refreshPdfs,
               pdfAnnotations: pdfNotes,
               onTogglePdfRead: async name => {
@@ -2456,7 +2484,7 @@ const App = () => {
         };
 
         // Split-screen
-        if(splitMode && isDesktop) {
+        if(splitMode && (isDesktop || (tab==="lezen" && canSplitLezen))) {
           const focusL = splitFocus==="left";
           const bL = focusL?`2px solid ${W.blue}`:`2px solid ${W.splitBg}`;
           const bR = !focusL?`2px solid ${W.blue}`:`2px solid ${W.splitBg}`;
@@ -2501,6 +2529,16 @@ const App = () => {
                       onAddNote: async(note)=>{ await NoteStore.save(note); setNotes([...NoteStore.getAll()]); },
                       onSelectNote: id=>{ setSelId(id); setSplitLeft("notes"); },
                       llmModel,
+                      // Koppelt dit canvas aan de PDF die rechts open staat
+                      // (Lezen-tab) — null buiten die context, dan gedraagt
+                      // Whiteboard zich exact als voorheen (geen schakelaar,
+                      // geen "kaarten ophalen"-knop zichtbaar). Gebruikt
+                      // bewust currentPdfName (stabiel, blijft kloppen
+                      // zolang de PDF in beeld is) i.p.v. openPdfName (een
+                      // kortstondig open-signaal dat zichzelf weer wist —
+                      // zie onCurrentFileChange hierboven voor de vondst).
+                      pdfScope: currentPdfName,
+                      lezenContext: tab==="lezen",
                     }))
             ),
             React.createElement("div",{
