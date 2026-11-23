@@ -78,47 +78,70 @@ function buildNeighborhood(noteId, notes, maxLevel = 2) {
 // waarop ze getekend worden verschilt per modus.
 function computeMindmapLayout(cards, connections) {
   if (!cards.length) return [];
+  const byId = new Map(cards.map(c => [c.id, c]));
   const childrenOf = {}, hasParent = new Set();
   connections.forEach(c => {
+    if (!byId.has(c.from) || !byId.has(c.to)) return;
+    // Een PDF-kaart is altijd een wortel: inkomende verbindingen negeren,
+    // zodat de boom nooit "ondersteboven" om een PDF heen kan hangen.
+    if (byId.get(c.to).pdfName) return;
     (childrenOf[c.from] = childrenOf[c.from] || []).push(c.to);
     hasParent.add(c.to);
   });
-  // Wortels: kaarten zonder inkomende verbinding. Geen enkele (bv. een
-  // cykel)? Neem de eerste kaart als noodgreep — voorkomt een leeg canvas.
-  let roots = cards.filter(c => !hasParent.has(c.id));
-  if (!roots.length) roots = [cards[0]];
 
-  const LEVEL_GAP = 260, CARD_GAP = 90;
-  const depthOf = {}, order = [];
-  const visited = new Set();
-  const queue = roots.map(r => ({ id: r.id, depth: 0 }));
-  while (queue.length) {
-    const { id, depth } = queue.shift();
-    if (visited.has(id)) continue;
-    visited.add(id);
-    depthOf[id] = depth;
-    order.push(id);
-    (childrenOf[id] || []).forEach(cid => { if (!visited.has(cid)) queue.push({ id: cid, depth: depth + 1 }); });
-  }
+  // Wortels: eerst alle PDF-kaarten (in bordvolgorde), dan overige kaarten
+  // zonder ouder. Geen enkele (bv. een cykel)? Eerste kaart als noodgreep.
+  const roots = [
+    ...cards.filter(c => c.pdfName),
+    ...cards.filter(c => !c.pdfName && !hasParent.has(c.id)),
+  ];
+  if (!roots.length) roots.push(cards[0]);
+
+  // Opspannend bos (BFS): elke kaart krijgt precies één ouder, dus ook bij
+  // meerdere ouders of cykels blijft het een nette boom zonder oneindige lus.
+  const visited = new Set(), kids = {};
+  const expand = (startId) => {
+    const q = [startId];
+    while (q.length) {
+      const id = q.shift();
+      (childrenOf[id] || []).forEach(cid => {
+        if (visited.has(cid)) return;
+        visited.add(cid);
+        (kids[id] = kids[id] || []).push(cid);
+        q.push(cid);
+      });
+    }
+  };
+  roots.forEach(r => { visited.add(r.id); });
+  roots.forEach(r => expand(r.id));
   // Kaarten die vanuit geen enkele wortel bereikbaar zijn (losse eilandjes,
-  // bv. nog niet verbonden nieuwe kaarten) krijgen depth 0.
-  cards.forEach(c => { if (!(c.id in depthOf)) { depthOf[c.id] = 0; order.push(c.id); } });
-
-  const byDepth = {};
-  order.forEach(id => { const d = depthOf[id]; (byDepth[d] = byDepth[d] || []).push(id); });
-
-  const posById = {};
-  Object.keys(byDepth).sort((a,b)=>a-b).forEach(depth => {
-    const ids = byDepth[depth];
-    ids.forEach((id, i) => {
-      posById[id] = { x: depth * LEVEL_GAP, y: i * CARD_GAP - ((ids.length-1)*CARD_GAP)/2 };
-    });
+  // bv. nog niet verbonden nieuwe kaarten, of een cykel zonder ingang)
+  // worden hun eigen kleine boom.
+  cards.forEach(c => {
+    if (!visited.has(c.id)) { visited.add(c.id); roots.push(c); expand(c.id); }
   });
 
-  return cards.map(c => ({ ...c, x: posById[c.id].x, y: posById[c.id].y }));
+  // Klassieke boom-layout: bladeren krijgen opeenvolgende rijen, een ouder
+  // staat gecentreerd bij zijn kinderen. Elke boom (= elke PDF) krijgt zo een
+  // eigen verticale band, met wat extra ruimte tussen de bomen — meerdere
+  // PDF's geven dan meerdere duidelijk gescheiden bomen.
+  const maxH = Math.max(90, ...cards.map(c => c.h || 90));
+  const maxW = Math.max(180, ...cards.map(c => c.w || 180));
+  const SLOT = maxH + 26, LEVEL_GAP = maxW + 90, TREE_GAP = SLOT * 0.9;
+  const pos = {};
+  let nextY = 0;
+  const place = (id, depth) => {
+    const ch = kids[id] || [];
+    if (!ch.length) { pos[id] = { x: depth * LEVEL_GAP, y: nextY }; nextY += SLOT; return; }
+    ch.forEach(cid => place(cid, depth + 1));
+    pos[id] = { x: depth * LEVEL_GAP, y: (pos[ch[0]].y + pos[ch[ch.length - 1]].y) / 2 };
+  };
+  roots.forEach(r => { place(r.id, 0); nextY += TREE_GAP; });
+
+  return cards.map(c => ({ ...c, x: pos[c.id].x, y: pos[c.id].y }));
 }
 
-const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", serverImages = [], pendingNotes = null, onClearPending, onShowInGraph, pdfScope = null, lezenContext = false }) => {
+const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", serverImages = [], pendingNotes = null, onClearPending, onShowInGraph, pdfScope = null, lezenContext = false, onOpenPdf = null }) => {
   const { useState, useEffect, useRef, useCallback } = React;
   // lezen = we draaien binnen de Lezen-tab (ook als er nog geen PDF open is)
   const lezen = !!pdfScope || lezenContext;
@@ -361,7 +384,35 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
   useEffect(() => { loadBoard(activeBoard); }, [activeBoard]);
 
   // Canvas hertekenen als state wijzigt
-  useEffect(() => { dirtyRef.current = true; }, [cards, connections]);
+  // Alles in beeld brengen (ook bruikbaar via het menu → "Alles zichtbaar").
+  // Rekent op de effectieve kaarten, dus in mindmap-modus op de berekende
+  // posities — anders kon de boom buiten beeld landen na het wisselen.
+  const fitToView = useCallback(() => {
+    const cv = cvRef.current, cds = effectiveCardsRef.current;
+    if (!cv || !cds.length) return;
+    const r = cv.getBoundingClientRect();
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    cds.forEach(c => {
+      x0 = Math.min(x0, c.x); y0 = Math.min(y0, c.y);
+      x1 = Math.max(x1, c.x + (c.w || 180)); y1 = Math.max(y1, c.y + (c.h || 90));
+    });
+    const M = 64;
+    const scale = Math.max(0.2, Math.min(1.2,
+      Math.min((r.width - 2*M) / (x1 - x0), (r.height - 2*M) / (y1 - y0))));
+    viewRef.current = {
+      scale,
+      ox: (r.width  - (x1 - x0) * scale) / 2 - x0 * scale,
+      oy: (r.height - (y1 - y0) * scale) / 2 - y0 * scale,
+    };
+    dirtyRef.current = true;
+  }, []);
+  // Mindmap-weergave: bij het wisselen en bij elke toe-/afname van kaarten of
+  // verbindingen de boom weer in beeld brengen.
+  useEffect(() => {
+    if (lezen && viewMode === "mindmap") fitToView();
+  }, [viewMode, cards.length, connections.length]);
+
+  useEffect(() => { dirtyRef.current = true; }, [cards, connections, viewMode]);
 
   // ── Canvas coordinaten ───────────────────────────────────────────────────
   const toWorld = (sx, sy) => {
@@ -549,6 +600,35 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
             return; // forEach: skip rest van kaart-render
           }
 
+          // PDF-wortelkaart: de PDF zelf als startpunt van zijn boom. Bewust een
+          // andere vorm/kleur dan notitiekaarten (warm accent, dikke rand, PDF-
+          // label) zodat je bij meerdere bomen meteen ziet waar elke begint.
+          if (c.pdfName) {
+            const accent = W.dark===false ? "#7C380E" : "#e8a44a";
+            if (isSel) { ctx.shadowColor = accent; ctx.shadowBlur = 14 * v.scale; }
+            ctx.fillStyle   = W.dark===false ? "#F3E7C4" : "#2b2518";
+            ctx.strokeStyle = accent;
+            ctx.lineWidth   = (isSel ? 2.6 : 1.8) * v.scale;
+            roundRect(ctx, sx.x, sx.y, sw, sh, 10 * v.scale);
+            ctx.fill(); ctx.stroke();
+            ctx.shadowBlur = 0; ctx.shadowColor = "transparent";
+            ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+            ctx.fillStyle = accent;
+            ctx.font = `700 ${Math.max(8, 9.5 * v.scale)}px 'DM Sans', sans-serif`;
+            ctx.fillText("📄 PDF", sx.x + 10 * v.scale, sx.y + 16 * v.scale);
+            ctx.fillStyle = W.fg;
+            const tfs = Math.max(8, 13 * v.scale);
+            ctx.font = `600 ${tfs}px 'DM Sans', sans-serif`;
+            const tl = wrapText(ctx, c.text || c.pdfName, sw - 20 * v.scale).slice(0, 3);
+            tl.forEach((ln, i) => ctx.fillText(ln, sx.x + 10 * v.scale, sx.y + 34 * v.scale + i * tfs * 1.3));
+            if (tool === "connect" && connectFrom === c.id) {
+              ctx.setLineDash([5, 4]); ctx.strokeStyle = "#7dd8c6"; ctx.lineWidth = 2;
+              roundRect(ctx, sx.x - 3, sx.y - 3, sw + 6, sh + 6, 12 * v.scale); ctx.stroke();
+              ctx.setLineDash([]);
+            }
+            return; // forEach: rest van de gewone kaart-render overslaan
+          }
+
           // Schaduw voor geselecteerde kaart
           if (isSel) {
             ctx.shadowColor = col.border;
@@ -682,6 +762,39 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
     pdfMsgTimer.current = setTimeout(() => setPdfMsg(""), 6000);
   }, []);
 
+  // ── PDF zelf als kaart (wortel van zijn boom) ───────────────────────────
+  // Koppelt kaarten van deze PDF aan de PDF-kaart: alleen kaarten die nog
+  // GEEN ouder hebben, zodat een structuur die jij zelf aanbracht nooit
+  // overschreven wordt. onlyNoteIds beperkt dit tot nieuw toegevoegde kaarten
+  // — heb je bewust een verbinding verwijderd, dan komt die niet terug bij
+  // het opnieuw ophalen.
+  const linkCardsToPdfRoot = useCallback(async (onlyNoteIds = null) => {
+    if (!pdfScope) return 0;
+    const root = stateRef.current.cards.find(c => c.pdfName === pdfScope);
+    if (!root) return 0;
+    try {
+      const d = await fetch(`/api/cards-for-pdf?pdf=${encodeURIComponent(pdfScope)}`).then(r => r.json());
+      const ids = new Set((d.cards || []).map(c => c.id));
+      const hasParent = new Set(stateRef.current.connections.map(c => c.to));
+      const fresh = stateRef.current.cards.filter(c =>
+        c.noteId && ids.has(c.noteId) && c.id !== root.id && !hasParent.has(c.id) &&
+        (!onlyNoteIds || onlyNoteIds.has(c.noteId)));
+      if (!fresh.length) return 0;
+      const nextCons = [
+        ...stateRef.current.connections,
+        ...fresh.map(c => ({ id: genId(), from: root.id, to: c.id })),
+      ];
+      stateRef.current = { ...stateRef.current, connections: nextCons };
+      setCons(nextCons);
+      saveBoard(stateRef.current.cards, nextCons);
+      return fresh.length;
+    } catch(e) { console.error("PDF-kaarten koppelen mislukt:", e); return 0; }
+  }, [pdfScope, saveBoard]);
+
+  // LET OP volgorde: moet vóór loadPdfCards staan. De dependency-array van een
+  // useCallback wordt bij elke render direct gelezen; staat deze functie
+  // verderop, dan crasht het component met "Cannot access ... before
+  // initialization" zodra de Lezen-tab opent.
   const loadPdfCards = useCallback(async () => {
     if (!pdfScope) return;
     try {
@@ -710,12 +823,14 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
         const col = idx % cols, row = Math.floor(idx / cols);
         addCard(80 + col * colW, 80 + row * rowH, c.title, 1, c.id);
       });
-      flashPdfMsg(`✓ ${toAdd.length} kaart${toAdd.length===1?"":"en"} toegevoegd`);
+      const linked = await linkCardsToPdfRoot(new Set(toAdd.map(c => c.id)));
+      flashPdfMsg(`✓ ${toAdd.length} kaart${toAdd.length===1?"":"en"} toegevoegd` +
+                  (linked ? ` en aan de PDF-kaart gekoppeld` : ""));
     } catch(e) {
       console.error("Kaarten van PDF ophalen mislukt:", e);
       flashPdfMsg("✗ Ophalen mislukt: " + e.message);
     }
-  }, [pdfScope, addCard, flashPdfMsg]);
+  }, [pdfScope, addCard, flashPdfMsg, linkCardsToPdfRoot]);
 
   // Maak je rechts bewust een kaart van een highlight (+ kaart), dan komt
   // die meteen op dit bord — je hoeft niet nog eens op "ophalen" te klikken.
@@ -726,6 +841,35 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
     window.addEventListener("zk:card-promoted", onPromoted);
     return () => window.removeEventListener("zk:card-promoted", onPromoted);
   }, [pdfScope, loadPdfCards]);
+
+  const addPdfCard = useCallback(async () => {
+    if (!pdfScope) return;
+    const existing = stateRef.current.cards.find(c => c.pdfName === pdfScope);
+    if (existing) {
+      setSelected(existing.id);
+      const n = await linkCardsToPdfRoot();
+      flashPdfMsg(n ? `PDF-kaart staat er al — ${n} losse kaart${n===1?"":"en"} eraan gekoppeld.`
+                    : "Deze PDF staat al als wortelkaart op dit bord.");
+      setTimeout(fitToView, 60);
+      return;
+    }
+    // Links van de bestaande kaarten, verticaal in het midden daarvan
+    const cs = stateRef.current.cards;
+    const minX = cs.length ? Math.min(...cs.map(c => c.x)) : 80;
+    const midY = cs.length ? cs.reduce((a, c) => a + c.y + (c.h || 90)/2, 0) / cs.length : 80;
+    const card = {
+      id: genId(), x: minX - 320, y: midY - 42, w: 240, h: 84,
+      text: pdfScope.replace(/\.pdf$/i, ""), colorIdx: 0, noteId: null, pdfName: pdfScope,
+    };
+    const next = [...cs, card];
+    stateRef.current = { ...stateRef.current, cards: next };
+    setCards(next);
+    saveBoard(next, stateRef.current.connections);
+    const n = await linkCardsToPdfRoot();
+    flashPdfMsg(n ? `✓ PDF-kaart toegevoegd en ${n} kaart${n===1?"":"en"} eraan gekoppeld.`
+                  : "✓ PDF-kaart toegevoegd. Haal kaarten op (of maak ze met + kaart) om ze eraan te koppelen.");
+    setTimeout(fitToView, 60);
+  }, [pdfScope, saveBoard, linkCardsToPdfRoot, flashPdfMsg, fitToView]);
 
   // ── Bord combineren ──────────────────────────────────────────────────────
   // Kopieert de kaarten+verbindingen van een ánder bord naar dit bord —
@@ -1128,8 +1272,11 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
     const r  = cv.getBoundingClientRect();
     const sx = e.clientX - r.left, sy = e.clientY - r.top;
     const card = cardAt(sx, sy);
+    // Dubbelklik op een PDF-kaart opent die PDF (rechts); titel hernoemen
+    // kan via het menu → Bewerken.
+    if (card?.pdfName && onOpenPdf) { onOpenPdf(card.pdfName, null); return; }
     if (card) setEditingId(card.id);
-  }, [cards]);
+  }, [cards, onOpenPdf]);
 
   // ── Touch: één vinger → drag/pan | twee vingers → pinch+pan ─────────────────
   const handleTouchStart = useCallback((e) => {
@@ -2234,27 +2381,40 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
       // "Haal kaarten van deze PDF op" — los van de weergave-schakelaar,
       // want ook zinvol in canvas-modus. Herhaaldelijk klikken is veilig:
       // notities die al als kaart aanwezig zijn worden overgeslagen.
-      lezen && React.createElement("button", {
-        onClick: pdfScope ? loadPdfCards : undefined,
-        disabled: !pdfScope,
-        title: pdfScope
-          ? "Haal (nieuwe) kaarten op die vanuit deze PDF zijn gepromoveerd"
-          : "Open eerst een PDF in het rechterdeel — daarna kun je hier de kaarten van die PDF ophalen",
-        style: {
-          position: "absolute", top: "10px", right: "10px", zIndex: 5,
-          background: W.bg2, border: `1px solid ${W.splitBg}`, borderRadius: "8px",
-          color: W.fgMuted, padding: "6px 12px", fontSize: "12px",
-          cursor: pdfScope ? "pointer" : "not-allowed", opacity: pdfScope ? 1 : 0.55,
-        },
-        onMouseEnter: e => { if (pdfScope) e.currentTarget.style.color = W.blue; },
-        onMouseLeave: e => { e.currentTarget.style.color = W.fgMuted; },
-      }, pdfScope ? "↓ Kaarten van PDF ophalen" : "↓ Kaarten ophalen (open eerst een PDF)"),
-      lezen && pdfMsg && React.createElement("div", {
-        style: { position: "absolute", top: "46px", right: "10px", zIndex: 5, maxWidth: "280px",
-                 background: W.bg2, border: `1px solid ${pdfMsg.startsWith("✗") ? W.orange : W.splitBg}`,
-                 borderRadius: "8px", padding: "7px 11px", fontSize: "12px", lineHeight: 1.4,
-                 color: pdfMsg.startsWith("✗") ? W.orange : pdfMsg.startsWith("✓") ? W.comment : W.fgMuted }
-      }, pdfMsg),
+      lezen && React.createElement("div", {
+        style: { position: "absolute", top: "10px", right: "10px", zIndex: 5,
+                 display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "6px",
+                 maxWidth: "calc(100% - 200px)" }
+      },
+        React.createElement("div", { style: { display: "flex", gap: "6px", flexWrap: "wrap", justifyContent: "flex-end" } },
+          [
+            ["📄 PDF-kaart", addPdfCard,
+             pdfScope ? "Zet deze PDF zelf als wortelkaart op het bord — zijn kaarten hangen er dan als boom onder"
+                      : "Open eerst een PDF in het rechterdeel"],
+            ["↓ Kaarten ophalen", loadPdfCards,
+             pdfScope ? "Haal (nieuwe) kaarten op die vanuit deze PDF zijn gepromoveerd"
+                      : "Open eerst een PDF in het rechterdeel — daarna kun je hier de kaarten van die PDF ophalen"],
+          ].map(([label, fn, tip]) => React.createElement("button", {
+            key: label,
+            onClick: pdfScope ? fn : undefined,
+            disabled: !pdfScope,
+            title: tip,
+            style: {
+              background: W.bg2, border: `1px solid ${W.splitBg}`, borderRadius: "8px",
+              color: W.fgMuted, padding: "6px 12px", fontSize: "12px",
+              cursor: pdfScope ? "pointer" : "not-allowed", opacity: pdfScope ? 1 : 0.55,
+            },
+            onMouseEnter: e => { if (pdfScope) e.currentTarget.style.color = W.blue; },
+            onMouseLeave: e => { e.currentTarget.style.color = W.fgMuted; },
+          }, label))
+        ),
+        pdfMsg && React.createElement("div", {
+          style: { maxWidth: "280px", background: W.bg2,
+                   border: `1px solid ${pdfMsg.startsWith("✗") ? W.orange : W.splitBg}`,
+                   borderRadius: "8px", padding: "7px 11px", fontSize: "12px", lineHeight: 1.4,
+                   color: pdfMsg.startsWith("✗") ? W.orange : pdfMsg.startsWith("✓") ? W.comment : W.fgMuted }
+        }, pdfMsg)
+      ),
       React.createElement("canvas", {
         ref: cvRef,
         style: {
@@ -2495,6 +2655,15 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
         };
 
         // ── Binnenring acties ─────────────────────────────────────────────
+        // Waar hoort deze kaart in een PDF? PDF-kaart = de PDF zelf; notitiekaart
+        // met card_source = de pagina van de highlight waar hij uit kwam.
+        const pdfTarget = !card ? null
+          : card.pdfName ? { pdf: card.pdfName, page: null }
+          : (() => {
+              const cs = notes.find(x => x.id === card.noteId)?.card_source;
+              return cs && cs.pdf ? { pdf: cs.pdf, page: cs.page } : null;
+            })();
+
         const innerItems = card ? [
           {key:"edit", icon:"✎",label:"Bewerken",
            bg:`rgba(${segBlueRgb},${isDark?0.18:0.30})`,
@@ -2505,6 +2674,7 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
            hbg:`rgba(${segBlueRgb},${isDark?0.28:0.45})`,ic:blue,
            action:()=>{setTool("connect");setConnectFrom(card.id);setCtxMenu(null);}},
           {key:"note", icon:"⬡",label:card.noteId?"Notitie":"→ Notitie",
+           hidden:!!card.pdfName,
            bg:`rgba(${segGreenRgb},${isDark?0.15:0.32})`,
            hbg:`rgba(${segGreenRgb},${isDark?0.32:0.55})`,ic:green,
            action:()=>{card.noteId?setPeekNoteId(card.noteId):cardToNote(card);setCtxMenu(null);}},
@@ -2513,7 +2683,13 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
            hbg:`rgba(${segBlueRgb},${isDark?0.28:0.45})`,ic:blue,
            hidden:!card.noteId,
            action:()=>{if(card.noteId&&onShowInGraph)onShowInGraph(card.noteId);setCtxMenu(null);}},
+          {key:"pdf",  icon:"📄",label:"Open PDF",
+           bg:`rgba(${segOrangeRgb},${isDark?0.14:0.24})`,
+           hbg:`rgba(${segOrangeRgb},${isDark?0.34:0.48})`,ic:orange,
+           hidden:!onOpenPdf||!pdfTarget,
+           action:()=>{onOpenPdf(pdfTarget.pdf,pdfTarget.page);setCtxMenu(null);}},
           {key:"dup",  icon:"⊞",label:"Dupliceer",
+           hidden:!!card.pdfName,
            bg:`rgba(${segGreenRgb},${isDark?0.10:0.20})`,
            hbg:`rgba(${segGreenRgb},${isDark?0.22:0.40})`,ic:green,
            action:()=>{const{x,y}=toWorld(cx+20,cy+20);addCard(x+20,y+20,card.text,card.colorIdx,null);setCtxMenu(null);}},
@@ -2527,7 +2703,7 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
            action:()=>{const{x,y}=toWorld(cx,cy);const c=addCard(x,y,"",0);setEditingId(c.id);setSelected(c.id);setCtxMenu(null);}},
           {key:"fit",icon:"⊡",label:"Alles zichtbaar",
            bg:`rgba(${ring0rgb},0.12)`,hbg:`rgba(${ring0rgb},0.28)`,ic:blue,
-           action:()=>{setCtxMenu(null);}},
+           action:()=>{fitToView();setCtxMenu(null);}},
         ];
         const filteredInner=innerItems.filter(x=>!x.hidden);
         const innerN=filteredInner.length, innerSpan=360/innerN;
@@ -2621,8 +2797,32 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
           setCtxMenu(null); setRingPath([]); setHoverPreview(null);
         };
 
+        // ── Passend maken in het zichtbare canvas ──────────────────────────
+        // Het menu is 500px breed en de verken-ringen reiken tot straal 445
+        // (+ labels), het notitie-voorbeeld hing er 320px naast. In een
+        // half scherm (Lezen-tab: canvas naast PDF) viel dat deels buiten
+        // het canvas, dat overflow:hidden heeft — de informatie verdween.
+        // Daarom: (1) schaal het menu zo dat de zichtbare ringen in het
+        // canvas passen, (2) schuif het middelpunt zo dat niets buiten de
+        // rand valt. De kaart waar je op klikte blijft de plek waar nieuwe
+        // kaarten bij "verken" landen (cx/cy ongewijzigd voor addNeighbor).
+        const _box  = cvRef.current?.getBoundingClientRect();
+        const boxW  = _box ? _box.width  : 900;
+        const boxH  = _box ? _box.height : 700;
+        const FIT_PAD = 8;
+        let outerR = 150;                       // alleen de actie-ring
+        ringNodes.forEach((nds, d) => {
+          if (nds && nds.length) outerR = Math.max(outerR, RING_RADII[d][1] + 105); // + labelruimte
+        });
+        const fitS  = Math.max(0.5, Math.min(1, (Math.min(boxW, boxH) - 2*FIT_PAD) / (2*outerR)));
+        const reach = outerR * fitS;
+        const fitClamp = (v, size) =>
+          (size - 2*FIT_PAD < 2*reach) ? size/2
+                                       : Math.min(Math.max(v, reach + FIT_PAD), size - reach - FIT_PAD);
+        const cxF = fitClamp(cx, boxW), cyF = fitClamp(cy, boxH);
+
         return React.createElement("div", {
-          style:{position:"absolute",left:cx-half,top:cy-half,
+          style:{position:"absolute",left:cxF-half,top:cyF-half,
                  width:svgSize,height:svgSize,pointerEvents:"none",zIndex:250}
         },
           // ── Preview kaart ──────────────────────────────────────────────
@@ -2633,10 +2833,23 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
             const tags    = (nb.tags||[]).slice(0,6);
             const tCol    = typeColorMap2[nb.noteType]||null;
             const showRight = ang>90&&ang<270;
+            // Positie bepalen in canvas-coördinaten, dan terugrekenen naar de
+            // wrapper: voorkeurszijde = naast de gehoverde slice, maar als
+            // daar geen ruimte is de kant met de meeste ruimte; daarna altijd
+            // binnen de canvasrand klemmen.
+            const pw    = Math.min(298, boxW - 2*FIT_PAD);
+            const edgeL = cxF - half*fitS, edgeR = cxF + half*fitS;
+            const spaceL = edgeL - FIT_PAD, spaceR = boxW - edgeR - FIT_PAD;
+            let side = showRight ? "left" : "right";
+            if (side==="left"  && spaceL < pw+12 && spaceR > spaceL) side = "right";
+            if (side==="right" && spaceR < pw+12 && spaceL > spaceR) side = "left";
+            const wantL = side==="left" ? edgeL - 20 - pw : edgeR + 8;
+            const leftC = Math.min(Math.max(wantL, FIT_PAD), Math.max(FIT_PAD, boxW - pw - FIT_PAD));
+            const topC  = Math.min(Math.max(cyF - 160, FIT_PAD), Math.max(FIT_PAD, boxH - 280));
             return React.createElement("div",{
               style:{
-                position:"absolute", left:showRight?-(300+20):svgSize+8, top:half-160,
-                width:"298px", background:W.bg2,
+                position:"absolute", left:leftC-(cxF-half), top:topC-(cyF-half),
+                width:pw+"px", maxHeight:(boxH-2*FIT_PAD)+"px", background:W.bg2,
                 border:`1px solid ${W.splitBg}`,
                 borderRadius:"10px", boxShadow:"0 8px 32px rgba(0,0,0,0.75)",
                 overflow:"hidden", pointerEvents:"none",
@@ -2674,6 +2887,9 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
             );
           })(),
 
+          React.createElement("div",{style:{position:"absolute",left:0,top:0,width:svgSize,height:svgSize,
+                                            transform:`scale(${fitS})`,transformOrigin:"50% 50%",
+                                            pointerEvents:"none"}},
           React.createElement("svg",{
             width:svgSize,height:svgSize,
             style:{
@@ -2906,6 +3122,7 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
                 (card.text||"").slice(0,16)+(card.text?.length>16?"…":""))
             )
           )
+          )
         );
       })()
   )
@@ -2925,7 +3142,7 @@ const Whiteboard = ({ notes = [], onCreateNote, onAddNote, llmModel = "", server
       return React.createElement("div", {
         style: {
           position: "absolute", top: 0, right: 0, bottom: 0,
-          width: "360px",
+          width: "min(360px, 92%)",
           background: W.bg2,
           borderLeft: "1px solid #2a2a2a",
           display: "flex", flexDirection: "column",

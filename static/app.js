@@ -2539,6 +2539,10 @@ const App = () => {
                       // zie onCurrentFileChange hierboven voor de vondst).
                       pdfScope: currentPdfName,
                       lezenContext: tab==="lezen",
+                      // PDF-kaart / "Open PDF": opent die PDF rechts, zonder de
+                      // Lezen-tab te verlaten (anders dan de globale onOpenPdf,
+                      // die naar de losse PDF-tab springt).
+                      onOpenPdf: (fname, page) => { setOpenPdfName(fname); setOpenPdfPage(page || null); setSplitTab("pdf"); },
                     }))
             ),
             React.createElement("div",{
